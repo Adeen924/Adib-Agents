@@ -48,10 +48,15 @@ app.post("/chat", async (req, res) => {
       model: "claude-sonnet-4-6",
       max_tokens: 2048,
       system: typeof systemPrompt === "string" && systemPrompt.trim() ? systemPrompt : DEFAULT_SYSTEM,
+      tools: [{ type: "web_search_20250305", name: "web_search" }],
       messages,
     });
 
-    res.json({ reply: response.content[0].text });
+    // Extract the final text block (web search results are handled internally by Anthropic)
+    const textBlock = response.content.find((b) => b.type === "text");
+    const reply = textBlock ? textBlock.text : "I couldn't find information on that. Please try again.";
+
+    res.json({ reply });
   } catch (error) {
     console.error("Anthropic API error:", error.message);
     res.status(500).json({ error: "Failed to get a response. Please try again." });
