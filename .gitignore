@@ -1,5 +1,6 @@
 node_modules
 .env
+*.log
 firebase-key.json
 firebase-key.json.json
 functions/.env
