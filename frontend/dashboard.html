@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Adib Agents — Dashboard</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <div class="app-layout">
+
+    <!-- Sidebar -->
+    <aside class="sidebar">
+      <div class="sidebar-logo">
+        <div class="logo-icon">✦</div>
+        <div>
+          <div class="logo-text">Adib Agents</div>
+          <div class="logo-sub">Job Search AI</div>
+        </div>
+      </div>
+
+      <nav class="sidebar-nav">
+        <div class="nav-label">Tools</div>
+        <button class="nav-item active" data-view="search">
+          <span class="nav-icon">🔍</span> Job Search
+        </button>
+        <button class="nav-item" data-view="resume">
+          <span class="nav-icon">📄</span> Resume Helper
+        </button>
+        <button class="nav-item" data-view="cover">
+          <span class="nav-icon">✉️</span> Cover Letter
+        </button>
+        <button class="nav-item" data-view="interview">
+          <span class="nav-icon">🎯</span> Interview Prep
+        </button>
+
+        <div class="nav-label" style="margin-top:12px">Actions</div>
+        <button class="nav-item" id="newChatBtn">
+          <span class="nav-icon">＋</span> New Chat
+        </button>
+      </nav>
+
+      <div class="sidebar-footer">
+        <div class="user-chip">
+          <div class="user-avatar" id="userAvatar">?</div>
+          <div class="user-info">
+            <div class="user-email" id="userEmail">loading…</div>
+          </div>
+          <button class="sign-out-btn" id="signOutBtn" title="Sign out">↩</button>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Main -->
+    <div class="main-content">
+      <header class="main-header">
+        <div>
+          <h2 id="viewTitle">Job Search Assistant</h2>
+          <p id="viewSubtitle">Ask me about roles, companies, salaries, or strategy</p>
+        </div>
+        <div class="header-status">
+          <span class="status-dot"></span> Connected
+        </div>
+      </header>
+
+      <div class="chat-area" id="chatArea">
+        <div class="chat-empty" id="emptyState">
+          <div class="empty-icon">✦</div>
+          <h3>What are you looking for?</h3>
+          <p>Tell me about your background and target role — I'll help you find opportunities and craft your applications.</p>
+          <div class="suggestion-chips" id="chips"></div>
+        </div>
+      </div>
+
+      <div class="input-bar">
+        <textarea
+          id="messageInput"
+          placeholder="Ask anything about your job search…"
+          rows="1"
+        ></textarea>
+        <button class="send-btn" id="sendBtn" title="Send">➤</button>
+      </div>
+      <div class="input-hint" style="padding: 0 24px 10px;">Press Enter to send · Shift+Enter for new line</div>
+    </div>
+
+  </div>
+
+  <script src="app.js"></script>
+
+</body>
+</html>

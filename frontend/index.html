@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Adib Agents — Sign In</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body class="login-page">
+
+  <div class="login-card">
+    <div class="login-logo">
+      <div class="logo-icon">✦</div>
+      <h1>Adib Agents</h1>
+      <p>Your AI-powered job search assistant</p>
+    </div>
+
+    <form class="login-form" id="loginForm">
+      <div class="input-group">
+        <label for="email">Email</label>
+        <input type="email" id="email" placeholder="you@example.com" required autocomplete="email" />
+      </div>
+
+      <div class="input-group">
+        <label for="password">Password</label>
+        <input type="password" id="password" placeholder="••••••••" required autocomplete="current-password" />
+      </div>
+
+      <p class="error-msg" id="loginError"></p>
+
+      <button type="submit" class="btn btn-gold" id="loginBtn">Sign In</button>
+
+      <p class="login-divider">Sign in with your account to continue</p>
+    </form>
+  </div>
+
+  <!-- Firebase SDK -->
+  <script type="module">
+    import { initializeApp }                        from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+    import { getAuth, signInWithEmailAndPassword }  from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
+
+    // Pull config from the non-module script below
+    const { firebaseConfig } = await import("./firebase-config.js");
+    const app  = initializeApp(firebaseConfig);
+    const auth = getAuth(app);
+
+    const form      = document.getElementById("loginForm");
+    const btn       = document.getElementById("loginBtn");
+    const errorMsg  = document.getElementById("loginError");
+
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      errorMsg.textContent = "";
+      btn.disabled = true;
+      btn.textContent = "Signing in…";
+
+      const email    = document.getElementById("email").value.trim();
+      const password = document.getElementById("password").value;
+
+      try {
+        const cred  = await signInWithEmailAndPassword(auth, email, password);
+        const token = await cred.user.getIdToken();
+        sessionStorage.setItem("fbToken", token);
+        sessionStorage.setItem("fbEmail", cred.user.email);
+        window.location.href = "dashboard.html";
+      } catch (err) {
+        errorMsg.textContent = friendlyError(err.code);
+        btn.disabled = false;
+        btn.textContent = "Sign In";
+      }
+    });
+
+    function friendlyError(code) {
+      const map = {
+        "auth/invalid-credential":    "Invalid email or password.",
+        "auth/user-not-found":        "No account found with that email.",
+        "auth/wrong-password":        "Incorrect password.",
+        "auth/too-many-requests":     "Too many attempts. Try again later.",
+        "auth/network-request-failed":"Network error. Check your connection.",
+      };
+      return map[code] ?? "Something went wrong. Please try again.";
+    }
+  </script>
+
+</body>
+</html>
