@@ -1,7 +1,7 @@
 const BACKEND_URL =
   window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1"
-    ? "http://localhost:3000"
-    : "https://REPLACE_WITH_YOUR_RAILWAY_URL.up.railway.app";
+    ? "http://127.0.0.1:5001/adib-job-agent/us-central1/api"
+    : "https://us-central1-adib-job-agent.cloudfunctions.net/api";
 
 // ── Auth guard ──────────────────────────────────────────────────────────────
 const email = sessionStorage.getItem("fbEmail");
