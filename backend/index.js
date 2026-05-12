@@ -2,9 +2,7 @@ require("dotenv").config();
 
 const express = require("express");
 const cors = require("cors");
-
 const { Anthropic } = require("@anthropic-ai/sdk");
-
 const admin = require("firebase-admin");
 const serviceAccount = require("./firebase-key.json");
 
@@ -14,6 +12,8 @@ admin.initializeApp({
 
 const app = express();
 
+// TODO: before going live, restrict origin to your actual domain:
+// app.use(cors({ origin: "https://agents.adibmazloom.com" }));
 app.use(cors());
 app.use(express.json());
 
@@ -26,16 +26,20 @@ app.get("/", (req, res) => {
 });
 
 app.post("/chat", async (req, res) => {
-  try {
-    const userMessage = req.body.message;
+  const userMessage = req.body.message;
 
+  if (!userMessage || typeof userMessage !== "string" || userMessage.trim() === "") {
+    return res.status(400).json({ error: "message is required and must be a non-empty string" });
+  }
+
+  try {
     const response = await anthropic.messages.create({
       model: "claude-sonnet-4-20250514",
-      max_tokens: 500,
+      max_tokens: 2048,
       messages: [
         {
           role: "user",
-          content: userMessage,
+          content: userMessage.trim(),
         },
       ],
     });
@@ -44,8 +48,8 @@ app.post("/chat", async (req, res) => {
       reply: response.content[0].text,
     });
   } catch (error) {
-    console.error(error);
-    res.status(500).send("Error");
+    console.error("Anthropic API error:", error.message);
+    res.status(500).json({ error: "Failed to get a response. Please try again." });
   }
 });
 
