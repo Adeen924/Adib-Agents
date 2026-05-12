@@ -4,7 +4,10 @@ const express = require("express");
 const cors = require("cors");
 const { Anthropic } = require("@anthropic-ai/sdk");
 const admin = require("firebase-admin");
-const serviceAccount = require("./firebase-key.json");
+
+const serviceAccount = process.env.FIREBASE_SERVICE_ACCOUNT
+  ? JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT)
+  : require("./firebase-key.json");
 
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
@@ -21,8 +24,59 @@ const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY,
 });
 
+const db = admin.firestore();
+
 app.get("/", (req, res) => {
   res.send("Backend is running");
+});
+
+// Save a message pair to Firestore
+app.post("/history/save", async (req, res) => {
+  const { userId, view, userMessage, assistantReply } = req.body;
+  if (!userId || !userMessage || !assistantReply) {
+    return res.status(400).json({ error: "userId, userMessage, and assistantReply are required" });
+  }
+  try {
+    await db.collection("chats").add({
+      userId,
+      view: view || "search",
+      userMessage,
+      assistantReply,
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("Firestore save error:", err.message);
+    res.status(500).json({ error: "Failed to save message" });
+  }
+});
+
+// Load recent chat history for a user + view
+app.get("/history/:userId/:view", async (req, res) => {
+  const { userId, view } = req.params;
+  try {
+    const snapshot = await db.collection("chats")
+      .where("userId", "==", userId)
+      .where("view", "==", view)
+      .orderBy("createdAt", "desc")
+      .limit(20)
+      .get();
+
+    const messages = snapshot.docs
+      .reverse()
+      .flatMap((doc) => {
+        const d = doc.data();
+        return [
+          { role: "user",      content: d.userMessage },
+          { role: "assistant", content: d.assistantReply },
+        ];
+      });
+
+    res.json({ messages });
+  } catch (err) {
+    console.error("Firestore load error:", err.message);
+    res.status(500).json({ error: "Failed to load history" });
+  }
 });
 
 const DEFAULT_SYSTEM = `You are a job search assistant helping the user land their next role. You help with:

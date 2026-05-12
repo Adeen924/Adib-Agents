@@ -1,7 +1,7 @@
 const BACKEND_URL =
   window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1"
     ? "http://localhost:3000"
-    : "https://YOUR_RAILWAY_URL.up.railway.app"; // update this after Railway deploy
+    : "https://REPLACE_WITH_YOUR_RAILWAY_URL.up.railway.app";
 
 // ── Auth guard ──────────────────────────────────────────────────────────────
 const email = sessionStorage.getItem("fbEmail");
@@ -51,8 +51,10 @@ const VIEWS = {
   },
 };
 
-let currentView    = "search";
-let isLoading      = false;
+const userId = sessionStorage.getItem("fbEmail"); // use email as stable user ID
+
+let currentView         = "search";
+let isLoading           = false;
 let conversationHistory = [];
 
 // ── Init ──────────────────────────────────────────────────────────────────────
@@ -60,6 +62,8 @@ function init() {
   userEmailEl.textContent  = email;
   userAvatar.textContent   = email.charAt(0).toUpperCase();
   renderChips(VIEWS[currentView].chips);
+
+  loadHistory(currentView);
 
   document.querySelectorAll(".nav-item[data-view]").forEach((btn) => {
     btn.addEventListener("click", () => switchView(btn.dataset.view));
@@ -94,6 +98,7 @@ function switchView(view) {
   });
 
   clearChat();
+  loadHistory(view);
 }
 
 function renderChips(chips) {
@@ -210,6 +215,13 @@ async function sendMessage() {
 
     appendMessage("assistant", data.reply);
     conversationHistory.push({ role: "assistant", content: data.reply });
+
+    // Persist to Firestore (fire and forget)
+    fetch(`${BACKEND_URL}/history/save`, {
+      method:  "POST",
+      headers: { "Content-Type": "application/json" },
+      body:    JSON.stringify({ userId, view: currentView, userMessage: text, assistantReply: data.reply }),
+    }).catch(() => {}); // silently ignore save errors
   } catch (err) {
     removeTypingIndicator();
     appendMessage("assistant", "Sorry, something went wrong. Please try again.");
@@ -222,6 +234,19 @@ async function sendMessage() {
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+async function loadHistory(view) {
+  try {
+    const res  = await fetch(`${BACKEND_URL}/history/${encodeURIComponent(userId)}/${view}`);
+    const data = await res.json();
+    if (!data.messages || data.messages.length === 0) return;
+
+    conversationHistory = data.messages;
+    data.messages.forEach((m) => appendMessage(m.role, m.content));
+  } catch {
+    // History load failure is non-fatal — just start fresh
+  }
+}
+
 function signOut() {
   sessionStorage.clear();
   window.location.href = "index.html";

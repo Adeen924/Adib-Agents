@@ -34,51 +34,50 @@
     </form>
   </div>
 
-  <!-- Firebase SDK -->
-  <script type="module">
-    import { initializeApp }                        from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
-    import { getAuth, signInWithEmailAndPassword }  from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
+  <!-- Firebase compat SDK (works without a local server) -->
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
+  <script src="firebase-config.js"></script>
+  <script>
+    firebase.initializeApp(firebaseConfig);
+    const auth = firebase.auth();
 
-    // Pull config from the non-module script below
-    const { firebaseConfig } = await import("./firebase-config.js");
-    const app  = initializeApp(firebaseConfig);
-    const auth = getAuth(app);
-
-    const form      = document.getElementById("loginForm");
-    const btn       = document.getElementById("loginBtn");
-    const errorMsg  = document.getElementById("loginError");
+    const form     = document.getElementById("loginForm");
+    const btn      = document.getElementById("loginBtn");
+    const errorMsg = document.getElementById("loginError");
 
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
       errorMsg.textContent = "";
-      btn.disabled = true;
+      btn.disabled    = true;
       btn.textContent = "Signing in…";
 
       const email    = document.getElementById("email").value.trim();
       const password = document.getElementById("password").value;
 
       try {
-        const cred  = await signInWithEmailAndPassword(auth, email, password);
+        const cred  = await auth.signInWithEmailAndPassword(email, password);
         const token = await cred.user.getIdToken();
         sessionStorage.setItem("fbToken", token);
         sessionStorage.setItem("fbEmail", cred.user.email);
         window.location.href = "dashboard.html";
       } catch (err) {
         errorMsg.textContent = friendlyError(err.code);
-        btn.disabled = false;
+        btn.disabled    = false;
         btn.textContent = "Sign In";
       }
     });
 
     function friendlyError(code) {
       const map = {
-        "auth/invalid-credential":    "Invalid email or password.",
-        "auth/user-not-found":        "No account found with that email.",
-        "auth/wrong-password":        "Incorrect password.",
-        "auth/too-many-requests":     "Too many attempts. Try again later.",
-        "auth/network-request-failed":"Network error. Check your connection.",
+        "auth/invalid-credential":     "Invalid email or password.",
+        "auth/user-not-found":         "No account found with that email.",
+        "auth/wrong-password":         "Incorrect password.",
+        "auth/too-many-requests":      "Too many attempts. Try again later.",
+        "auth/network-request-failed": "Network error. Check your connection.",
+        "auth/invalid-email":          "Please enter a valid email address.",
       };
-      return map[code] ?? "Something went wrong. Please try again.";
+      return map[code] ?? `Sign-in failed (${code}). Please try again.`;
     }
   </script>
 
