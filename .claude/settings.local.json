@@ -5,7 +5,9 @@
       "Bash(Select-Object FullName)",
       "PowerShell(Get-ChildItem -Path \"C:\\\\Users\\\\amazl\\\\Documents\\\\GitHub\\\\Adib-Agents\" -Recurse -Force | Select-Object FullName | ForEach-Object { $_.FullName })",
       "PowerShell(Rename-Item \"C:\\\\Users\\\\amazl\\\\Documents\\\\GitHub\\\\Adib-Agents\\\\backend\\\\firebase-key.json.json\" \"firebase-key.json\")",
-      "Bash(git rm *)"
+      "Bash(git rm *)",
+      "Bash(Test-Path \"C:\\\\Users\\\\amazl\\\\Documents\\\\GitHub\\\\Adib-Agents\\\\backend\\\\node_modules\")",
+      "Bash(npm --version)"
     ]
   }
 }
