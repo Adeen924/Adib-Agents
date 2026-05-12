@@ -1,6 +1,6 @@
 // Get these values from:
 // Firebase Console → Project Settings → Your apps → (add a Web app if you haven't) → Config
-const firebaseConfig = {
+export const firebaseConfig = {
   apiKey:            "AIzaSyAO49Qyo638mugQOtri2Wt02eyPms1Ipv0",
   authDomain:        "adib-job-agent.firebaseapp.com",
   projectId:         "adib-job-agent",
