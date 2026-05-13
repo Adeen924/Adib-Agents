@@ -34,10 +34,12 @@ const INTERVIEW_VIEW = {
   prompt: "You are an expert interview coach. Help the user prepare for job interviews with practice questions, STAR-method answer frameworks, salary negotiation tactics, and company research. Be encouraging and specific.",
 };
 
-let isLoading           = false;
-let conversationHistory = [];
-let currentDocType      = "resume";
-let currentJob          = null;   // populated when a job detail page is opened
+let isLoading              = false;
+let conversationHistory    = [];
+let currentDocType         = "resume";
+let currentJob             = null;   // populated when a job detail page is opened
+let pendingResumeDownload  = false;  // true while waiting for a tailored resume reply
+let latestResumeText       = "";     // stores the last generated resume for PDF export
 
 // ── Init ──────────────────────────────────────────────────────────────────────
 function init() {
@@ -215,6 +217,13 @@ async function sendMessage() {
 
     appendMessage("assistant", data.reply);
     conversationHistory.push({ role: "assistant", content: data.reply });
+
+    // If this was a tailored resume request, add the PDF download button
+    if (pendingResumeDownload) {
+      pendingResumeDownload = false;
+      latestResumeText = data.reply;
+      appendResumeDownloadButton();
+    }
 
     fetch(`${BACKEND_URL}/history/save`, {
       method:  "POST",
@@ -501,22 +510,30 @@ async function openJobDetail(jobId) {
 function createTailoredResume() {
   if (!currentJob) return;
   const { title = "", company = "", description = "" } = currentJob;
+  pendingResumeDownload = true;
   showPanel("chat");
   const input = document.getElementById("messageInput");
-  input.value = `Create a tailored version of my resume for this specific job posting.
+  input.value = `Create a tailored, ATS-optimised resume for this job posting.
 
-STRICT RULES — follow these exactly:
-- Use ONLY my actual experience from my resume in the Knowledge Base. Do NOT invent, add, or imply anything that isn't already there.
-- Do NOT add new skills, certifications, projects, or accomplishments I don't have.
-- DO reword and reorder my existing bullet points to better highlight the skills and experience most relevant to this role.
-- DO mirror the language and keywords from the job description where they honestly apply to my background.
-- Keep the exact same resume structure, section order, and formatting as my existing resume.
-- The goal is to make me look like the strongest honest candidate for this role.
+CONTENT RULES:
+- Use ONLY my actual experience from my resume in the Knowledge Base. Do NOT fabricate, add, or imply anything that is not already there.
+- Do NOT add new skills, certifications, projects, or accomplishments I do not have.
+- DO reword and reorder my existing bullet points to emphasise skills most relevant to this role.
+- DO naturally incorporate keywords from the job description where they honestly apply to my background.
+
+FORMATTING RULES (critical for ATS scanners — follow exactly):
+- Output plain text only. No markdown, no ** bold **, no _ italic _, no special symbols.
+- Line 1: my full name only.
+- Line 2: email | phone | location (and LinkedIn if available).
+- Section headers in ALL CAPS on their own line: PROFESSIONAL SUMMARY, EXPERIENCE, EDUCATION, SKILLS, etc.
+- Each job: Job Title | Company Name | Month Year - Month Year
+- Bullet points start with a hyphen and space: - like this
+- Single column layout only. No tables, no side columns, no text boxes.
 
 Job Posting:
 Role: ${title}
 Company: ${company}
-Full Description:
+Description:
 ${description}`;
   autoResize();
   document.getElementById("messageInput").focus();
@@ -856,6 +873,108 @@ async function extractDocxText(file) {
   const arrayBuffer = await file.arrayBuffer();
   const result      = await mammoth.extractRawText({ arrayBuffer });
   return result.value;
+}
+
+// ── Resume PDF export ─────────────────────────────────────────────────────────
+function appendResumeDownloadButton() {
+  const chatArea = document.getElementById("chatArea");
+  const wrap = document.createElement("div");
+  wrap.className = "resume-dl-bar";
+  wrap.innerHTML = `
+    <span style="font-size:0.8rem;color:var(--text-muted)">Resume generated ·</span>
+    <button class="btn btn-gold" style="padding:7px 16px;font-size:0.82rem" onclick="downloadResumeAsPDF()">
+      📄 Download as PDF
+    </button>`;
+  chatArea.appendChild(wrap);
+  chatArea.scrollTop = chatArea.scrollHeight;
+}
+
+function downloadResumeAsPDF() {
+  if (!latestResumeText) return;
+
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ orientation: "portrait", unit: "pt", format: "letter" });
+
+  const margin    = 50;
+  const pageW     = doc.internal.pageSize.getWidth();
+  const pageH     = doc.internal.pageSize.getHeight();
+  const contentW  = pageW - margin * 2;
+  const leading   = 13;   // line height in points
+  let y           = margin;
+  let firstLine   = true;
+
+  // Strip any markdown that might have leaked through
+  const clean = latestResumeText
+    .replace(/\*\*(.+?)\*\*/g, "$1")
+    .replace(/\*(.+?)\*/g, "$1")
+    .replace(/^#{1,4}\s+/gm, "")
+    .replace(/`(.+?)`/g, "$1");
+
+  const lines = clean.split(/\r?\n/);
+
+  for (const raw of lines) {
+    const line = raw.trimEnd();
+
+    // New page if needed
+    if (y > pageH - margin - leading) {
+      doc.addPage();
+      y = margin;
+    }
+
+    if (line.trim() === "") {
+      y += leading * 0.6;
+      continue;
+    }
+
+    const t = line.trim();
+
+    if (firstLine) {
+      // Candidate name — large + bold
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(18);
+      doc.text(t, margin, y);
+      y += 22;
+      firstLine = false;
+
+    } else if (/^\|/.test(t) === false && t === t.toUpperCase() && t.replace(/[^A-Z]/g, "").length > 2) {
+      // ALL-CAPS section header
+      y += 6;
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(10.5);
+      doc.text(t, margin, y);
+      doc.setDrawColor(180);
+      doc.setLineWidth(0.5);
+      doc.line(margin, y + 2, pageW - margin, y + 2);
+      y += leading + 4;
+
+    } else if (/^[-•]/.test(t)) {
+      // Bullet point — indent
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(10);
+      const bullet = "•  " + t.replace(/^[-•]\s*/, "");
+      const wrapped = doc.splitTextToSize(bullet, contentW - 16);
+      doc.text(wrapped, margin + 14, y);
+      y += wrapped.length * leading;
+
+    } else if (t.includes("|")) {
+      // Job title | Company | Dates  or  contact line
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(10);
+      const wrapped = doc.splitTextToSize(t, contentW);
+      doc.text(wrapped, margin, y);
+      y += wrapped.length * leading;
+
+    } else {
+      // Normal text
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(10);
+      const wrapped = doc.splitTextToSize(t, contentW);
+      doc.text(wrapped, margin, y);
+      y += wrapped.length * leading;
+    }
+  }
+
+  doc.save("tailored-resume.pdf");
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
