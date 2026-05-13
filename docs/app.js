@@ -84,6 +84,9 @@ function init() {
   // Search Now button
   document.getElementById("searchNowBtn").addEventListener("click", searchNow);
 
+  // Resume file upload
+  initResumeUpload();
+
   // Load dashboard on start
   showPanel("dashboard");
   renderChips(INTERVIEW_VIEW.chips);
@@ -459,7 +462,11 @@ async function loadPreferences() {
     if (data.experienceLevel) document.getElementById("prefExpLevel").value     = data.experienceLevel;
     if (data.companySize)     document.getElementById("prefCompanySize").value  = data.companySize;
     if (data.industries)      document.getElementById("prefIndustries").value   = data.industries;
-    if (data.resume)          document.getElementById("prefResume").value       = data.resume;
+    if (data.resume) {
+      document.getElementById("prefResume").value = data.resume;
+      // Show the "done" state with a placeholder filename
+      showUploadDone("resume_on_file.txt", data.resume);
+    }
     if (data.remoteOnly)      document.getElementById("prefRemoteOnly").checked = data.remoteOnly;
   } catch { /* non-fatal */ }
 }
@@ -528,6 +535,114 @@ async function saveKnowledge(e) {
   } catch {
     status.textContent = "Failed to save. Please try again.";
   } finally { btn.disabled = false; btn.textContent = "Save Knowledge Base"; }
+}
+
+// ── Resume file upload ────────────────────────────────────────────────────────
+function initResumeUpload() {
+  const zone      = document.getElementById("resumeUploadZone");
+  const fileInput = document.getElementById("resumeFileInput");
+  const browse    = document.getElementById("uploadBrowse");
+  const removeBtn = document.getElementById("uploadRemove");
+
+  // Click anywhere on the zone (or the "click to browse" link) opens the picker
+  zone.addEventListener("click", (e) => {
+    if (e.target === removeBtn) return; // handled separately
+    fileInput.click();
+  });
+  browse?.addEventListener("click", (e) => { e.stopPropagation(); fileInput.click(); });
+
+  // File picker change
+  fileInput.addEventListener("change", () => {
+    if (fileInput.files[0]) handleResumeFile(fileInput.files[0]);
+  });
+
+  // Drag-and-drop
+  zone.addEventListener("dragover", (e) => { e.preventDefault(); zone.classList.add("drag-over"); });
+  zone.addEventListener("dragleave", () => zone.classList.remove("drag-over"));
+  zone.addEventListener("drop", (e) => {
+    e.preventDefault();
+    zone.classList.remove("drag-over");
+    const file = e.dataTransfer.files[0];
+    if (file) handleResumeFile(file);
+  });
+
+  // Remove button
+  removeBtn?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    document.getElementById("prefResume").value = "";
+    fileInput.value = "";
+    showUploadIdle();
+  });
+}
+
+function showUploadIdle() {
+  document.getElementById("uploadIdle").style.display    = "";
+  document.getElementById("uploadLoading").style.display = "none";
+  document.getElementById("uploadDone").style.display    = "none";
+}
+function showUploadLoading() {
+  document.getElementById("uploadIdle").style.display    = "none";
+  document.getElementById("uploadLoading").style.display = "";
+  document.getElementById("uploadDone").style.display    = "none";
+}
+function showUploadDone(filename, text) {
+  document.getElementById("uploadIdle").style.display    = "none";
+  document.getElementById("uploadLoading").style.display = "none";
+  document.getElementById("uploadDone").style.display    = "";
+  document.getElementById("uploadFileName").textContent  = filename;
+  const words = text.trim().split(/\s+/).length;
+  document.getElementById("uploadWordCount").textContent = `${words.toLocaleString()} words extracted`;
+}
+
+async function handleResumeFile(file) {
+  const allowed = ["application/pdf",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "text/plain"];
+  const ext = file.name.split(".").pop().toLowerCase();
+  if (!allowed.includes(file.type) && !["pdf","docx","txt"].includes(ext)) {
+    alert("Please upload a PDF, DOCX, or TXT file.");
+    return;
+  }
+
+  showUploadLoading();
+  try {
+    let text = "";
+    if (file.type === "application/pdf" || ext === "pdf") {
+      text = await extractPdfText(file);
+    } else if (
+      file.type === "application/vnd.openxmlformats-officedocument.wordprocessingml.document" ||
+      ext === "docx"
+    ) {
+      text = await extractDocxText(file);
+    } else {
+      text = await file.text();
+    }
+
+    if (!text.trim()) throw new Error("No text could be extracted from this file.");
+    document.getElementById("prefResume").value = text;
+    showUploadDone(file.name, text);
+  } catch (err) {
+    showUploadIdle();
+    alert("Could not read file: " + err.message);
+  }
+}
+
+async function extractPdfText(file) {
+  const arrayBuffer = await file.arrayBuffer();
+  const pdf         = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+  const parts       = [];
+  for (let i = 1; i <= pdf.numPages; i++) {
+    const page    = await pdf.getPage(i);
+    const content = await page.getTextContent();
+    parts.push(content.items.map(item => item.str).join(" "));
+  }
+  return parts.join("\n");
+}
+
+async function extractDocxText(file) {
+  const arrayBuffer = await file.arrayBuffer();
+  const result      = await mammoth.extractRawText({ arrayBuffer });
+  return result.value;
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

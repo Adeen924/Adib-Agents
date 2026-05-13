@@ -286,11 +286,36 @@
           <input type="text" id="prefIndustries" placeholder="e.g. Fintech, Health Tech, SaaS, AI/ML, E-commerce" />
         </div>
 
-        <div class="prefs-section-label" style="margin-top:8px">Your Resume <span class="label-hint">— the agent reads this to match you to jobs</span></div>
+        <div class="prefs-section-label" style="margin-top:8px">Your Resume <span class="label-hint">— upload once, the agent reads it every search</span></div>
 
         <div class="input-group">
-          <label>Paste Your Current Resume</label>
-          <textarea id="prefResume" rows="12" placeholder="Paste your full resume here. The agent will parse it to understand your skills, experience, and background — then find jobs that are a strong match for you specifically rather than generic listings."></textarea>
+          <label>Current Resume <span class="label-hint">— PDF, DOCX, or TXT</span></label>
+
+          <!-- Upload zone -->
+          <div class="file-upload-zone" id="resumeUploadZone">
+            <input type="file" id="resumeFileInput" accept=".pdf,.docx,.txt" style="display:none" />
+            <div class="upload-idle" id="uploadIdle">
+              <div class="upload-icon-large">📄</div>
+              <div class="upload-title">Drop your resume here</div>
+              <div class="upload-sub">or <span class="upload-link" id="uploadBrowse">click to browse</span></div>
+              <div class="upload-hint-small">PDF · DOCX · TXT</div>
+            </div>
+            <div class="upload-loading" id="uploadLoading" style="display:none">
+              <div class="upload-spinner"></div>
+              <div>Reading file…</div>
+            </div>
+            <div class="upload-done" id="uploadDone" style="display:none">
+              <div class="upload-done-icon">✓</div>
+              <div>
+                <div class="upload-done-name" id="uploadFileName">resume.pdf</div>
+                <div class="upload-done-sub" id="uploadWordCount"></div>
+              </div>
+              <button type="button" class="upload-remove" id="uploadRemove" title="Remove">✕</button>
+            </div>
+          </div>
+
+          <!-- Hidden field stores the extracted text -->
+          <textarea id="prefResume" style="display:none"></textarea>
         </div>
 
         <p class="prefs-status" id="prefsStatus"></p>
@@ -341,6 +366,11 @@
   </div>
 
 </div>
+<!-- PDF.js for client-side PDF text extraction -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script>pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";</script>
+<!-- Mammoth.js for DOCX text extraction -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

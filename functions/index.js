@@ -107,6 +107,7 @@ app.post("/chat", async (req, res) => {
 
   if (userId) {
     try {
+      // Inject knowledge base
       const kbDoc = await db.collection("knowledge").doc(userId).get();
       if (kbDoc.exists) {
         const kb = kbDoc.data();
@@ -120,6 +121,15 @@ app.post("/chat", async (req, res) => {
         if (kb.additionalContext)  parts.push(`ADDITIONAL CONTEXT:\n${kb.additionalContext}`);
         if (parts.length > 0) {
           fullSystem += `\n\n--- USER BACKGROUND ---\n${parts.join("\n\n")}`;
+        }
+      }
+
+      // Inject uploaded resume as style/format reference for document generation
+      const prefsDoc = await db.collection("preferences").doc(userId).get();
+      if (prefsDoc.exists) {
+        const prefs = prefsDoc.data();
+        if (prefs.resume && prefs.resume.trim()) {
+          fullSystem += `\n\n--- RESUME STYLE REFERENCE ---\nThe user has uploaded their current resume. When creating or rewriting resumes, match the exact formatting structure, section order, tone, and length of this resume:\n\n${prefs.resume.slice(0, 4000)}`;
         }
       }
     } catch { /* non-fatal */ }
