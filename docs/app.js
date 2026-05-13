@@ -442,6 +442,10 @@ async function openJobDetail(jobId) {
       urlEl.style.display = "none";
     }
 
+    // Google search fallback — always works even if the direct URL is wrong
+    const googleQuery = encodeURIComponent(`${j.title || ""} ${j.company || ""} job posting`);
+    document.getElementById("jobGoogleSearch").href = `https://www.google.com/search?q=${googleQuery}`;
+
     const fields = [
       j.salary     && ["Salary",               j.salary],
       j.experience && ["Experience Required",   j.experience],
@@ -457,6 +461,22 @@ async function openJobDetail(jobId) {
       <div class="jd-section">
         <div class="jd-section-label">About the Role</div>
         <div class="jd-description">${formatMarkdown(j.description || "No description available.")}</div>
+      </div>
+
+      <div class="jd-section">
+        <div class="jd-section-label">Job Posting Links</div>
+        <div style="display:flex;flex-direction:column;gap:10px">
+          ${j.url && j.url.startsWith("http") ? `
+          <div>
+            <a href="${escapeHtml(j.url)}" target="_blank" rel="noopener" class="btn btn-gold" style="display:inline-flex">
+              View Posting ↗
+            </a>
+            <div class="jd-url-preview">${escapeHtml(j.url)}</div>
+          </div>` : `<div style="font-size:0.85rem;color:var(--text-muted)">No direct link available for this posting.</div>`}
+          <a id="jobGoogleSearch" href="#" target="_blank" rel="noopener" class="btn btn-ghost" style="display:inline-flex;width:fit-content">
+            🔍 Search Google for this job
+          </a>
+        </div>
       </div>
 
       <div class="jd-section">

@@ -820,6 +820,14 @@ select:focus { border-color: var(--gold); box-shadow: 0 0 0 3px var(--gold-glow)
   border-bottom: 1px solid var(--border);
   margin-bottom: 14px;
 }
+.jd-url-preview {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  margin-top: 6px;
+  word-break: break-all;
+  font-family: monospace;
+}
+
 .jd-description {
   font-size: 0.9rem;
   line-height: 1.75;

@@ -121,8 +121,12 @@ Rules:
 - Prefer postings from the last 14 days
 ${resumeSnippet ? `- Match roles to this candidate background:\n${resumeSnippet}` : ""}
 
-Return 5 jobs as a JSON array with these fields (empty string if unknown):
-[{"title":"","company":"","location":"","salary":"","experience":"","description":"2-3 sentences max","url":"","posted":""}]`;
+Return 5 jobs as a JSON array. Field rules:
+- url: must be the DIRECT permalink to this specific job posting (e.g. linkedin.com/jobs/view/1234567890 or indeed.com/viewjob?jk=abc123). Never a search or browse page. If you cannot find the direct link, use "".
+- posted: exact date as "Month DD, YYYY" (e.g. "May 10, 2026") or relative like "2 days ago". Never just a year. If unknown use "".
+- description: 2-3 sentences covering what the role does, key responsibilities, and must-have skills.
+
+[{"title":"","company":"","location":"","salary":"","experience":"","description":"","url":"","posted":""}]`;
 
   const userQuery = `Find 5 current job listings. Search: ${query}`;
 
