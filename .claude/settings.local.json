@@ -7,7 +7,9 @@
       "PowerShell(Rename-Item \"C:\\\\Users\\\\amazl\\\\Documents\\\\GitHub\\\\Adib-Agents\\\\backend\\\\firebase-key.json.json\" \"firebase-key.json\")",
       "Bash(git rm *)",
       "Bash(Test-Path \"C:\\\\Users\\\\amazl\\\\Documents\\\\GitHub\\\\Adib-Agents\\\\backend\\\\node_modules\")",
-      "Bash(npm --version)"
+      "Bash(npm --version)",
+      "Bash(git commit -m ' *)",
+      "Bash(git push *)"
     ]
   }
 }
