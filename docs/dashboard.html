@@ -7,144 +7,275 @@
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
+<div class="app-layout">
 
-  <div class="app-layout">
-
-    <!-- Sidebar -->
-    <aside class="sidebar">
-      <div class="sidebar-logo">
-        <div class="logo-icon">✦</div>
-        <div>
-          <div class="logo-text">Adib Agents</div>
-          <div class="logo-sub">Job Search AI</div>
-        </div>
-      </div>
-
-      <nav class="sidebar-nav">
-        <div class="nav-label">Tools</div>
-        <button class="nav-item active" data-view="search">
-          <span class="nav-icon">🔍</span> Job Search
-        </button>
-        <button class="nav-item" data-view="resume">
-          <span class="nav-icon">📄</span> Resume Helper
-        </button>
-        <button class="nav-item" data-view="cover">
-          <span class="nav-icon">✉️</span> Cover Letter
-        </button>
-        <button class="nav-item" data-view="interview">
-          <span class="nav-icon">🎯</span> Interview Prep
-        </button>
-
-        <div class="nav-label" style="margin-top:12px">Daily</div>
-        <button class="nav-item" id="digestBtn">
-          <span class="nav-icon">📬</span> Daily Digest
-        </button>
-        <button class="nav-item" id="prefsBtn">
-          <span class="nav-icon">⚙️</span> Preferences
-        </button>
-
-        <div class="nav-label" style="margin-top:12px">Actions</div>
-        <button class="nav-item" id="newChatBtn">
-          <span class="nav-icon">＋</span> New Chat
-        </button>
-      </nav>
-
-      <div class="sidebar-footer">
-        <div class="user-chip">
-          <div class="user-avatar" id="userAvatar">?</div>
-          <div class="user-info">
-            <div class="user-email" id="userEmail">loading…</div>
-          </div>
-          <button class="sign-out-btn" id="signOutBtn" title="Sign out">↩</button>
-        </div>
-      </div>
-    </aside>
-
-    <!-- Main chat view -->
-    <div class="main-content" id="chatView">
-      <header class="main-header">
-        <div>
-          <h2 id="viewTitle">Job Search Assistant</h2>
-          <p id="viewSubtitle">Ask me about roles, companies, salaries, or strategy</p>
-        </div>
-        <div class="header-status">
-          <span class="status-dot"></span> Connected
-        </div>
-      </header>
-
-      <div class="chat-area" id="chatArea">
-        <div class="chat-empty" id="emptyState">
-          <div class="empty-icon">✦</div>
-          <h3>What are you looking for?</h3>
-          <p>Tell me about your background and target role — I'll help you find opportunities and craft your applications.</p>
-          <div class="suggestion-chips" id="chips"></div>
-        </div>
-      </div>
-
-      <div class="input-bar">
-        <textarea id="messageInput" placeholder="Ask anything about your job search…" rows="1"></textarea>
-        <button class="send-btn" id="sendBtn" title="Send">➤</button>
-      </div>
-      <div class="input-hint" style="padding: 0 24px 10px;">Press Enter to send · Shift+Enter for new line</div>
-    </div>
-
-    <!-- Daily Digest view -->
-    <div class="main-content panel-view" id="digestView" style="display:none">
-      <header class="main-header">
-        <div>
-          <h2>Daily Digest</h2>
-          <p>Job listings found automatically every morning at 8am</p>
-        </div>
-        <div class="header-status">
-          <span class="status-dot"></span> Auto-updated
-        </div>
-      </header>
-      <div class="panel-body" id="digestBody">
-        <div class="panel-loading">Loading your digests…</div>
+  <!-- ── Sidebar ── -->
+  <aside class="sidebar">
+    <div class="sidebar-logo">
+      <div class="logo-icon">✦</div>
+      <div>
+        <div class="logo-text">Adib Agents</div>
+        <div class="logo-sub">Job Search AI</div>
       </div>
     </div>
 
-    <!-- Preferences view -->
-    <div class="main-content panel-view" id="prefsView" style="display:none">
-      <header class="main-header">
-        <div>
-          <h2>Job Preferences</h2>
-          <p>The daily agent uses these to find jobs for you every morning</p>
+    <nav class="sidebar-nav">
+      <div class="nav-label">Overview</div>
+      <button class="nav-item" id="nav-dashboard">
+        <span class="nav-icon">📊</span> Dashboard
+      </button>
+
+      <div class="nav-label" style="margin-top:10px">Tools</div>
+      <button class="nav-item active" data-view="search">
+        <span class="nav-icon">🔍</span> Job Search
+      </button>
+      <button class="nav-item" data-view="resume">
+        <span class="nav-icon">📄</span> Resume Helper
+      </button>
+      <button class="nav-item" data-view="cover">
+        <span class="nav-icon">✉️</span> Cover Letter
+      </button>
+      <button class="nav-item" data-view="interview">
+        <span class="nav-icon">🎯</span> Interview Prep
+      </button>
+
+      <div class="nav-label" style="margin-top:10px">Saved</div>
+      <button class="nav-item" id="nav-jobs">
+        <span class="nav-icon">💼</span> Jobs Found
+      </button>
+      <button class="nav-item" id="nav-documents">
+        <span class="nav-icon">📁</span> Documents
+      </button>
+
+      <div class="nav-label" style="margin-top:10px">Daily</div>
+      <button class="nav-item" id="nav-digest">
+        <span class="nav-icon">📬</span> Daily Digest
+      </button>
+      <button class="nav-item" id="nav-prefs">
+        <span class="nav-icon">⚙️</span> Preferences
+      </button>
+
+      <div class="nav-label" style="margin-top:10px">Me</div>
+      <button class="nav-item" id="nav-knowledge">
+        <span class="nav-icon">🧠</span> Knowledge Base
+      </button>
+
+      <div class="nav-label" style="margin-top:10px">Actions</div>
+      <button class="nav-item" id="newChatBtn">
+        <span class="nav-icon">＋</span> New Chat
+      </button>
+    </nav>
+
+    <div class="sidebar-footer">
+      <div class="user-chip">
+        <div class="user-avatar" id="userAvatar">?</div>
+        <div class="user-info">
+          <div class="user-email" id="userEmail">loading…</div>
         </div>
-      </header>
-      <div class="panel-body">
-        <form class="prefs-form" id="prefsForm">
+        <button class="sign-out-btn" id="signOutBtn" title="Sign out">↩</button>
+      </div>
+    </div>
+  </aside>
+
+  <!-- ── Chat view ── -->
+  <div class="main-content" id="chatView">
+    <header class="main-header">
+      <div>
+        <h2 id="viewTitle">Job Search Assistant</h2>
+        <p id="viewSubtitle">Ask me about roles, companies, salaries, or strategy</p>
+      </div>
+      <div class="header-status"><span class="status-dot"></span> Connected</div>
+    </header>
+    <div class="chat-area" id="chatArea">
+      <div class="chat-empty" id="emptyState">
+        <div class="empty-icon">✦</div>
+        <h3>What are you looking for?</h3>
+        <p>Tell me about your background and target role — I'll help you find opportunities and craft your applications.</p>
+        <div class="suggestion-chips" id="chips"></div>
+      </div>
+    </div>
+    <div class="input-bar">
+      <textarea id="messageInput" placeholder="Ask anything about your job search…" rows="1"></textarea>
+      <button class="send-btn" id="sendBtn" title="Send">➤</button>
+    </div>
+    <div class="input-hint" style="padding:0 24px 10px">Press Enter to send · Shift+Enter for new line</div>
+  </div>
+
+  <!-- ── Dashboard view ── -->
+  <div class="main-content panel-view" id="dashboardView" style="display:none">
+    <header class="main-header">
+      <div><h2>Dashboard</h2><p>Activity and usage in the past 24 hours</p></div>
+      <div class="header-status"><span class="status-dot"></span> Live</div>
+    </header>
+    <div class="panel-body" style="max-width:100%">
+
+      <!-- Stats row -->
+      <div class="stats-grid" id="statsGrid">
+        <div class="stat-card"><div class="stat-value" id="stat-runs">—</div><div class="stat-label">Runs (24h)</div></div>
+        <div class="stat-card"><div class="stat-value" id="stat-tokens">—</div><div class="stat-label">Tokens Used (24h)</div></div>
+        <div class="stat-card"><div class="stat-value" id="stat-cost">—</div><div class="stat-label">Cost (24h)</div></div>
+        <div class="stat-card"><div class="stat-value" id="stat-items">—</div><div class="stat-label">Items Processed (24h)</div></div>
+      </div>
+
+      <!-- Applications tracker -->
+      <div class="section-header">
+        <h3>Active Applications</h3>
+        <button class="btn btn-gold" id="addAppBtn" style="padding:7px 16px;font-size:0.8rem">+ Add Application</button>
+      </div>
+
+      <!-- Add application form (hidden by default) -->
+      <div class="app-form card" id="appForm" style="display:none">
+        <div class="app-form-grid">
           <div class="input-group">
-            <label>Job Title / Role</label>
-            <input type="text" id="prefJobTitle" placeholder="e.g. Software Engineer, Product Manager" />
+            <label>Company</label>
+            <input type="text" id="appCompany" placeholder="e.g. Google" />
           </div>
           <div class="input-group">
-            <label>Location</label>
-            <input type="text" id="prefLocation" placeholder="e.g. Seattle WA, Remote, New York" />
+            <label>Role</label>
+            <input type="text" id="appRole" placeholder="e.g. Senior Engineer" />
           </div>
           <div class="input-group">
-            <label>Job Type</label>
-            <select id="prefJobType">
-              <option value="any">Any</option>
-              <option value="full-time">Full-time</option>
-              <option value="part-time">Part-time</option>
-              <option value="contract">Contract</option>
-              <option value="remote">Remote only</option>
+            <label>Status</label>
+            <select id="appStatus">
+              <option>Applied</option>
+              <option>Screening</option>
+              <option>Interview</option>
+              <option>Final Round</option>
+              <option>Offer</option>
+              <option>Rejected</option>
+              <option>Withdrawn</option>
             </select>
           </div>
           <div class="input-group">
-            <label>Minimum Salary</label>
-            <input type="text" id="prefSalaryMin" placeholder="e.g. $100,000" />
+            <label>Applied Date</label>
+            <input type="date" id="appDate" />
           </div>
-          <p class="prefs-status" id="prefsStatus"></p>
-          <button type="submit" class="btn btn-gold" id="prefsBtn2">Save Preferences</button>
-        </form>
+          <div class="input-group" style="grid-column:1/-1">
+            <label>Job URL</label>
+            <input type="url" id="appUrl" placeholder="https://..." />
+          </div>
+          <div class="input-group" style="grid-column:1/-1">
+            <label>Notes</label>
+            <input type="text" id="appNotes" placeholder="Recruiter name, next steps, etc." />
+          </div>
+        </div>
+        <div style="display:flex;gap:8px;margin-top:4px">
+          <button class="btn btn-gold" id="saveAppBtn">Save</button>
+          <button class="btn btn-ghost" id="cancelAppBtn">Cancel</button>
+        </div>
+        <input type="hidden" id="appEditId" />
+      </div>
+
+      <div id="applicationsTable">
+        <div class="panel-loading">Loading applications…</div>
       </div>
     </div>
-
   </div>
 
-  <script src="app.js"></script>
+  <!-- ── Jobs Found view ── -->
+  <div class="main-content panel-view" id="jobsView" style="display:none">
+    <header class="main-header">
+      <div><h2>Jobs Found</h2><p>Listings discovered by the daily agent</p></div>
+    </header>
+    <div class="panel-body" id="jobsBody">
+      <div class="panel-loading">Loading jobs…</div>
+    </div>
+  </div>
 
+  <!-- ── Documents view ── -->
+  <div class="main-content panel-view" id="documentsView" style="display:none">
+    <header class="main-header">
+      <div><h2>Documents</h2><p>Resumes and cover letters created by the agent</p></div>
+    </header>
+    <div class="panel-body" style="max-width:100%">
+      <div class="doc-tabs">
+        <button class="doc-tab active" data-doctype="resume">📄 Resumes</button>
+        <button class="doc-tab" data-doctype="cover_letter">✉️ Cover Letters</button>
+      </div>
+      <div id="documentsBody"><div class="panel-loading">Loading…</div></div>
+    </div>
+  </div>
+
+  <!-- ── Daily Digest view ── -->
+  <div class="main-content panel-view" id="digestView" style="display:none">
+    <header class="main-header">
+      <div><h2>Daily Digest</h2><p>Job listings found automatically every morning at 8am</p></div>
+      <div class="header-status"><span class="status-dot"></span> Auto-updated</div>
+    </header>
+    <div class="panel-body" id="digestBody">
+      <div class="panel-loading">Loading…</div>
+    </div>
+  </div>
+
+  <!-- ── Preferences view ── -->
+  <div class="main-content panel-view" id="prefsView" style="display:none">
+    <header class="main-header">
+      <div><h2>Job Preferences</h2><p>The daily agent uses these to find jobs every morning</p></div>
+    </header>
+    <div class="panel-body">
+      <form class="prefs-form" id="prefsForm">
+        <div class="input-group"><label>Job Title / Role</label>
+          <input type="text" id="prefJobTitle" placeholder="e.g. Software Engineer, Product Manager" /></div>
+        <div class="input-group"><label>Location</label>
+          <input type="text" id="prefLocation" placeholder="e.g. Seattle WA, Remote, New York" /></div>
+        <div class="input-group"><label>Job Type</label>
+          <select id="prefJobType">
+            <option value="any">Any</option>
+            <option value="full-time">Full-time</option>
+            <option value="part-time">Part-time</option>
+            <option value="contract">Contract</option>
+            <option value="remote">Remote only</option>
+          </select></div>
+        <div class="input-group"><label>Minimum Salary</label>
+          <input type="text" id="prefSalaryMin" placeholder="e.g. $100,000" /></div>
+        <p class="prefs-status" id="prefsStatus"></p>
+        <button type="submit" class="btn btn-gold">Save Preferences</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- ── Knowledge Base view ── -->
+  <div class="main-content panel-view" id="knowledgeView" style="display:none">
+    <header class="main-header">
+      <div><h2>Knowledge Base</h2><p>Your background is automatically included in every chat to personalise responses</p></div>
+    </header>
+    <div class="panel-body">
+      <form class="kb-form" id="kbForm">
+        <div class="input-group">
+          <label>Current Resume <span class="label-hint">— paste your full resume</span></label>
+          <textarea id="kbResume" rows="10" placeholder="Paste your current resume here. The agent will use this to tailor all advice specifically to your experience…"></textarea>
+        </div>
+        <div class="input-group">
+          <label>Current Position</label>
+          <input type="text" id="kbCurrentPos" placeholder="e.g. Senior Software Engineer at Acme Corp (2022–present)" />
+        </div>
+        <div class="input-group">
+          <label>Previous Positions <span class="label-hint">— one per line</span></label>
+          <textarea id="kbPrevPos" rows="4" placeholder="e.g.&#10;Software Engineer at Startup Inc (2019–2022)&#10;Junior Developer at Agency (2017–2019)"></textarea>
+        </div>
+        <div class="input-group">
+          <label>Target Role</label>
+          <input type="text" id="kbTargetRole" placeholder="e.g. Staff Engineer, Head of Product, Data Scientist" />
+        </div>
+        <div class="input-group">
+          <label>Skills <span class="label-hint">— comma separated</span></label>
+          <input type="text" id="kbSkills" placeholder="e.g. Python, React, AWS, Product Strategy, SQL" />
+        </div>
+        <div class="input-group">
+          <label>Education</label>
+          <input type="text" id="kbEducation" placeholder="e.g. BS Computer Science, University of Washington (2017)" />
+        </div>
+        <div class="input-group">
+          <label>What I'm Looking For <span class="label-hint">— tell the agent what matters to you</span></label>
+          <textarea id="kbContext" rows="4" placeholder="e.g. I want a remote-first company with strong eng culture, $150k+, ideally in fintech or health tech. I care a lot about work-life balance and mentorship opportunities…"></textarea>
+        </div>
+        <p class="prefs-status" id="kbStatus"></p>
+        <button type="submit" class="btn btn-gold">Save Knowledge Base</button>
+      </form>
+    </div>
+  </div>
+
+</div>
+<script src="app.js"></script>
 </body>
 </html>
