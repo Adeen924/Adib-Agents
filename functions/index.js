@@ -1,4 +1,5 @@
 const functions = require("firebase-functions");
+const { onSchedule } = require("firebase-functions/v2/scheduler");
 const express   = require("express");
 const cors      = require("cors");
 const { Anthropic } = require("@anthropic-ai/sdk");
@@ -603,13 +604,12 @@ app.post("/search/now/:userId", async (req, res) => {
 exports.api = functions.https.onRequest(app);
 
 // ── Daily job search — 8am Pacific ───────────────────────────────────────────
-exports.dailyJobSearch = functions.pubsub
-  .schedule("0 8 * * *")
-  .timeZone("America/Los_Angeles")
-  .onRun(async () => {
+exports.dailyJobSearch = onSchedule(
+  { schedule: "0 8 * * *", timeZone: "America/Los_Angeles" },
+  async () => {
     try {
       const prefsSnap = await db.collection("preferences").get();
-      if (prefsSnap.empty) return null;
+      if (prefsSnap.empty) return;
       for (const doc of prefsSnap.docs) {
         const userId = doc.id;
         const prefs  = doc.data();
@@ -623,5 +623,5 @@ exports.dailyJobSearch = functions.pubsub
     } catch (err) {
       console.error("Daily job search error:", err.message);
     }
-    return null;
-  });
+  }
+);
