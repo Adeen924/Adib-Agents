@@ -462,11 +462,6 @@ async function loadPreferences() {
     if (data.experienceLevel) document.getElementById("prefExpLevel").value     = data.experienceLevel;
     if (data.companySize)     document.getElementById("prefCompanySize").value  = data.companySize;
     if (data.industries)      document.getElementById("prefIndustries").value   = data.industries;
-    if (data.resume) {
-      document.getElementById("prefResume").value = data.resume;
-      // Show the "done" state with a placeholder filename
-      showUploadDone("resume_on_file.txt", data.resume);
-    }
     if (data.remoteOnly)      document.getElementById("prefRemoteOnly").checked = data.remoteOnly;
   } catch { /* non-fatal */ }
 }
@@ -488,7 +483,6 @@ async function savePreferences(e) {
         experienceLevel: document.getElementById("prefExpLevel").value,
         companySize:     document.getElementById("prefCompanySize").value,
         industries:      document.getElementById("prefIndustries").value,
-        resume:          document.getElementById("prefResume").value,
         remoteOnly:      document.getElementById("prefRemoteOnly").checked,
       }),
     });
@@ -503,7 +497,10 @@ async function loadKnowledge() {
   try {
     const res  = await fetch(`${BACKEND_URL}/knowledge/${encodeURIComponent(userId)}`);
     const data = await res.json();
-    if (data.currentResume)     document.getElementById("kbResume").value      = data.currentResume;
+    if (data.resume) {
+      document.getElementById("kbResumeText").value = data.resume;
+      showUploadDone("resume_on_file.txt", data.resume);
+    }
     if (data.currentPosition)   document.getElementById("kbCurrentPos").value  = data.currentPosition;
     if (data.previousPositions) document.getElementById("kbPrevPos").value     = data.previousPositions;
     if (data.targetRole)        document.getElementById("kbTargetRole").value  = data.targetRole;
@@ -522,7 +519,7 @@ async function saveKnowledge(e) {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         userId,
-        currentResume:     document.getElementById("kbResume").value,
+        resume:            document.getElementById("kbResumeText").value,
         currentPosition:   document.getElementById("kbCurrentPos").value,
         previousPositions: document.getElementById("kbPrevPos").value,
         targetRole:        document.getElementById("kbTargetRole").value,
@@ -531,7 +528,7 @@ async function saveKnowledge(e) {
         additionalContext: document.getElementById("kbContext").value,
       }),
     });
-    status.textContent = "✓ Saved! All future chats will be personalised with this context.";
+    status.textContent = "✓ Saved! Your resume and background will be used in every search and chat.";
   } catch {
     status.textContent = "Failed to save. Please try again.";
   } finally { btn.disabled = false; btn.textContent = "Save Knowledge Base"; }
@@ -541,15 +538,10 @@ async function saveKnowledge(e) {
 function initResumeUpload() {
   const zone      = document.getElementById("resumeUploadZone");
   const fileInput = document.getElementById("resumeFileInput");
-  const browse    = document.getElementById("uploadBrowse");
   const removeBtn = document.getElementById("uploadRemove");
 
-  // Click anywhere on the zone (or the "click to browse" link) opens the picker
-  zone.addEventListener("click", (e) => {
-    if (e.target === removeBtn) return; // handled separately
-    fileInput.click();
-  });
-  browse?.addEventListener("click", (e) => { e.stopPropagation(); fileInput.click(); });
+  // The zone is a <label> — clicking anywhere on it already opens the file picker.
+  // We only need to handle: file chosen, drag-and-drop, and remove.
 
   // File picker change
   fileInput.addEventListener("change", () => {
@@ -566,10 +558,11 @@ function initResumeUpload() {
     if (file) handleResumeFile(file);
   });
 
-  // Remove button
+  // Remove button — prevent the label from also opening the file picker
   removeBtn?.addEventListener("click", (e) => {
+    e.preventDefault();
     e.stopPropagation();
-    document.getElementById("prefResume").value = "";
+    document.getElementById("kbResumeText").value = "";
     fileInput.value = "";
     showUploadIdle();
   });
@@ -619,7 +612,7 @@ async function handleResumeFile(file) {
     }
 
     if (!text.trim()) throw new Error("No text could be extracted from this file.");
-    document.getElementById("prefResume").value = text;
+    document.getElementById("kbResumeText").value = text;
     showUploadDone(file.name, text);
   } catch (err) {
     showUploadIdle();

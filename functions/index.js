@@ -50,13 +50,22 @@ async function buildSearchQuery(prefs) {
 async function runJobSearch(userId, prefs) {
   const query = await buildSearchQuery(prefs);
 
-  // Build a resume-aware system prompt if resume is provided
+  // Try to get the user's resume from the knowledge base
+  let resumeText = "";
+  try {
+    const kbDoc = await db.collection("knowledge").doc(userId).get();
+    if (kbDoc.exists && kbDoc.data().resume) {
+      resumeText = kbDoc.data().resume;
+    }
+  } catch { /* non-fatal */ }
+
+  // Build a resume-aware system prompt if resume is available
   let searchSystem = "You are a job search agent. Search for current job listings matching the user's criteria and return the top 5 opportunities. For each: job title, company, location, salary if listed, and the URL. Be concise.";
-  if (prefs.resume && prefs.resume.trim()) {
-    searchSystem += `\n\nThe user's resume is provided below. Use it to find roles that match their actual experience and skills:\n\n${prefs.resume.slice(0, 3000)}`;
+  if (resumeText.trim()) {
+    searchSystem += `\n\nThe user's resume is provided below. Use it to find roles that match their actual experience and skills:\n\n${resumeText.slice(0, 3000)}`;
   }
 
-  const userQuery = prefs.resume
+  const userQuery = resumeText
     ? `Find the best current job listings that match this candidate's background. Search query: ${query}`
     : `Find the best current job listings for: ${query}`;
 
@@ -107,12 +116,11 @@ app.post("/chat", async (req, res) => {
 
   if (userId) {
     try {
-      // Inject knowledge base
+      // Inject knowledge base (background + resume)
       const kbDoc = await db.collection("knowledge").doc(userId).get();
       if (kbDoc.exists) {
         const kb = kbDoc.data();
         const parts = [];
-        if (kb.currentResume)      parts.push(`CURRENT RESUME:\n${kb.currentResume}`);
         if (kb.currentPosition)    parts.push(`CURRENT POSITION: ${kb.currentPosition}`);
         if (kb.previousPositions)  parts.push(`PREVIOUS EXPERIENCE:\n${kb.previousPositions}`);
         if (kb.targetRole)         parts.push(`TARGET ROLE: ${kb.targetRole}`);
@@ -122,14 +130,9 @@ app.post("/chat", async (req, res) => {
         if (parts.length > 0) {
           fullSystem += `\n\n--- USER BACKGROUND ---\n${parts.join("\n\n")}`;
         }
-      }
-
-      // Inject uploaded resume as style/format reference for document generation
-      const prefsDoc = await db.collection("preferences").doc(userId).get();
-      if (prefsDoc.exists) {
-        const prefs = prefsDoc.data();
-        if (prefs.resume && prefs.resume.trim()) {
-          fullSystem += `\n\n--- RESUME STYLE REFERENCE ---\nThe user has uploaded their current resume. When creating or rewriting resumes, match the exact formatting structure, section order, tone, and length of this resume:\n\n${prefs.resume.slice(0, 4000)}`;
+        // Resume: inject as style reference for document generation
+        if (kb.resume && kb.resume.trim()) {
+          fullSystem += `\n\n--- RESUME STYLE REFERENCE ---\nThe user has uploaded their current resume. When creating or rewriting resumes, match the exact formatting structure, section order, tone, and length of this resume:\n\n${kb.resume.slice(0, 4000)}`;
         }
       }
     } catch { /* non-fatal */ }
@@ -335,12 +338,12 @@ app.get("/knowledge/:userId", async (req, res) => {
 });
 
 app.post("/knowledge/save", async (req, res) => {
-  const { userId, currentResume, currentPosition, previousPositions,
+  const { userId, resume, currentPosition, previousPositions,
           targetRole, skills, education, additionalContext } = req.body;
   if (!userId) return res.status(400).json({ error: "userId is required" });
   try {
     await db.collection("knowledge").doc(userId).set({
-      currentResume:     currentResume     || "",
+      resume:            resume            || "",
       currentPosition:   currentPosition   || "",
       previousPositions: previousPositions || "",
       targetRole:        targetRole        || "",

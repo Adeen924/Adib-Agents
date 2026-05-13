@@ -286,18 +286,30 @@
           <input type="text" id="prefIndustries" placeholder="e.g. Fintech, Health Tech, SaaS, AI/ML, E-commerce" />
         </div>
 
-        <div class="prefs-section-label" style="margin-top:8px">Your Resume <span class="label-hint">— upload once, the agent reads it every search</span></div>
+        <p class="prefs-status" id="prefsStatus"></p>
+        <button type="submit" class="btn btn-gold">Save Preferences</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- ── Knowledge Base view ── -->
+  <div class="main-content panel-view" id="knowledgeView" style="display:none">
+    <header class="main-header">
+      <div><h2>Knowledge Base</h2><p>Your background is injected into every chat to personalise responses</p></div>
+    </header>
+    <div class="panel-body" style="overflow-y:auto">
+      <form class="kb-form" id="kbForm">
 
         <div class="input-group">
-          <label>Current Resume <span class="label-hint">— PDF, DOCX, or TXT</span></label>
+          <label>Your Resume <span class="label-hint">— PDF, DOCX, or TXT · uploaded once, used in every search and chat</span></label>
 
-          <!-- Upload zone -->
-          <div class="file-upload-zone" id="resumeUploadZone">
+          <!-- Upload zone — using <label> so clicking anywhere opens the file picker -->
+          <label class="file-upload-zone" id="resumeUploadZone">
             <input type="file" id="resumeFileInput" accept=".pdf,.docx,.txt" style="display:none" />
             <div class="upload-idle" id="uploadIdle">
               <div class="upload-icon-large">📄</div>
               <div class="upload-title">Drop your resume here</div>
-              <div class="upload-sub">or <span class="upload-link" id="uploadBrowse">click to browse</span></div>
+              <div class="upload-sub">or <span class="upload-link">click to browse</span></div>
               <div class="upload-hint-small">PDF · DOCX · TXT</div>
             </div>
             <div class="upload-loading" id="uploadLoading" style="display:none">
@@ -312,29 +324,12 @@
               </div>
               <button type="button" class="upload-remove" id="uploadRemove" title="Remove">✕</button>
             </div>
-          </div>
+          </label>
 
           <!-- Hidden field stores the extracted text -->
-          <textarea id="prefResume" style="display:none"></textarea>
+          <textarea id="kbResumeText" style="display:none"></textarea>
         </div>
 
-        <p class="prefs-status" id="prefsStatus"></p>
-        <button type="submit" class="btn btn-gold">Save Preferences</button>
-      </form>
-    </div>
-  </div>
-
-  <!-- ── Knowledge Base view ── -->
-  <div class="main-content panel-view" id="knowledgeView" style="display:none">
-    <header class="main-header">
-      <div><h2>Knowledge Base</h2><p>Your background is injected into every chat to personalise responses</p></div>
-    </header>
-    <div class="panel-body" style="overflow-y:auto">
-      <form class="kb-form" id="kbForm">
-        <div class="input-group">
-          <label>Current Resume <span class="label-hint">— paste your full resume</span></label>
-          <textarea id="kbResume" rows="10" placeholder="Paste your current resume here…"></textarea>
-        </div>
         <div class="input-group">
           <label>Current Position</label>
           <input type="text" id="kbCurrentPos" placeholder="e.g. Senior Software Engineer at Acme Corp (2022–present)" />

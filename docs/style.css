@@ -726,7 +726,6 @@ select:focus { border-color: var(--gold); box-shadow: 0 0 0 3px var(--gold-glow)
   gap: 6px;
   padding: 24px;
   text-align: center;
-  pointer-events: none;
 }
 .upload-icon-large { font-size: 2rem; }
 .upload-title { font-size: 0.9rem; font-weight: 600; color: var(--text); }
