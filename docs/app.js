@@ -637,6 +637,7 @@ async function loadPreferences() {
     if (data.experienceLevel) document.getElementById("prefExpLevel").value        = data.experienceLevel;
     if (data.companySize)     document.getElementById("prefCompanySize").value     = data.companySize;
     if (data.industries)      document.getElementById("prefIndustries").value      = data.industries;
+    if (data.customSites)     document.getElementById("prefCustomSites").value     = data.customSites;
     if (data.postedWithin !== undefined) document.getElementById("prefPostedWithin").value = data.postedWithin;
     if (data.remoteOnly)      document.getElementById("prefRemoteOnly").checked    = data.remoteOnly;
   } catch { /* non-fatal */ }
@@ -660,6 +661,7 @@ async function savePreferences(e) {
         experienceLevel: document.getElementById("prefExpLevel").value,
         companySize:     document.getElementById("prefCompanySize").value,
         industries:      document.getElementById("prefIndustries").value,
+        customSites:     document.getElementById("prefCustomSites").value,
         postedWithin:    document.getElementById("prefPostedWithin").value,
         remoteOnly:      document.getElementById("prefRemoteOnly").checked,
       }),

@@ -66,6 +66,22 @@ function buildSearchQuery(prefs) {
 
   const postedStr = prefs.postedWithin ? `posted last ${prefs.postedWithin} days` : "posted this month";
 
+  // Built-in job boards + any custom sites the user added in Preferences
+  const builtInSites = [
+    "site:hiring.cafe",
+    "site:spacecrew.com",
+    "site:linkedin.com/jobs",
+    "site:indeed.com",
+    "site:greenhouse.io",
+    "site:lever.co",
+  ];
+  const customSiteFilters = (prefs.customSites || "")
+    .split(",")
+    .map(s => s.trim().replace(/^https?:\/\//, "").replace(/\/$/, ""))
+    .filter(Boolean)
+    .map(s => `site:${s}`);
+  const allSites = [...customSiteFilters, ...builtInSites].join(" OR ");
+
   const parts = [
     prefs.jobTitle        ? `"${prefs.jobTitle}"`                  : "software engineer",
     locationStr,
@@ -74,7 +90,7 @@ function buildSearchQuery(prefs) {
     prefs.salaryMin       ? `salary ${prefs.salaryMin}`            : "",
     prefs.industries      ? prefs.industries.split(",")[0]?.trim() : "",
     postedStr,
-    "site:hiring.cafe OR site:linkedin.com/jobs OR site:indeed.com OR site:greenhouse.io OR site:lever.co",
+    allSites,
   ].filter(Boolean).join(" ");
   return parts;
 }
@@ -467,7 +483,7 @@ app.get("/preferences/:userId", async (req, res) => {
 app.post("/preferences/save", async (req, res) => {
   const { userId, jobTitle, location, locationCity, locationRadius,
           jobType, salaryMin, experienceLevel, remoteOnly,
-          industries, companySize, postedWithin } = req.body;
+          industries, companySize, postedWithin, customSites } = req.body;
   if (!userId) return res.status(400).json({ error: "userId is required" });
   try {
     await db.collection("preferences").doc(userId).set({
@@ -482,6 +498,7 @@ app.post("/preferences/save", async (req, res) => {
       industries:      industries      || "",
       companySize:     companySize     || "any",
       postedWithin:    postedWithin    || "14",
+      customSites:     customSites     || "",
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     }, { merge: true });
     res.json({ ok: true });
