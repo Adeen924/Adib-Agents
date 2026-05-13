@@ -8,36 +8,100 @@ admin.initializeApp();
 
 const app = express();
 app.use(cors({ origin: true }));
-app.use(express.json({ limit: "2mb" })); // allow large resume pastes
+app.use(express.json({ limit: "2mb" }));
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 const db = admin.firestore();
 
-// claude-sonnet-4-5 pricing
-const INPUT_COST  = 3  / 1_000_000;  // $3 per million input tokens
-const OUTPUT_COST = 15 / 1_000_000;  // $15 per million output tokens
+const INPUT_COST  = 3  / 1_000_000;
+const OUTPUT_COST = 15 / 1_000_000;
 
-const DEFAULT_SYSTEM = `You are a job search assistant helping the user land their next role. You help with:
-- Finding relevant job opportunities based on their skills, experience, and preferences
-- Researching companies, culture, salary ranges, and hiring processes
-- Tailoring resumes and cover letters for specific roles
-- Interview preparation and common questions
-- Job search strategy and networking advice
+const DEFAULT_SYSTEM = `You are an AI job search agent helping the user land their next role. You help with:
+- Interview preparation and practice questions
+- Salary negotiation advice
+- Career strategy and decision-making
+- Company research
 
-Be specific, practical, and encouraging. If you don't yet know the user's background, location, or target role, ask for those details. Always give concrete next steps.`;
+Be specific, practical, and encouraging. Always give concrete next steps.`;
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+// Sort Firestore docs by createdAt descending (in JS, no index needed)
+function sortByDate(docs) {
+  return docs.sort((a, b) => {
+    const ta = a.data().createdAt?.toMillis?.() || 0;
+    const tb = b.data().createdAt?.toMillis?.() || 0;
+    return tb - ta;
+  });
+}
+
+// Build a job search query from user preferences + resume
+async function buildSearchQuery(prefs) {
+  const parts = [
+    prefs.jobTitle  ? `${prefs.jobTitle} jobs`         : "software jobs",
+    prefs.location  ? `in ${prefs.location}`           : "remote",
+    prefs.jobType && prefs.jobType !== "any" ? prefs.jobType : "",
+    prefs.salaryMin ? `salary above ${prefs.salaryMin}` : "",
+    "posted this week site:linkedin.com OR site:indeed.com OR site:greenhouse.io",
+  ].filter(Boolean).join(" ");
+  return parts;
+}
+
+// Run a job search for one user and save the digest
+async function runJobSearch(userId, prefs) {
+  const query = await buildSearchQuery(prefs);
+
+  // Build a resume-aware system prompt if resume is provided
+  let searchSystem = "You are a job search agent. Search for current job listings matching the user's criteria and return the top 5 opportunities. For each: job title, company, location, salary if listed, and the URL. Be concise.";
+  if (prefs.resume && prefs.resume.trim()) {
+    searchSystem += `\n\nThe user's resume is provided below. Use it to find roles that match their actual experience and skills:\n\n${prefs.resume.slice(0, 3000)}`;
+  }
+
+  const userQuery = prefs.resume
+    ? `Find the best current job listings that match this candidate's background. Search query: ${query}`
+    : `Find the best current job listings for: ${query}`;
+
+  const response = await anthropic.messages.create({
+    model:      "claude-sonnet-4-5",
+    max_tokens: 2048,
+    tools:      [{ type: "web_search_20250305", name: "web_search" }],
+    system:     searchSystem,
+    messages:   [{ role: "user", content: userQuery }],
+  });
+
+  const text = response.content
+    .filter((b) => b.type === "text")
+    .map((b) => b.text)
+    .join("\n\n");
+
+  await db.collection("digests").add({
+    userId, query, results: text,
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+  });
+
+  if (response.usage) {
+    const { input_tokens, output_tokens } = response.usage;
+    await db.collection("activity").add({
+      userId, view: "job_search",
+      inputTokens: input_tokens, outputTokens: output_tokens,
+      cost: (input_tokens * INPUT_COST) + (output_tokens * OUTPUT_COST),
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+  }
+
+  return text;
+}
 
 // ── Health check ──────────────────────────────────────────────────────────────
 app.get("/", (req, res) => res.send("Backend is running"));
 
 // ── Chat ──────────────────────────────────────────────────────────────────────
 app.post("/chat", async (req, res) => {
-  const { message, systemPrompt, history, userId } = req.body;
+  const { message, systemPrompt, history, userId, view } = req.body;
 
   if (!message || typeof message !== "string" || message.trim() === "") {
     return res.status(400).json({ error: "message is required" });
   }
 
-  // Inject knowledge base into system prompt if userId provided
   let fullSystem = typeof systemPrompt === "string" && systemPrompt.trim()
     ? systemPrompt : DEFAULT_SYSTEM;
 
@@ -55,10 +119,10 @@ app.post("/chat", async (req, res) => {
         if (kb.education)          parts.push(`EDUCATION: ${kb.education}`);
         if (kb.additionalContext)  parts.push(`ADDITIONAL CONTEXT:\n${kb.additionalContext}`);
         if (parts.length > 0) {
-          fullSystem += `\n\n--- USER BACKGROUND (use this to personalise all responses) ---\n${parts.join("\n\n")}`;
+          fullSystem += `\n\n--- USER BACKGROUND ---\n${parts.join("\n\n")}`;
         }
       }
-    } catch { /* non-fatal — continue without knowledge */ }
+    } catch { /* non-fatal */ }
   }
 
   const priorMessages = Array.isArray(history) ? history.slice(0, -1) : [];
@@ -69,10 +133,10 @@ app.post("/chat", async (req, res) => {
 
   try {
     const response = await anthropic.messages.create({
-      model:   "claude-sonnet-4-5",
+      model:      "claude-sonnet-4-5",
       max_tokens: 2048,
-      system:  fullSystem,
-      tools:   [{ type: "web_search_20250305", name: "web_search" }],
+      system:     fullSystem,
+      tools:      [{ type: "web_search_20250305", name: "web_search" }],
       messages,
     });
 
@@ -81,17 +145,13 @@ app.post("/chat", async (req, res) => {
       .map((b) => b.text)
       .join("\n\n") || "I couldn't generate a response. Please try again.";
 
-    // Track usage
     if (userId && response.usage) {
       const { input_tokens, output_tokens } = response.usage;
-      const cost = (input_tokens * INPUT_COST) + (output_tokens * OUTPUT_COST);
       db.collection("activity").add({
-        userId,
-        view:         req.body.view || "chat",
-        inputTokens:  input_tokens,
-        outputTokens: output_tokens,
-        cost,
-        createdAt:    admin.firestore.FieldValue.serverTimestamp(),
+        userId, view: view || "chat",
+        inputTokens: input_tokens, outputTokens: output_tokens,
+        cost: (input_tokens * INPUT_COST) + (output_tokens * OUTPUT_COST),
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
       }).catch(() => {});
     }
 
@@ -109,12 +169,11 @@ app.post("/history/save", async (req, res) => {
     return res.status(400).json({ error: "userId, userMessage, and assistantReply are required" });
   try {
     await db.collection("chats").add({
-      userId, view: view || "search", userMessage, assistantReply,
+      userId, view: view || "interview", userMessage, assistantReply,
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
     });
     res.json({ ok: true });
   } catch (err) {
-    console.error("Firestore save error:", err.message);
     res.status(500).json({ error: "Failed to save message" });
   }
 });
@@ -122,14 +181,10 @@ app.post("/history/save", async (req, res) => {
 app.get("/history/:userId/:view", async (req, res) => {
   const { userId, view } = req.params;
   try {
-    const snapshot = await db.collection("chats")
-      .where("userId", "==", userId)
-      .where("view", "==", view)
-      .orderBy("createdAt", "desc")
-      .limit(20)
-      .get();
-
-    const messages = snapshot.docs.reverse().flatMap((doc) => {
+    // No composite index needed — filter by view in JS
+    const snap = await db.collection("chats").where("userId", "==", userId).get();
+    const filtered = sortByDate(snap.docs.filter(d => d.data().view === view)).slice(0, 20).reverse();
+    const messages = filtered.flatMap((doc) => {
       const d = doc.data();
       return [
         { role: "user",      content: d.userMessage },
@@ -138,25 +193,17 @@ app.get("/history/:userId/:view", async (req, res) => {
     });
     res.json({ messages });
   } catch (err) {
-    console.error("Firestore load error:", err.message);
+    console.error("History error:", err.message);
     res.status(500).json({ error: "Failed to load history" });
   }
 });
 
-// ── Stats (24-hour dashboard) ─────────────────────────────────────────────────
+// ── Stats ─────────────────────────────────────────────────────────────────────
 app.get("/stats/:userId", async (req, res) => {
   try {
-    const snap = await db.collection("activity")
-      .where("userId", "==", req.params.userId)
-      .orderBy("createdAt", "desc")
-      .limit(500)
-      .get();
-
+    const snap   = await db.collection("activity").where("userId", "==", req.params.userId).get();
     const cutoff = Date.now() - 24 * 60 * 60 * 1000;
-    const recent = snap.docs.filter((d) => {
-      const ts = d.data().createdAt;
-      return ts && ts.toMillis() > cutoff;
-    });
+    const recent = snap.docs.filter((d) => (d.data().createdAt?.toMillis?.() || 0) > cutoff);
 
     const totals = recent.reduce(
       (acc, d) => {
@@ -172,7 +219,7 @@ app.get("/stats/:userId", async (req, res) => {
 
     res.json({
       ...totals,
-      totalTokens: totals.inputTokens + totals.outputTokens,
+      totalTokens:   totals.inputTokens + totals.outputTokens,
       costFormatted: `$${totals.cost.toFixed(4)}`,
     });
   } catch (err) {
@@ -181,20 +228,16 @@ app.get("/stats/:userId", async (req, res) => {
   }
 });
 
-// ── Documents (resumes + cover letters) ───────────────────────────────────────
+// ── Documents ─────────────────────────────────────────────────────────────────
 app.get("/documents/:userId/:type", async (req, res) => {
   const { userId, type } = req.params;
   try {
-    const snap = await db.collection("documents")
-      .where("userId", "==", userId)
-      .where("type", "==", type)
-      .orderBy("createdAt", "desc")
-      .limit(50)
-      .get();
-    const docs = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    const snap = await db.collection("documents").where("userId", "==", userId).get();
+    const docs = sortByDate(snap.docs.filter(d => d.data().type === type))
+      .slice(0, 50)
+      .map(d => ({ id: d.id, ...d.data() }));
     res.json({ documents: docs });
   } catch (err) {
-    console.error("Documents error:", err.message);
     res.status(500).json({ error: "Failed to load documents" });
   }
 });
@@ -212,7 +255,6 @@ app.post("/documents/save", async (req, res) => {
     });
     res.json({ ok: true, id: ref.id });
   } catch (err) {
-    console.error("Document save error:", err.message);
     res.status(500).json({ error: "Failed to save document" });
   }
 });
@@ -226,17 +268,13 @@ app.delete("/documents/:docId", async (req, res) => {
   }
 });
 
-// ── Job Applications tracker ──────────────────────────────────────────────────
+// ── Applications ──────────────────────────────────────────────────────────────
 app.get("/applications/:userId", async (req, res) => {
   try {
-    const snap = await db.collection("applications")
-      .where("userId", "==", req.params.userId)
-      .orderBy("createdAt", "desc")
-      .get();
-    const applications = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    const snap = await db.collection("applications").where("userId", "==", req.params.userId).get();
+    const applications = sortByDate(snap.docs).map(d => ({ id: d.id, ...d.data() }));
     res.json({ applications });
   } catch (err) {
-    console.error("Applications error:", err.message);
     res.status(500).json({ error: "Failed to load applications" });
   }
 });
@@ -263,7 +301,6 @@ app.post("/applications/save", async (req, res) => {
       res.json({ ok: true, id: ref.id });
     }
   } catch (err) {
-    console.error("Application save error:", err.message);
     res.status(500).json({ error: "Failed to save application" });
   }
 });
@@ -277,7 +314,7 @@ app.delete("/applications/:appId", async (req, res) => {
   }
 });
 
-// ── Knowledge base ────────────────────────────────────────────────────────────
+// ── Knowledge Base ────────────────────────────────────────────────────────────
 app.get("/knowledge/:userId", async (req, res) => {
   try {
     const doc = await db.collection("knowledge").doc(req.params.userId).get();
@@ -304,42 +341,11 @@ app.post("/knowledge/save", async (req, res) => {
     }, { merge: true });
     res.json({ ok: true });
   } catch (err) {
-    console.error("Knowledge save error:", err.message);
     res.status(500).json({ error: "Failed to save knowledge base" });
   }
 });
 
-// ── Jobs found ────────────────────────────────────────────────────────────────
-app.get("/jobs/:userId", async (req, res) => {
-  try {
-    const snap = await db.collection("digests")
-      .where("userId", "==", req.params.userId)
-      .orderBy("createdAt", "desc")
-      .limit(30)
-      .get();
-    const jobs = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-    res.json({ jobs });
-  } catch (err) {
-    res.status(500).json({ error: "Failed to load jobs" });
-  }
-});
-
 // ── Preferences ───────────────────────────────────────────────────────────────
-app.post("/preferences/save", async (req, res) => {
-  const { userId, jobTitle, location, jobType, salaryMin } = req.body;
-  if (!userId) return res.status(400).json({ error: "userId is required" });
-  try {
-    await db.collection("preferences").doc(userId).set(
-      { jobTitle: jobTitle||"", location: location||"", jobType: jobType||"any",
-        salaryMin: salaryMin||"", updatedAt: admin.firestore.FieldValue.serverTimestamp() },
-      { merge: true }
-    );
-    res.json({ ok: true });
-  } catch (err) {
-    res.status(500).json({ error: "Failed to save preferences" });
-  }
-});
-
 app.get("/preferences/:userId", async (req, res) => {
   try {
     const doc = await db.collection("preferences").doc(req.params.userId).get();
@@ -349,18 +355,65 @@ app.get("/preferences/:userId", async (req, res) => {
   }
 });
 
-// ── Daily digest ──────────────────────────────────────────────────────────────
+app.post("/preferences/save", async (req, res) => {
+  const { userId, jobTitle, location, jobType, salaryMin, resume,
+          experienceLevel, remoteOnly, industries, companySize } = req.body;
+  if (!userId) return res.status(400).json({ error: "userId is required" });
+  try {
+    await db.collection("preferences").doc(userId).set({
+      jobTitle:        jobTitle        || "",
+      location:        location        || "",
+      jobType:         jobType         || "any",
+      salaryMin:       salaryMin       || "",
+      resume:          resume          || "",
+      experienceLevel: experienceLevel || "",
+      remoteOnly:      remoteOnly      || false,
+      industries:      industries      || "",
+      companySize:     companySize     || "any",
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true });
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to save preferences" });
+  }
+});
+
+// ── Digest ────────────────────────────────────────────────────────────────────
 app.get("/digest/:userId", async (req, res) => {
   try {
-    const snap = await db.collection("digests")
-      .where("userId", "==", req.params.userId)
-      .orderBy("createdAt", "desc")
-      .limit(5)
-      .get();
-    const digests = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    const snap = await db.collection("digests").where("userId", "==", req.params.userId).get();
+    const digests = sortByDate(snap.docs).slice(0, 10).map(d => ({ id: d.id, ...d.data() }));
     res.json({ digests });
   } catch (err) {
     res.status(500).json({ error: "Failed to load digest" });
+  }
+});
+
+// ── Jobs Found ────────────────────────────────────────────────────────────────
+app.get("/jobs/:userId", async (req, res) => {
+  try {
+    const snap = await db.collection("digests").where("userId", "==", req.params.userId).get();
+    const jobs = sortByDate(snap.docs).slice(0, 30).map(d => ({ id: d.id, ...d.data() }));
+    res.json({ jobs });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to load jobs" });
+  }
+});
+
+// ── Manual search now ─────────────────────────────────────────────────────────
+app.post("/search/now/:userId", async (req, res) => {
+  const { userId } = req.params;
+  try {
+    const prefDoc = await db.collection("preferences").doc(userId).get();
+    if (!prefDoc.exists) {
+      return res.status(400).json({ error: "No preferences saved yet. Please set your preferences first." });
+    }
+    const prefs = prefDoc.data();
+    const results = await runJobSearch(userId, prefs);
+    res.json({ ok: true, results });
+  } catch (err) {
+    console.error("Search now error:", err.message);
+    res.status(500).json({ error: "Search failed. Please try again." });
   }
 });
 
@@ -374,45 +427,14 @@ exports.dailyJobSearch = functions.pubsub
     try {
       const prefsSnap = await db.collection("preferences").get();
       if (prefsSnap.empty) return null;
-
       for (const doc of prefsSnap.docs) {
         const userId = doc.id;
         const prefs  = doc.data();
-
-        const query = [
-          prefs.jobTitle  ? `${prefs.jobTitle} jobs`      : "software jobs",
-          prefs.location  ? `in ${prefs.location}`        : "remote",
-          prefs.jobType !== "any" ? prefs.jobType         : "",
-          prefs.salaryMin ? `salary above ${prefs.salaryMin}` : "",
-          "posted this week site:linkedin.com OR site:indeed.com OR site:greenhouse.io",
-        ].filter(Boolean).join(" ");
-
-        const response = await anthropic.messages.create({
-          model: "claude-sonnet-4-5",
-          max_tokens: 2048,
-          tools: [{ type: "web_search_20250305", name: "web_search" }],
-          system: "You are a job search assistant. Search for current job listings matching the user's criteria and return the top 5 opportunities. For each: job title, company, location, salary if listed, and the URL. Be concise.",
-          messages: [{ role: "user", content: `Find the best current job listings for: ${query}` }],
-        });
-
-        const text = response.content
-          .filter((b) => b.type === "text")
-          .map((b) => b.text)
-          .join("\n\n");
-
-        await db.collection("digests").add({
-          userId, query, results: text,
-          createdAt: admin.firestore.FieldValue.serverTimestamp(),
-        });
-
-        if (response.usage) {
-          const { input_tokens, output_tokens } = response.usage;
-          await db.collection("activity").add({
-            userId, view: "daily_digest",
-            inputTokens: input_tokens, outputTokens: output_tokens,
-            cost: (input_tokens * INPUT_COST) + (output_tokens * OUTPUT_COST),
-            createdAt: admin.firestore.FieldValue.serverTimestamp(),
-          });
+        try {
+          await runJobSearch(userId, prefs);
+          console.log(`Daily digest saved for ${userId}`);
+        } catch (err) {
+          console.error(`Search failed for ${userId}:`, err.message);
         }
       }
     } catch (err) {
