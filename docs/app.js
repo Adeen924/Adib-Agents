@@ -599,6 +599,7 @@ async function handleResumeFile(file) {
 
   showUploadLoading();
   try {
+    // ── Step 1: extract text from file ──────────────────────────────────────
     let text = "";
     if (file.type === "application/pdf" || ext === "pdf") {
       text = await extractPdfText(file);
@@ -613,11 +614,50 @@ async function handleResumeFile(file) {
 
     if (!text.trim()) throw new Error("No text could be extracted from this file.");
     document.getElementById("kbResumeText").value = text;
+
+    // Show done state immediately with a "parsing" message
     showUploadDone(file.name, text);
+    document.getElementById("uploadWordCount").textContent = "Reading with AI — filling in your details…";
+    setKbStatus("⏳ Parsing your resume…", "muted");
+
+    // ── Step 2: send to Claude to extract structured fields ─────────────────
+    try {
+      const res  = await fetch(`${BACKEND_URL}/knowledge/parse-resume`, {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({ resumeText: text }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Parse failed");
+
+      // Auto-fill all Knowledge Base fields
+      if (data.currentPosition)   document.getElementById("kbCurrentPos").value  = data.currentPosition;
+      if (data.previousPositions) document.getElementById("kbPrevPos").value     = data.previousPositions;
+      if (data.targetRole)        document.getElementById("kbTargetRole").value  = data.targetRole;
+      if (data.skills)            document.getElementById("kbSkills").value      = data.skills;
+      if (data.education)         document.getElementById("kbEducation").value   = data.education;
+      if (data.additionalContext) document.getElementById("kbContext").value     = data.additionalContext;
+
+      const words = text.trim().split(/\s+/).length;
+      document.getElementById("uploadWordCount").textContent = `${words.toLocaleString()} words extracted`;
+      setKbStatus("✓ Fields filled from your resume — review and save when ready.", "gold");
+    } catch {
+      const words = text.trim().split(/\s+/).length;
+      document.getElementById("uploadWordCount").textContent = `${words.toLocaleString()} words extracted`;
+      setKbStatus("Resume uploaded but auto-fill failed. Fill in fields manually and save.", "muted");
+    }
+
   } catch (err) {
     showUploadIdle();
     alert("Could not read file: " + err.message);
   }
+}
+
+function setKbStatus(msg, style) {
+  const el = document.getElementById("kbStatus");
+  if (!el) return;
+  el.textContent = msg;
+  el.style.color = style === "gold" ? "var(--gold)" : "var(--text-muted)";
 }
 
 async function extractPdfText(file) {

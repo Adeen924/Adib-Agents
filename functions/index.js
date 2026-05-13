@@ -391,6 +391,48 @@ app.post("/preferences/save", async (req, res) => {
   }
 });
 
+// ── Parse resume → structured fields ─────────────────────────────────────────
+app.post("/knowledge/parse-resume", async (req, res) => {
+  const { resumeText } = req.body;
+  if (!resumeText || !resumeText.trim())
+    return res.status(400).json({ error: "resumeText is required" });
+
+  try {
+    const response = await anthropic.messages.create({
+      model:      "claude-sonnet-4-5",
+      max_tokens: 1024,
+      messages: [{
+        role:    "user",
+        content: `You are a resume parser. Extract structured information from the resume below and return ONLY a valid JSON object — no explanation, no markdown, no code fences, just the raw JSON.
+
+Use these exact fields (use empty string "" for anything not found):
+{
+  "currentPosition": "Most recent job title and company with dates, e.g. Senior Engineer at Acme Corp (2022–present)",
+  "previousPositions": "All previous roles, one per line, e.g.\\nSoftware Engineer at Startup Inc (2019–2022)\\nJunior Developer at Agency (2017–2019)",
+  "targetRole": "The next logical role for this candidate based on their trajectory, e.g. Staff Engineer or Head of Product",
+  "skills": "Comma-separated list of all technical skills, tools, languages, and frameworks found",
+  "education": "Degree, institution, and graduation year, e.g. BS Computer Science, University of Washington (2017)",
+  "additionalContext": "Notable projects, certifications, publications, awards, or anything else that stands out"
+}
+
+Resume:
+${resumeText.slice(0, 8000)}`,
+      }],
+    });
+
+    const raw = response.content.filter(b => b.type === "text").map(b => b.text).join("").trim();
+    // Strip markdown code fences if Claude adds them despite instructions
+    const jsonStr = raw.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim();
+    const jsonMatch = jsonStr.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) throw new Error("No JSON found in response");
+    const parsed = JSON.parse(jsonMatch[0]);
+    res.json(parsed);
+  } catch (err) {
+    console.error("Parse resume error:", err.message);
+    res.status(500).json({ error: "Failed to parse resume" });
+  }
+});
+
 // ── Digest ────────────────────────────────────────────────────────────────────
 app.get("/digest/:userId", async (req, res) => {
   try {
