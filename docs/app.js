@@ -37,6 +37,7 @@ const INTERVIEW_VIEW = {
 let isLoading           = false;
 let conversationHistory = [];
 let currentDocType      = "resume";
+let currentJob          = null;   // populated when a job detail page is opened
 
 // ── Init ──────────────────────────────────────────────────────────────────────
 function init() {
@@ -442,9 +443,9 @@ async function openJobDetail(jobId) {
       urlEl.style.display = "none";
     }
 
-    // Google search fallback — always works even if the direct URL is wrong
-    const googleQuery = encodeURIComponent(`${j.title || ""} ${j.company || ""} job posting`);
-    document.getElementById("jobGoogleSearch").href = `https://www.google.com/search?q=${googleQuery}`;
+
+    // Store job globally so action buttons can access it without passing args through HTML
+    currentJob = j;
 
     const fields = [
       j.salary     && ["Salary",               j.salary],
@@ -452,6 +453,8 @@ async function openJobDetail(jobId) {
       j.posted     && ["Posted",                j.posted],
       j.location   && ["Location",              j.location],
     ].filter(Boolean);
+
+    const googleQuery = encodeURIComponent(`${j.title || ""} ${j.company || ""} job posting`);
 
     body.innerHTML = `
       ${fields.length ? `<div class="jd-meta-grid">${fields.map(([l,v]) =>
@@ -472,8 +475,8 @@ async function openJobDetail(jobId) {
               View Posting ↗
             </a>
             <div class="jd-url-preview">${escapeHtml(j.url)}</div>
-          </div>` : `<div style="font-size:0.85rem;color:var(--text-muted)">No direct link available for this posting.</div>`}
-          <a id="jobGoogleSearch" href="#" target="_blank" rel="noopener" class="btn btn-ghost" style="display:inline-flex;width:fit-content">
+          </div>` : `<div style="font-size:0.85rem;color:var(--text-muted)">No direct link was found for this posting.</div>`}
+          <a href="https://www.google.com/search?q=${googleQuery}" target="_blank" rel="noopener" class="btn btn-ghost" style="display:inline-flex;width:fit-content">
             🔍 Search Google for this job
           </a>
         </div>
@@ -482,10 +485,10 @@ async function openJobDetail(jobId) {
       <div class="jd-section">
         <div class="jd-section-label">Actions</div>
         <div style="display:flex;gap:10px;flex-wrap:wrap">
-          <button class="btn btn-gold" onclick="createTailoredResume(${JSON.stringify(j.title||"")}, ${JSON.stringify(j.company||"")}, ${JSON.stringify(j.description||"")})">
+          <button class="btn btn-gold" onclick="createTailoredResume()">
             📄 Create Tailored Resume
           </button>
-          <button class="btn btn-ghost" onclick="prepForInterview(${JSON.stringify(j.title||"")}, ${JSON.stringify(j.company||"")})">
+          <button class="btn btn-ghost" onclick="prepForInterview()">
             🎯 Prep for Interview
           </button>
         </div>
@@ -495,18 +498,49 @@ async function openJobDetail(jobId) {
   }
 }
 
-function createTailoredResume(title, company, description) {
+function createTailoredResume() {
+  if (!currentJob) return;
+  const { title = "", company = "", description = "" } = currentJob;
   showPanel("chat");
   const input = document.getElementById("messageInput");
-  input.value = `Please create a tailored resume for this position:\n\nRole: ${title}\nCompany: ${company}\n\nJob Description:\n${description}\n\nTailor my resume to match this specific role, keeping the same structure and formatting as my existing resume.`;
+  input.value = `Create a tailored version of my resume for this specific job posting.
+
+STRICT RULES — follow these exactly:
+- Use ONLY my actual experience from my resume in the Knowledge Base. Do NOT invent, add, or imply anything that isn't already there.
+- Do NOT add new skills, certifications, projects, or accomplishments I don't have.
+- DO reword and reorder my existing bullet points to better highlight the skills and experience most relevant to this role.
+- DO mirror the language and keywords from the job description where they honestly apply to my background.
+- Keep the exact same resume structure, section order, and formatting as my existing resume.
+- The goal is to make me look like the strongest honest candidate for this role.
+
+Job Posting:
+Role: ${title}
+Company: ${company}
+Full Description:
+${description}`;
   autoResize();
+  document.getElementById("messageInput").focus();
 }
 
-function prepForInterview(title, company) {
+function prepForInterview() {
+  if (!currentJob) return;
+  const { title = "", company = "", description = "" } = currentJob;
   showPanel("chat");
   const input = document.getElementById("messageInput");
-  input.value = `Help me prepare for an interview at ${company} for the ${title} role. What questions should I expect and how should I answer them based on my background?`;
+  input.value = `Prepare me for my interview at ${company} for the ${title} position.
+
+Please give me all of the following:
+
+1. TECHNICAL QUESTIONS (6-8 questions) — specific to the tech stack, tools, and skills mentioned in the job description. For each question, include a short note on how I should approach the answer based on my background.
+
+2. BEHAVIORAL / SITUATIONAL QUESTIONS (5 questions) — using the STAR method (Situation, Task, Action, Result), tailored to what this role cares about.
+
+3. QUESTIONS TO ASK THE INTERVIEWER (4 questions) — thoughtful questions that show genuine interest in the role and company.
+
+Job Description:
+${description}`;
   autoResize();
+  document.getElementById("messageInput").focus();
 }
 
 // ── Daily Digest ──────────────────────────────────────────────────────────────
