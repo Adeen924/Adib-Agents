@@ -13,7 +13,8 @@
       "Bash(git add *)",
       "Bash(git commit -m 'Fix Haiku model ID \\(claude-3-5-haiku-20241022 not claude-haiku-3-5-20241022\\) *)",
       "Bash(git commit -m 'Fix job search: back to claude-sonnet-4-5 \\(haiku lacks web_search support\\), optimize prompt, surface real errors *)",
-      "Bash(git commit -m 'Daily Digest now shows job cards directly instead of search summaries *)"
+      "Bash(git commit -m 'Daily Digest now shows job cards directly instead of search summaries *)",
+      "Bash(git commit -m 'Fix job URL and date display; add Google search fallback *)"
     ]
   }
 }
