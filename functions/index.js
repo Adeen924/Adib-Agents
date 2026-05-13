@@ -16,7 +16,7 @@ const db = admin.firestore();
 // Sonnet — used for chat and resume parsing
 const INPUT_COST_SONNET  = 3    / 1_000_000;
 const OUTPUT_COST_SONNET = 15   / 1_000_000;
-// Haiku — used for job search (3-4x cheaper, still supports web search)
+// Haiku 3.5 (claude-3-5-haiku-20241022) — used for job search, 3-4x cheaper
 const INPUT_COST_HAIKU   = 0.80 / 1_000_000;
 const OUTPUT_COST_HAIKU  = 4    / 1_000_000;
 // Legacy alias used by chat/parse routes
@@ -115,7 +115,7 @@ Only include real URLs that link directly to the individual job listing. Prefer 
   const userQuery = `Search for current job listings matching these criteria and return the 5 best matches as a JSON array.\n\nSearch query: ${query}`;
 
   const response = await anthropic.messages.create({
-    model:      "claude-haiku-3-5-20241022",   // ~4x cheaper than Sonnet
+    model:      "claude-3-5-haiku-20241022",    // ~4x cheaper than Sonnet
     max_tokens: 1500,
     tools:      [{ type: "web_search_20250305", name: "web_search" }],
     system:     systemPrompt,
