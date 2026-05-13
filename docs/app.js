@@ -492,36 +492,44 @@ function prepForInterview(title, company) {
 // ── Daily Digest ──────────────────────────────────────────────────────────────
 async function loadDigest() {
   const body = document.getElementById("digestBody");
+  body.innerHTML = '<div class="panel-loading" style="padding:28px">Loading…</div>';
   try {
-    const res  = await fetch(`${BACKEND_URL}/digest/${encodeURIComponent(userId)}`);
-    const data = await res.json();
-    if (!data.digests || data.digests.length === 0) {
-      body.innerHTML = `<div class="digest-empty"><div class="empty-icon">📬</div>
-        <h3>No digests yet</h3>
-        <p>Save your preferences and hit "Search Now" to get your first results, or wait for the 8am daily search.</p></div>`;
+    // Fetch jobs and the most recent digest summary in parallel
+    const [jobsRes, digestRes] = await Promise.all([
+      fetch(`${BACKEND_URL}/jobs/${encodeURIComponent(userId)}`),
+      fetch(`${BACKEND_URL}/digest/${encodeURIComponent(userId)}`),
+    ]);
+    const jobsData   = await jobsRes.json();
+    const digestData = await digestRes.json();
+
+    const jobs    = jobsData.jobs    || [];
+    const digests = digestData.digests || [];
+
+    if (jobs.length === 0) {
+      body.innerHTML = `<div class="digest-empty">
+        <div class="empty-icon">📬</div>
+        <h3>No jobs found yet</h3>
+        <p>Save your preferences then hit "Search Now" above, or wait for the automatic 8am search.</p>
+      </div>`;
       return;
     }
-    body.innerHTML = data.digests.map((d) => digestCard(d)).join("");
-  } catch {
-    body.innerHTML = '<div class="panel-loading">Failed to load digests.</div>';
-  }
-}
 
-function digestCard(d) {
-  const date = d.createdAt?._seconds
-    ? new Date(d.createdAt._seconds * 1000).toLocaleDateString("en-US", { weekday:"long", month:"short", day:"numeric", hour:"2-digit", minute:"2-digit" })
-    : "Recent";
-  const count = d.jobCount ?? "—";
-  return `<div class="digest-card">
-    <div class="digest-card-header">
-      <span class="digest-date">${date}</span>
-      <span class="digest-query">${escapeHtml(d.query || "")}</span>
-    </div>
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-top:8px">
-      <span style="font-size:0.875rem;color:var(--text-muted)">${count} job${count === 1 ? "" : "s"} found</span>
-      <button class="btn btn-ghost" style="padding:5px 14px;font-size:0.8rem" onclick="showPanel('jobs')">View Jobs →</button>
-    </div>
-  </div>`;
+    // Show last-searched banner if we have digest history
+    let banner = "";
+    if (digests.length > 0) {
+      const last = digests[0];
+      const lastDate = last.createdAt?._seconds
+        ? new Date(last.createdAt._seconds * 1000).toLocaleString("en-US", { month:"short", day:"numeric", hour:"2-digit", minute:"2-digit" })
+        : "recently";
+      banner = `<div class="digest-banner">
+        Last searched ${lastDate} · ${jobs.length} job${jobs.length === 1 ? "" : "s"} found total
+      </div>`;
+    }
+
+    body.innerHTML = banner + `<div class="jobs-grid">${jobs.map(j => jobCard(j)).join("")}</div>`;
+  } catch {
+    body.innerHTML = '<div class="panel-loading" style="padding:28px">Failed to load. Please try again.</div>';
+  }
 }
 
 // ── Documents ─────────────────────────────────────────────────────────────────
