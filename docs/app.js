@@ -14,6 +14,7 @@ const PANELS = {
   dashboard: document.getElementById("dashboardView"),
   chat:      document.getElementById("chatView"),
   jobs:      document.getElementById("jobsView"),
+  jobDetail: document.getElementById("jobDetailView"),
   documents: document.getElementById("documentsView"),
   digest:    document.getElementById("digestView"),
   prefs:     document.getElementById("prefsView"),
@@ -84,6 +85,9 @@ function init() {
   // Search Now button
   document.getElementById("searchNowBtn").addEventListener("click", searchNow);
 
+  // Job detail back button
+  document.getElementById("backToJobsBtn").addEventListener("click", () => showPanel("jobs"));
+
   // Resume file upload
   initResumeUpload();
 
@@ -112,6 +116,7 @@ function showPanel(name) {
 
   if (name === "dashboard")  { loadStats(); loadApplications(); }
   if (name === "jobs")       loadJobs();
+  // jobDetail loads its own data via openJobDetail()
   if (name === "documents")  loadDocuments(currentDocType);
   if (name === "digest")     loadDigest();
   if (name === "prefs")      loadPreferences();
@@ -365,20 +370,106 @@ async function searchNow() {
 // ── Jobs Found ────────────────────────────────────────────────────────────────
 async function loadJobs() {
   const body = document.getElementById("jobsBody");
-  body.innerHTML = '<div class="panel-loading">Loading jobs…</div>';
+  body.innerHTML = '<div class="panel-loading" style="padding:28px">Loading jobs…</div>';
   try {
     const res  = await fetch(`${BACKEND_URL}/jobs/${encodeURIComponent(userId)}`);
     const data = await res.json();
     if (!data.jobs || data.jobs.length === 0) {
       body.innerHTML = `<div class="digest-empty"><div class="empty-icon">💼</div>
         <h3>No jobs found yet</h3>
-        <p>Set your preferences and hit "Search Now" or wait for the daily 8am search.</p></div>`;
+        <p>Set your preferences and hit "Search Now" in the Daily Digest tab, or wait for the 8am daily search.</p></div>`;
       return;
     }
-    body.innerHTML = data.jobs.map((j) => digestCard(j)).join("");
+    body.innerHTML = `<div class="jobs-grid">${data.jobs.map(j => jobCard(j)).join("")}</div>`;
   } catch {
-    body.innerHTML = '<div class="panel-loading">Failed to load jobs.</div>';
+    body.innerHTML = '<div class="panel-loading" style="padding:28px">Failed to load jobs.</div>';
   }
+}
+
+function jobCard(j) {
+  const safeId = escapeAttr(j.id);
+  return `
+  <div class="job-card" onclick="openJobDetail('${safeId}')">
+    <div class="job-card-top">
+      <div class="job-title">${escapeHtml(j.title || "Untitled Role")}</div>
+      <div class="job-company">${escapeHtml(j.company || "")}</div>
+    </div>
+    <div class="job-tags">
+      ${j.location   ? `<span class="job-tag">📍 ${escapeHtml(j.location)}</span>`   : ""}
+      ${j.salary     ? `<span class="job-tag">💰 ${escapeHtml(j.salary)}</span>`     : ""}
+      ${j.experience ? `<span class="job-tag">📋 ${escapeHtml(j.experience)}</span>` : ""}
+      ${j.posted     ? `<span class="job-tag">🕐 ${escapeHtml(j.posted)}</span>`     : ""}
+    </div>
+    <div class="job-desc">${escapeHtml(j.description || "")}</div>
+    <div class="job-card-footer">View details →</div>
+  </div>`;
+}
+
+async function openJobDetail(jobId) {
+  showPanel("jobDetail");
+  const body = document.getElementById("jobDetailBody");
+  body.innerHTML = '<div class="panel-loading">Loading…</div>';
+
+  try {
+    const res = await fetch(`${BACKEND_URL}/jobs/detail/${encodeURIComponent(jobId)}`);
+    const j   = await res.json();
+    if (!res.ok) throw new Error(j.error || "Not found");
+
+    document.getElementById("jobDetailTitle").textContent   = j.title   || "Job Details";
+    document.getElementById("jobDetailCompany").textContent = [j.company, j.location].filter(Boolean).join(" · ");
+
+    const urlEl = document.getElementById("jobDetailUrl");
+    if (j.url && j.url.startsWith("http")) {
+      urlEl.href = j.url; urlEl.style.display = "";
+    } else {
+      urlEl.style.display = "none";
+    }
+
+    const fields = [
+      j.salary     && ["Salary",               j.salary],
+      j.experience && ["Experience Required",   j.experience],
+      j.posted     && ["Posted",                j.posted],
+      j.location   && ["Location",              j.location],
+    ].filter(Boolean);
+
+    body.innerHTML = `
+      ${fields.length ? `<div class="jd-meta-grid">${fields.map(([l,v]) =>
+        `<div class="jd-meta-card"><div class="jd-meta-label">${l}</div><div class="jd-meta-value">${escapeHtml(v)}</div></div>`
+      ).join("")}</div>` : ""}
+
+      <div class="jd-section">
+        <div class="jd-section-label">About the Role</div>
+        <div class="jd-description">${formatMarkdown(j.description || "No description available.")}</div>
+      </div>
+
+      <div class="jd-section">
+        <div class="jd-section-label">Actions</div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap">
+          <button class="btn btn-gold" onclick="createTailoredResume(${JSON.stringify(j.title||"")}, ${JSON.stringify(j.company||"")}, ${JSON.stringify(j.description||"")})">
+            📄 Create Tailored Resume
+          </button>
+          <button class="btn btn-ghost" onclick="prepForInterview(${JSON.stringify(j.title||"")}, ${JSON.stringify(j.company||"")})">
+            🎯 Prep for Interview
+          </button>
+        </div>
+      </div>`;
+  } catch (err) {
+    body.innerHTML = `<div class="panel-loading">Failed to load job: ${escapeHtml(err.message)}</div>`;
+  }
+}
+
+function createTailoredResume(title, company, description) {
+  showPanel("chat");
+  const input = document.getElementById("messageInput");
+  input.value = `Please create a tailored resume for this position:\n\nRole: ${title}\nCompany: ${company}\n\nJob Description:\n${description}\n\nTailor my resume to match this specific role, keeping the same structure and formatting as my existing resume.`;
+  autoResize();
+}
+
+function prepForInterview(title, company) {
+  showPanel("chat");
+  const input = document.getElementById("messageInput");
+  input.value = `Help me prepare for an interview at ${company} for the ${title} role. What questions should I expect and how should I answer them based on my background?`;
+  autoResize();
 }
 
 // ── Daily Digest ──────────────────────────────────────────────────────────────
@@ -403,12 +494,16 @@ function digestCard(d) {
   const date = d.createdAt?._seconds
     ? new Date(d.createdAt._seconds * 1000).toLocaleDateString("en-US", { weekday:"long", month:"short", day:"numeric", hour:"2-digit", minute:"2-digit" })
     : "Recent";
+  const count = d.jobCount ?? "—";
   return `<div class="digest-card">
     <div class="digest-card-header">
       <span class="digest-date">${date}</span>
       <span class="digest-query">${escapeHtml(d.query || "")}</span>
     </div>
-    <div class="digest-results">${formatMarkdown(d.results || "")}</div>
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-top:8px">
+      <span style="font-size:0.875rem;color:var(--text-muted)">${count} job${count === 1 ? "" : "s"} found</span>
+      <button class="btn btn-ghost" style="padding:5px 14px;font-size:0.8rem" onclick="showPanel('jobs')">View Jobs →</button>
+    </div>
   </div>`;
 }
 
@@ -685,6 +780,9 @@ function escapeHtml(str) {
   return String(str)
     .replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")
     .replace(/"/g,"&quot;").replace(/\n/g,"<br>");
+}
+function escapeAttr(str) {
+  return String(str).replace(/'/g,"\\'").replace(/"/g,"&quot;");
 }
 function formatMarkdown(str) {
   return String(str)

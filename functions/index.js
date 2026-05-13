@@ -13,8 +13,15 @@ app.use(express.json({ limit: "2mb" }));
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 const db = admin.firestore();
 
-const INPUT_COST  = 3  / 1_000_000;
-const OUTPUT_COST = 15 / 1_000_000;
+// Sonnet — used for chat and resume parsing
+const INPUT_COST_SONNET  = 3    / 1_000_000;
+const OUTPUT_COST_SONNET = 15   / 1_000_000;
+// Haiku — used for job search (3-4x cheaper, still supports web search)
+const INPUT_COST_HAIKU   = 0.80 / 1_000_000;
+const OUTPUT_COST_HAIKU  = 4    / 1_000_000;
+// Legacy alias used by chat/parse routes
+const INPUT_COST  = INPUT_COST_SONNET;
+const OUTPUT_COST = OUTPUT_COST_SONNET;
 
 const DEFAULT_SYSTEM = `You are an AI job search agent helping the user land their next role. You help with:
 - Interview preparation and practice questions
@@ -34,70 +41,142 @@ function sortByDate(docs) {
   });
 }
 
-// Build a job search query from user preferences + resume
-async function buildSearchQuery(prefs) {
+// Build a specific, criteria-aware search query
+function buildSearchQuery(prefs) {
+  const expLabels = {
+    entry:     "entry level 0-2 years experience",
+    mid:       "3-5 years experience",
+    senior:    "senior 5+ years experience",
+    staff:     "staff principal engineer 10+ years",
+    manager:   "engineering manager director",
+    executive: "VP executive",
+  };
   const parts = [
-    prefs.jobTitle  ? `${prefs.jobTitle} jobs`         : "software jobs",
-    prefs.location  ? `in ${prefs.location}`           : "remote",
-    prefs.jobType && prefs.jobType !== "any" ? prefs.jobType : "",
-    prefs.salaryMin ? `salary above ${prefs.salaryMin}` : "",
-    "posted this week site:linkedin.com OR site:indeed.com OR site:greenhouse.io",
+    prefs.jobTitle  ? `"${prefs.jobTitle}"`                     : "software engineer",
+    prefs.location  ? prefs.location                            : "",
+    prefs.remoteOnly                            ? "remote"      : "",
+    prefs.experienceLevel ? expLabels[prefs.experienceLevel]    : "",
+    prefs.jobType && prefs.jobType !== "any"    ? prefs.jobType : "",
+    prefs.salaryMin                             ? `salary ${prefs.salaryMin}` : "",
+    prefs.industries ? prefs.industries.split(",")[0]?.trim()   : "",
+    "site:linkedin.com/jobs OR site:indeed.com OR site:greenhouse.io OR site:lever.co",
   ].filter(Boolean).join(" ");
   return parts;
 }
 
-// Run a job search for one user and save the digest
+// Run a job search for one user — uses Haiku to reduce cost
 async function runJobSearch(userId, prefs) {
-  const query = await buildSearchQuery(prefs);
+  const query = buildSearchQuery(prefs);
 
-  // Try to get the user's resume from the knowledge base
-  let resumeText = "";
+  // Fetch resume from knowledge base for better matching
+  let resumeSnippet = "";
   try {
     const kbDoc = await db.collection("knowledge").doc(userId).get();
     if (kbDoc.exists && kbDoc.data().resume) {
-      resumeText = kbDoc.data().resume;
+      resumeSnippet = kbDoc.data().resume.slice(0, 2000);
     }
   } catch { /* non-fatal */ }
 
-  // Build a resume-aware system prompt if resume is available
-  let searchSystem = "You are a job search agent. Search for current job listings matching the user's criteria and return the top 5 opportunities. For each: job title, company, location, salary if listed, and the URL. Be concise.";
-  if (resumeText.trim()) {
-    searchSystem += `\n\nThe user's resume is provided below. Use it to find roles that match their actual experience and skills:\n\n${resumeText.slice(0, 3000)}`;
-  }
+  // Build strict criteria string so Claude knows what to enforce
+  const criteria = [
+    prefs.jobTitle        ? `Role: ${prefs.jobTitle}`                    : "",
+    prefs.location        ? `Location: ${prefs.location}`                : "",
+    prefs.remoteOnly      ? "Remote only: yes"                           : "",
+    prefs.experienceLevel ? `Experience level required: ${prefs.experienceLevel}` : "",
+    prefs.salaryMin       ? `Minimum salary: ${prefs.salaryMin}`         : "",
+    prefs.industries      ? `Industries: ${prefs.industries}`            : "",
+    prefs.companySize && prefs.companySize !== "any"
+                          ? `Company size: ${prefs.companySize}`         : "",
+  ].filter(Boolean).join("\n");
 
-  const userQuery = resumeText
-    ? `Find the best current job listings that match this candidate's background. Search query: ${query}`
-    : `Find the best current job listings for: ${query}`;
+  const systemPrompt = `You are a precise job search agent. Search for real, currently open job listings and return ONLY a valid JSON array — no explanation, no markdown, no text before or after the JSON.
+
+STRICT RULES — discard any job that violates these:
+${criteria || "No specific criteria — return best matches."}
+
+For each job you MUST verify that the experience requirement in the posting matches the user's level before including it. If a posting requires significantly more experience than the user's level, skip it.
+
+Return exactly 5 jobs as a JSON array. Each object must have these fields (use "" for unknown):
+[
+  {
+    "title": "exact job title from the posting",
+    "company": "company name",
+    "location": "city, state or 'Remote'",
+    "salary": "salary range if listed, else ''",
+    "experience": "experience requirement from the posting, e.g. '0-2 years' or '1-3 years'",
+    "description": "3-4 sentence summary: what the role does, key responsibilities, and must-have skills",
+    "url": "direct URL to this specific job posting page — NOT a search results page",
+    "posted": "when posted if visible, e.g. '2 days ago' or 'May 10, 2025', else ''"
+  }
+]
+
+Only include real URLs that link directly to the individual job listing. Prefer jobs posted within the last 14 days.${resumeSnippet ? `\n\nCandidate resume summary (match roles to this background):\n${resumeSnippet}` : ""}`;
+
+  const userQuery = `Search for current job listings matching these criteria and return the 5 best matches as a JSON array.\n\nSearch query: ${query}`;
 
   const response = await anthropic.messages.create({
-    model:      "claude-sonnet-4-5",
-    max_tokens: 2048,
+    model:      "claude-haiku-3-5-20241022",   // ~4x cheaper than Sonnet
+    max_tokens: 1500,
     tools:      [{ type: "web_search_20250305", name: "web_search" }],
-    system:     searchSystem,
+    system:     systemPrompt,
     messages:   [{ role: "user", content: userQuery }],
   });
 
-  const text = response.content
-    .filter((b) => b.type === "text")
-    .map((b) => b.text)
-    .join("\n\n");
+  const raw = response.content
+    .filter(b => b.type === "text")
+    .map(b => b.text)
+    .join("\n\n")
+    .trim();
 
-  await db.collection("digests").add({
-    userId, query, results: text,
+  // Parse JSON — strip code fences if present
+  let jobs = [];
+  try {
+    const clean = raw.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim();
+    const match = clean.match(/\[[\s\S]*\]/);
+    if (match) jobs = JSON.parse(match[0]);
+  } catch {
+    console.error("Could not parse job search JSON:", raw.slice(0, 300));
+    jobs = [];
+  }
+
+  // Save search summary to digests
+  const digestRef = await db.collection("digests").add({
+    userId, query,
+    jobCount:  jobs.length,
     createdAt: admin.firestore.FieldValue.serverTimestamp(),
   });
 
+  // Save each job as an individual document
+  const savePromises = jobs.map(job =>
+    db.collection("jobs").add({
+      userId,
+      digestId: digestRef.id,
+      title:       job.title       || "",
+      company:     job.company     || "",
+      location:    job.location    || "",
+      salary:      job.salary      || "",
+      experience:  job.experience  || "",
+      description: job.description || "",
+      url:         job.url         || "",
+      posted:      job.posted      || "",
+      createdAt:   admin.firestore.FieldValue.serverTimestamp(),
+    })
+  );
+  await Promise.all(savePromises);
+
+  // Track cost using Haiku rates
   if (response.usage) {
     const { input_tokens, output_tokens } = response.usage;
     await db.collection("activity").add({
       userId, view: "job_search",
-      inputTokens: input_tokens, outputTokens: output_tokens,
-      cost: (input_tokens * INPUT_COST) + (output_tokens * OUTPUT_COST),
+      inputTokens:  input_tokens,
+      outputTokens: output_tokens,
+      cost: (input_tokens * INPUT_COST_HAIKU) + (output_tokens * OUTPUT_COST_HAIKU),
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
     });
   }
 
-  return text;
+  return jobs;
 }
 
 // ── Health check ──────────────────────────────────────────────────────────────
@@ -445,10 +524,21 @@ app.get("/digest/:userId", async (req, res) => {
 });
 
 // ── Jobs Found ────────────────────────────────────────────────────────────────
+// IMPORTANT: /jobs/detail/:jobId must come before /jobs/:userId
+app.get("/jobs/detail/:jobId", async (req, res) => {
+  try {
+    const doc = await db.collection("jobs").doc(req.params.jobId).get();
+    if (!doc.exists) return res.status(404).json({ error: "Job not found" });
+    res.json({ id: doc.id, ...doc.data() });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to load job" });
+  }
+});
+
 app.get("/jobs/:userId", async (req, res) => {
   try {
-    const snap = await db.collection("digests").where("userId", "==", req.params.userId).get();
-    const jobs = sortByDate(snap.docs).slice(0, 30).map(d => ({ id: d.id, ...d.data() }));
+    const snap = await db.collection("jobs").where("userId", "==", req.params.userId).get();
+    const jobs = sortByDate(snap.docs).slice(0, 50).map(d => ({ id: d.id, ...d.data() }));
     res.json({ jobs });
   } catch (err) {
     res.status(500).json({ error: "Failed to load jobs" });
