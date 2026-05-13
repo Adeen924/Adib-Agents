@@ -89,34 +89,25 @@ async function runJobSearch(userId, prefs) {
                           ? `Company size: ${prefs.companySize}`         : "",
   ].filter(Boolean).join("\n");
 
-  const systemPrompt = `You are a precise job search agent. Search for real, currently open job listings and return ONLY a valid JSON array — no explanation, no markdown, no text before or after the JSON.
+  const systemPrompt = `You are a job search agent. Search job boards and return ONLY a raw JSON array — no markdown, no explanation, nothing else.
 
-STRICT RULES — discard any job that violates these:
-${criteria || "No specific criteria — return best matches."}
+REQUIRED CRITERIA (reject any job that does not match):
+${criteria || "No specific criteria."}
 
-For each job you MUST verify that the experience requirement in the posting matches the user's level before including it. If a posting requires significantly more experience than the user's level, skip it.
+Rules:
+- Skip jobs where the posted experience requirement is significantly higher than the user's level
+- Only include direct job posting URLs (not search pages)
+- Prefer postings from the last 14 days
+${resumeSnippet ? `- Match roles to this candidate background:\n${resumeSnippet}` : ""}
 
-Return exactly 5 jobs as a JSON array. Each object must have these fields (use "" for unknown):
-[
-  {
-    "title": "exact job title from the posting",
-    "company": "company name",
-    "location": "city, state or 'Remote'",
-    "salary": "salary range if listed, else ''",
-    "experience": "experience requirement from the posting, e.g. '0-2 years' or '1-3 years'",
-    "description": "3-4 sentence summary: what the role does, key responsibilities, and must-have skills",
-    "url": "direct URL to this specific job posting page — NOT a search results page",
-    "posted": "when posted if visible, e.g. '2 days ago' or 'May 10, 2025', else ''"
-  }
-]
+Return 5 jobs as a JSON array with these fields (empty string if unknown):
+[{"title":"","company":"","location":"","salary":"","experience":"","description":"2-3 sentences max","url":"","posted":""}]`;
 
-Only include real URLs that link directly to the individual job listing. Prefer jobs posted within the last 14 days.${resumeSnippet ? `\n\nCandidate resume summary (match roles to this background):\n${resumeSnippet}` : ""}`;
-
-  const userQuery = `Search for current job listings matching these criteria and return the 5 best matches as a JSON array.\n\nSearch query: ${query}`;
+  const userQuery = `Find 5 current job listings. Search: ${query}`;
 
   const response = await anthropic.messages.create({
-    model:      "claude-3-5-haiku-20241022",    // ~4x cheaper than Sonnet
-    max_tokens: 1500,
+    model:      "claude-sonnet-4-5",
+    max_tokens: 1000,
     tools:      [{ type: "web_search_20250305", name: "web_search" }],
     system:     systemPrompt,
     messages:   [{ role: "user", content: userQuery }],
@@ -164,14 +155,14 @@ Only include real URLs that link directly to the individual job listing. Prefer 
   );
   await Promise.all(savePromises);
 
-  // Track cost using Haiku rates
+  // Track cost using Sonnet rates
   if (response.usage) {
     const { input_tokens, output_tokens } = response.usage;
     await db.collection("activity").add({
       userId, view: "job_search",
       inputTokens:  input_tokens,
       outputTokens: output_tokens,
-      cost: (input_tokens * INPUT_COST_HAIKU) + (output_tokens * OUTPUT_COST_HAIKU),
+      cost: (input_tokens * INPUT_COST_SONNET) + (output_tokens * OUTPUT_COST_SONNET),
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
     });
   }
@@ -554,11 +545,12 @@ app.post("/search/now/:userId", async (req, res) => {
       return res.status(400).json({ error: "No preferences saved yet. Please set your preferences first." });
     }
     const prefs = prefDoc.data();
-    const results = await runJobSearch(userId, prefs);
-    res.json({ ok: true, results });
+    const jobs = await runJobSearch(userId, prefs);
+    res.json({ ok: true, jobCount: jobs.length });
   } catch (err) {
-    console.error("Search now error:", err.message);
-    res.status(500).json({ error: "Search failed. Please try again." });
+    console.error("Search now error:", err.message, err.stack);
+    // Return the real error so it's visible in the UI for debugging
+    res.status(500).json({ error: err.message || "Search failed. Please try again." });
   }
 });
 
