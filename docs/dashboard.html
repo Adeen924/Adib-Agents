@@ -35,6 +35,14 @@
           <span class="nav-icon">🎯</span> Interview Prep
         </button>
 
+        <div class="nav-label" style="margin-top:12px">Daily</div>
+        <button class="nav-item" id="digestBtn">
+          <span class="nav-icon">📬</span> Daily Digest
+        </button>
+        <button class="nav-item" id="prefsBtn">
+          <span class="nav-icon">⚙️</span> Preferences
+        </button>
+
         <div class="nav-label" style="margin-top:12px">Actions</div>
         <button class="nav-item" id="newChatBtn">
           <span class="nav-icon">＋</span> New Chat
@@ -52,8 +60,8 @@
       </div>
     </aside>
 
-    <!-- Main -->
-    <div class="main-content">
+    <!-- Main chat view -->
+    <div class="main-content" id="chatView">
       <header class="main-header">
         <div>
           <h2 id="viewTitle">Job Search Assistant</h2>
@@ -74,14 +82,64 @@
       </div>
 
       <div class="input-bar">
-        <textarea
-          id="messageInput"
-          placeholder="Ask anything about your job search…"
-          rows="1"
-        ></textarea>
+        <textarea id="messageInput" placeholder="Ask anything about your job search…" rows="1"></textarea>
         <button class="send-btn" id="sendBtn" title="Send">➤</button>
       </div>
       <div class="input-hint" style="padding: 0 24px 10px;">Press Enter to send · Shift+Enter for new line</div>
+    </div>
+
+    <!-- Daily Digest view -->
+    <div class="main-content panel-view" id="digestView" style="display:none">
+      <header class="main-header">
+        <div>
+          <h2>Daily Digest</h2>
+          <p>Job listings found automatically every morning at 8am</p>
+        </div>
+        <div class="header-status">
+          <span class="status-dot"></span> Auto-updated
+        </div>
+      </header>
+      <div class="panel-body" id="digestBody">
+        <div class="panel-loading">Loading your digests…</div>
+      </div>
+    </div>
+
+    <!-- Preferences view -->
+    <div class="main-content panel-view" id="prefsView" style="display:none">
+      <header class="main-header">
+        <div>
+          <h2>Job Preferences</h2>
+          <p>The daily agent uses these to find jobs for you every morning</p>
+        </div>
+      </header>
+      <div class="panel-body">
+        <form class="prefs-form" id="prefsForm">
+          <div class="input-group">
+            <label>Job Title / Role</label>
+            <input type="text" id="prefJobTitle" placeholder="e.g. Software Engineer, Product Manager" />
+          </div>
+          <div class="input-group">
+            <label>Location</label>
+            <input type="text" id="prefLocation" placeholder="e.g. Seattle WA, Remote, New York" />
+          </div>
+          <div class="input-group">
+            <label>Job Type</label>
+            <select id="prefJobType">
+              <option value="any">Any</option>
+              <option value="full-time">Full-time</option>
+              <option value="part-time">Part-time</option>
+              <option value="contract">Contract</option>
+              <option value="remote">Remote only</option>
+            </select>
+          </div>
+          <div class="input-group">
+            <label>Minimum Salary</label>
+            <input type="text" id="prefSalaryMin" placeholder="e.g. $100,000" />
+          </div>
+          <p class="prefs-status" id="prefsStatus"></p>
+          <button type="submit" class="btn btn-gold" id="prefsBtn2">Save Preferences</button>
+        </form>
+      </div>
     </div>
 
   </div>

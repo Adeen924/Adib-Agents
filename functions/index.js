@@ -45,16 +45,18 @@ app.post("/chat", async (req, res) => {
 
   try {
     const response = await anthropic.messages.create({
-      model: "claude-sonnet-4-6",
+      model: "claude-sonnet-4-5",
       max_tokens: 2048,
       system: typeof systemPrompt === "string" && systemPrompt.trim() ? systemPrompt : DEFAULT_SYSTEM,
       tools: [{ type: "web_search_20250305", name: "web_search" }],
       messages,
     });
 
-    // Extract the final text block (web search results are handled internally by Anthropic)
-    const textBlock = response.content.find((b) => b.type === "text");
-    const reply = textBlock ? textBlock.text : "I couldn't find information on that. Please try again.";
+    // Collect all text blocks (web search results are woven in automatically)
+    const reply = response.content
+      .filter((b) => b.type === "text")
+      .map((b) => b.text)
+      .join("\n\n") || "I couldn't generate a response. Please try again.";
 
     res.json({ reply });
   } catch (error) {
@@ -110,4 +112,100 @@ app.get("/history/:userId/:view", async (req, res) => {
   }
 });
 
+// Save job search preferences for a user
+app.post("/preferences/save", async (req, res) => {
+  const { userId, jobTitle, location, jobType, salaryMin } = req.body;
+  if (!userId) return res.status(400).json({ error: "userId is required" });
+  try {
+    await db.collection("preferences").doc(userId).set({
+      jobTitle:  jobTitle  || "",
+      location:  location  || "",
+      jobType:   jobType   || "any",
+      salaryMin: salaryMin || "",
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true });
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("Preferences save error:", err.message);
+    res.status(500).json({ error: "Failed to save preferences" });
+  }
+});
+
+// Get preferences for a user
+app.get("/preferences/:userId", async (req, res) => {
+  try {
+    const doc = await db.collection("preferences").doc(req.params.userId).get();
+    res.json(doc.exists ? doc.data() : {});
+  } catch (err) {
+    console.error("Preferences get error:", err.message);
+    res.status(500).json({ error: "Failed to load preferences" });
+  }
+});
+
+// Get daily job digest for a user
+app.get("/digest/:userId", async (req, res) => {
+  try {
+    const snapshot = await db.collection("digests")
+      .where("userId", "==", req.params.userId)
+      .orderBy("createdAt", "desc")
+      .limit(5)
+      .get();
+    const digests = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+    res.json({ digests });
+  } catch (err) {
+    console.error("Digest get error:", err.message);
+    res.status(500).json({ error: "Failed to load digest" });
+  }
+});
+
 exports.api = functions.https.onRequest(app);
+
+// ── Daily job search — runs every day at 8am Pacific ──────────────────────────
+exports.dailyJobSearch = functions.pubsub
+  .schedule("0 8 * * *")
+  .timeZone("America/Los_Angeles")
+  .onRun(async () => {
+    try {
+      // Get all users who have saved preferences
+      const prefsSnap = await db.collection("preferences").get();
+      if (prefsSnap.empty) return null;
+
+      for (const doc of prefsSnap.docs) {
+        const userId = doc.id;
+        const prefs  = doc.data();
+
+        const query = [
+          prefs.jobTitle  ? `${prefs.jobTitle} jobs`  : "software jobs",
+          prefs.location  ? `in ${prefs.location}`    : "remote",
+          prefs.jobType   !== "any" ? prefs.jobType   : "",
+          prefs.salaryMin ? `salary above ${prefs.salaryMin}` : "",
+          "posted this week site:linkedin.com OR site:indeed.com OR site:greenhouse.io",
+        ].filter(Boolean).join(" ");
+
+        const response = await anthropic.messages.create({
+          model: "claude-sonnet-4-5",
+          max_tokens: 2048,
+          tools: [{ type: "web_search_20250305", name: "web_search" }],
+          system: `You are a job search assistant. Search for current job listings matching the user's criteria and return a clean summary of the top 5 opportunities. For each job include: job title, company, location, salary if listed, and the URL. Be concise.`,
+          messages: [{ role: "user", content: `Find me the best current job listings for: ${query}` }],
+        });
+
+        const text = response.content
+          .filter((b) => b.type === "text")
+          .map((b) => b.text)
+          .join("\n\n");
+
+        await db.collection("digests").add({
+          userId,
+          query,
+          results: text,
+          createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+
+        console.log(`Daily digest saved for ${userId}`);
+      }
+    } catch (err) {
+      console.error("Daily job search error:", err.message);
+    }
+    return null;
+  });

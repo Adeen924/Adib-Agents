@@ -3,16 +3,13 @@ const BACKEND_URL =
     ? "http://127.0.0.1:5001/adib-job-agent/us-central1/api"
     : "https://us-central1-adib-job-agent.cloudfunctions.net/api";
 
-// ── Auth guard ──────────────────────────────────────────────────────────────
+// ── Auth guard ───────────────────────────────────────────────────────────────
 const email = sessionStorage.getItem("fbEmail");
 const token = sessionStorage.getItem("fbToken");
-if (!email || !token) {
-  window.location.href = "index.html";
-}
+if (!email || !token) window.location.href = "index.html";
 
 // ── DOM refs ─────────────────────────────────────────────────────────────────
 const chatArea     = document.getElementById("chatArea");
-const emptyState   = document.getElementById("emptyState");
 const messageInput = document.getElementById("messageInput");
 const sendBtn      = document.getElementById("sendBtn");
 const userAvatar   = document.getElementById("userAvatar");
@@ -23,13 +20,20 @@ const viewTitle    = document.getElementById("viewTitle");
 const viewSubtitle = document.getElementById("viewSubtitle");
 const chipsEl      = document.getElementById("chips");
 
+// Panel views
+const chatView   = document.getElementById("chatView");
+const digestView = document.getElementById("digestView");
+const prefsView  = document.getElementById("prefsView");
+const digestBtn  = document.getElementById("digestBtn");
+const prefsBtn   = document.getElementById("prefsBtn");
+
 // ── View config ───────────────────────────────────────────────────────────────
 const VIEWS = {
   search: {
     title:    "Job Search Assistant",
     subtitle: "Ask me about roles, companies, salaries, or strategy",
     chips:    ["Find me remote SWE roles", "What's the salary range for a PM?", "Help me research a company", "What roles match my background?"],
-    prompt:   "You are a job search specialist. Help the user find job opportunities, research companies, and build a smart search strategy.",
+    prompt:   "You are a job search specialist. Help the user find job opportunities, research companies, and build a smart search strategy. Use web search to find real, current job listings when asked.",
   },
   resume: {
     title:    "Resume Helper",
@@ -51,7 +55,7 @@ const VIEWS = {
   },
 };
 
-const userId = sessionStorage.getItem("fbEmail"); // use email as stable user ID
+const userId = sessionStorage.getItem("fbEmail");
 
 let currentView         = "search";
 let isLoading           = false;
@@ -59,10 +63,9 @@ let conversationHistory = [];
 
 // ── Init ──────────────────────────────────────────────────────────────────────
 function init() {
-  userEmailEl.textContent  = email;
-  userAvatar.textContent   = email.charAt(0).toUpperCase();
+  userEmailEl.textContent = email;
+  userAvatar.textContent  = email.charAt(0).toUpperCase();
   renderChips(VIEWS[currentView].chips);
-
   loadHistory(currentView);
 
   document.querySelectorAll(".nav-item[data-view]").forEach((btn) => {
@@ -70,33 +73,59 @@ function init() {
   });
 
   signOutBtn.addEventListener("click", signOut);
-  newChatBtn.addEventListener("click", clearChat);
+  newChatBtn.addEventListener("click", () => { showChatView(); clearChat(); });
   sendBtn.addEventListener("click", sendMessage);
+  digestBtn.addEventListener("click", showDigestView);
+  prefsBtn.addEventListener("click", showPrefsView);
 
   messageInput.addEventListener("keydown", (e) => {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      sendMessage();
-    }
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendMessage(); }
   });
-
   messageInput.addEventListener("input", () => {
     messageInput.style.height = "auto";
     messageInput.style.height = Math.min(messageInput.scrollHeight, 160) + "px";
   });
+
+  document.getElementById("prefsForm").addEventListener("submit", savePreferences);
 }
 
-// ── View switching ────────────────────────────────────────────────────────────
+// ── Panel switching ───────────────────────────────────────────────────────────
+function showChatView() {
+  chatView.style.display   = "flex";
+  digestView.style.display = "none";
+  prefsView.style.display  = "none";
+  document.querySelectorAll(".nav-item").forEach(b => b.classList.remove("active"));
+  document.querySelector(`[data-view="${currentView}"]`)?.classList.add("active");
+}
+
+function showDigestView() {
+  chatView.style.display   = "none";
+  digestView.style.display = "flex";
+  prefsView.style.display  = "none";
+  document.querySelectorAll(".nav-item").forEach(b => b.classList.remove("active"));
+  digestBtn.classList.add("active");
+  loadDigest();
+}
+
+function showPrefsView() {
+  chatView.style.display   = "none";
+  digestView.style.display = "none";
+  prefsView.style.display  = "flex";
+  document.querySelectorAll(".nav-item").forEach(b => b.classList.remove("active"));
+  prefsBtn.classList.add("active");
+  loadPreferences();
+}
+
+// ── View switching (chat tools) ───────────────────────────────────────────────
 function switchView(view) {
   currentView = view;
   const cfg = VIEWS[view];
   viewTitle.textContent    = cfg.title;
   viewSubtitle.textContent = cfg.subtitle;
-
   document.querySelectorAll(".nav-item[data-view]").forEach((btn) => {
     btn.classList.toggle("active", btn.dataset.view === view);
   });
-
+  showChatView();
   clearChat();
   loadHistory(view);
 }
@@ -107,10 +136,7 @@ function renderChips(chips) {
     const chip = document.createElement("button");
     chip.className   = "chip";
     chip.textContent = text;
-    chip.addEventListener("click", () => {
-      messageInput.value = text;
-      sendMessage();
-    });
+    chip.addEventListener("click", () => { messageInput.value = text; sendMessage(); });
     chipsEl.appendChild(chip);
   });
 }
@@ -133,29 +159,27 @@ function clearChat() {
 }
 
 function removeEmptyState() {
-  const empty = document.getElementById("emptyState");
-  if (empty) empty.remove();
+  const el = document.getElementById("emptyState");
+  if (el) el.remove();
 }
 
 function appendMessage(role, text) {
   removeEmptyState();
-
   const wrapper = document.createElement("div");
   wrapper.className = `message ${role}`;
 
   const avatar = document.createElement("div");
-  avatar.className = "msg-avatar";
+  avatar.className   = "msg-avatar";
   avatar.textContent = role === "user" ? email.charAt(0).toUpperCase() : "✦";
 
   const bubble = document.createElement("div");
-  bubble.className = "msg-bubble";
+  bubble.className  = "msg-bubble";
   bubble.innerHTML  = role === "assistant" ? formatMarkdown(text) : escapeHtml(text);
 
   wrapper.appendChild(avatar);
   wrapper.appendChild(bubble);
   chatArea.appendChild(wrapper);
   chatArea.scrollTop = chatArea.scrollHeight;
-
   return bubble;
 }
 
@@ -164,15 +188,12 @@ function appendTypingIndicator() {
   const wrapper = document.createElement("div");
   wrapper.className = "message assistant typing-indicator";
   wrapper.id        = "typingIndicator";
-
   const avatar = document.createElement("div");
-  avatar.className  = "msg-avatar";
+  avatar.className   = "msg-avatar";
   avatar.textContent = "✦";
-
   const bubble = document.createElement("div");
   bubble.className = "msg-bubble";
-  bubble.innerHTML  = '<div class="typing-dot"></div><div class="typing-dot"></div><div class="typing-dot"></div>';
-
+  bubble.innerHTML = '<div class="typing-dot"></div><div class="typing-dot"></div><div class="typing-dot"></div>';
   wrapper.appendChild(avatar);
   wrapper.appendChild(bubble);
   chatArea.appendChild(wrapper);
@@ -188,9 +209,9 @@ async function sendMessage() {
   const text = messageInput.value.trim();
   if (!text || isLoading) return;
 
-  isLoading              = true;
-  sendBtn.disabled       = true;
-  messageInput.value     = "";
+  isLoading = true;
+  sendBtn.disabled = true;
+  messageInput.value = "";
   messageInput.style.height = "auto";
 
   appendMessage("user", text);
@@ -204,32 +225,107 @@ async function sendMessage() {
       body:    JSON.stringify({
         message:      text,
         systemPrompt: VIEWS[currentView].prompt,
-        history:      conversationHistory.slice(-10), // last 10 messages for context
+        history:      conversationHistory.slice(-10),
       }),
     });
 
     const data = await res.json();
     removeTypingIndicator();
-
     if (!res.ok) throw new Error(data.error || "Request failed");
 
     appendMessage("assistant", data.reply);
     conversationHistory.push({ role: "assistant", content: data.reply });
 
-    // Persist to Firestore (fire and forget)
     fetch(`${BACKEND_URL}/history/save`, {
       method:  "POST",
       headers: { "Content-Type": "application/json" },
       body:    JSON.stringify({ userId, view: currentView, userMessage: text, assistantReply: data.reply }),
-    }).catch(() => {}); // silently ignore save errors
+    }).catch(() => {});
   } catch (err) {
     removeTypingIndicator();
     appendMessage("assistant", "Sorry, something went wrong. Please try again.");
     console.error(err);
   } finally {
-    isLoading        = false;
+    isLoading = false;
     sendBtn.disabled = false;
     messageInput.focus();
+  }
+}
+
+// ── Daily Digest ──────────────────────────────────────────────────────────────
+async function loadDigest() {
+  const body = document.getElementById("digestBody");
+  body.innerHTML = '<div class="panel-loading">Loading your digests…</div>';
+  try {
+    const res  = await fetch(`${BACKEND_URL}/digest/${encodeURIComponent(userId)}`);
+    const data = await res.json();
+
+    if (!data.digests || data.digests.length === 0) {
+      body.innerHTML = `
+        <div class="digest-empty">
+          <div class="empty-icon">📬</div>
+          <h3>No digests yet</h3>
+          <p>Save your job preferences and the agent will automatically search for jobs every morning at 8am. Your first digest will appear here tomorrow.</p>
+        </div>`;
+      return;
+    }
+
+    body.innerHTML = data.digests.map((d) => {
+      const date = d.createdAt?._seconds
+        ? new Date(d.createdAt._seconds * 1000).toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" })
+        : "Recent";
+      return `
+        <div class="digest-card">
+          <div class="digest-card-header">
+            <span class="digest-date">${date}</span>
+            <span class="digest-query">${escapeHtml(d.query || "")}</span>
+          </div>
+          <div class="digest-results">${formatMarkdown(d.results || "")}</div>
+        </div>`;
+    }).join("");
+  } catch (err) {
+    body.innerHTML = '<div class="panel-loading">Failed to load digests.</div>';
+    console.error(err);
+  }
+}
+
+// ── Preferences ───────────────────────────────────────────────────────────────
+async function loadPreferences() {
+  try {
+    const res  = await fetch(`${BACKEND_URL}/preferences/${encodeURIComponent(userId)}`);
+    const data = await res.json();
+    if (data.jobTitle)  document.getElementById("prefJobTitle").value  = data.jobTitle;
+    if (data.location)  document.getElementById("prefLocation").value  = data.location;
+    if (data.jobType)   document.getElementById("prefJobType").value   = data.jobType;
+    if (data.salaryMin) document.getElementById("prefSalaryMin").value = data.salaryMin;
+  } catch { /* non-fatal */ }
+}
+
+async function savePreferences(e) {
+  e.preventDefault();
+  const status = document.getElementById("prefsStatus");
+  const btn    = document.getElementById("prefsBtn2");
+  btn.disabled = true;
+  btn.textContent = "Saving…";
+
+  try {
+    await fetch(`${BACKEND_URL}/preferences/save`, {
+      method:  "POST",
+      headers: { "Content-Type": "application/json" },
+      body:    JSON.stringify({
+        userId,
+        jobTitle:  document.getElementById("prefJobTitle").value,
+        location:  document.getElementById("prefLocation").value,
+        jobType:   document.getElementById("prefJobType").value,
+        salaryMin: document.getElementById("prefSalaryMin").value,
+      }),
+    });
+    status.textContent = "✓ Saved! The agent will use these tomorrow morning.";
+  } catch {
+    status.textContent = "Failed to save. Please try again.";
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Save Preferences";
   }
 }
 
@@ -239,12 +335,9 @@ async function loadHistory(view) {
     const res  = await fetch(`${BACKEND_URL}/history/${encodeURIComponent(userId)}/${view}`);
     const data = await res.json();
     if (!data.messages || data.messages.length === 0) return;
-
     conversationHistory = data.messages;
     data.messages.forEach((m) => appendMessage(m.role, m.content));
-  } catch {
-    // History load failure is non-fatal — just start fresh
-  }
+  } catch { /* non-fatal */ }
 }
 
 function signOut() {

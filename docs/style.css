@@ -424,3 +424,69 @@ input::placeholder, textarea::placeholder { color: var(--text-muted); }
 .send-btn:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
 
 .input-hint { font-size: 0.72rem; color: var(--text-muted); padding: 0 4px 2px; }
+
+/* ── Panel views (Digest, Preferences) ── */
+.panel-view { overflow-y: auto; }
+
+.panel-body {
+  padding: 28px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  max-width: 720px;
+}
+
+.panel-loading { color: var(--text-muted); font-size: 0.9rem; }
+
+/* Digest cards */
+.digest-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 20px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.digest-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.digest-date { font-size: 0.8rem; color: var(--gold); font-weight: 600; }
+.digest-query { font-size: 0.75rem; color: var(--text-muted); }
+.digest-results {
+  font-size: 0.875rem;
+  line-height: 1.7;
+  color: var(--text);
+  white-space: pre-wrap;
+}
+.digest-empty {
+  text-align: center;
+  padding: 48px 24px;
+  color: var(--text-muted);
+}
+.digest-empty .empty-icon { font-size: 2rem; margin-bottom: 12px; }
+.digest-empty h3 { color: var(--text); margin-bottom: 6px; }
+
+/* Preferences form */
+.prefs-form {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  max-width: 480px;
+}
+.prefs-form select {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  font-size: 0.95rem;
+  padding: 10px 14px;
+  outline: none;
+  transition: border-color 0.2s;
+  font-family: inherit;
+  width: 100%;
+}
+.prefs-form select:focus { border-color: var(--gold); box-shadow: 0 0 0 3px var(--gold-glow); }
+.prefs-status { font-size: 0.85rem; color: var(--gold); min-height: 18px; }

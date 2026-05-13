@@ -10,7 +10,7 @@
     "deploy": "firebase deploy --only functions"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.95.2",
+    "@anthropic-ai/sdk": "latest",
     "cors": "^2.8.6",
     "express": "^4.18.2",
     "firebase-admin": "^12.0.0",
