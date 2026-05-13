@@ -701,6 +701,16 @@ select {
 }
 select:focus { border-color: var(--gold); box-shadow: 0 0 0 3px var(--gold-glow); }
 
+/* ── Dashboard recent jobs mini-grid ── */
+.dashboard-jobs-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 12px;
+  padding: 4px 0 8px;
+}
+.dashboard-jobs-grid .job-card { padding: 16px; }
+.dashboard-jobs-grid .job-desc { -webkit-line-clamp: 2; }
+
 /* ── Job cards grid ── */
 .jobs-grid {
   display: grid;

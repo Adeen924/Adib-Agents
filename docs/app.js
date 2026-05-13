@@ -114,7 +114,7 @@ function showPanel(name) {
   if (navIds[name]) document.getElementById(navIds[name])?.classList.add("active");
   if (name === "chat") document.querySelector("[data-view='interview']")?.classList.add("active");
 
-  if (name === "dashboard")  { loadStats(); loadApplications(); }
+  if (name === "dashboard")  { loadStats(); loadRecentJobs(); loadApplications(); }
   if (name === "jobs")       loadJobs();
   // jobDetail loads its own data via openJobDetail()
   if (name === "documents")  loadDocuments(currentDocType);
@@ -245,6 +245,23 @@ async function loadHistory() {
     conversationHistory = data.messages;
     data.messages.forEach((m) => appendMessage(m.role, m.content));
   } catch { /* non-fatal */ }
+}
+
+// ── Dashboard recent jobs ─────────────────────────────────────────────────────
+async function loadRecentJobs() {
+  const el = document.getElementById("dashboardJobs");
+  try {
+    const res  = await fetch(`${BACKEND_URL}/jobs/${encodeURIComponent(userId)}`);
+    const data = await res.json();
+    if (!data.jobs || data.jobs.length === 0) {
+      el.innerHTML = `<div class="empty-table">No jobs found yet — go to Daily Digest and hit "Search Now".</div>`;
+      return;
+    }
+    const recent = data.jobs.slice(0, 6);
+    el.innerHTML = `<div class="dashboard-jobs-grid">${recent.map(j => jobCard(j)).join("")}</div>`;
+  } catch {
+    el.innerHTML = `<div class="panel-loading">Could not load recent jobs.</div>`;
+  }
 }
 
 // ── Dashboard stats ───────────────────────────────────────────────────────────
@@ -550,14 +567,16 @@ async function loadPreferences() {
   try {
     const res  = await fetch(`${BACKEND_URL}/preferences/${encodeURIComponent(userId)}`);
     const data = await res.json();
-    if (data.jobTitle)        document.getElementById("prefJobTitle").value     = data.jobTitle;
-    if (data.location)        document.getElementById("prefLocation").value     = data.location;
-    if (data.jobType)         document.getElementById("prefJobType").value      = data.jobType;
-    if (data.salaryMin)       document.getElementById("prefSalaryMin").value    = data.salaryMin;
-    if (data.experienceLevel) document.getElementById("prefExpLevel").value     = data.experienceLevel;
-    if (data.companySize)     document.getElementById("prefCompanySize").value  = data.companySize;
-    if (data.industries)      document.getElementById("prefIndustries").value   = data.industries;
-    if (data.remoteOnly)      document.getElementById("prefRemoteOnly").checked = data.remoteOnly;
+    if (data.jobTitle)        document.getElementById("prefJobTitle").value        = data.jobTitle;
+    if (data.locationCity)    document.getElementById("prefLocationCity").value    = data.locationCity;
+    if (data.locationRadius)  document.getElementById("prefLocationRadius").value  = data.locationRadius;
+    if (data.jobType)         document.getElementById("prefJobType").value         = data.jobType;
+    if (data.salaryMin)       document.getElementById("prefSalaryMin").value       = data.salaryMin;
+    if (data.experienceLevel) document.getElementById("prefExpLevel").value        = data.experienceLevel;
+    if (data.companySize)     document.getElementById("prefCompanySize").value     = data.companySize;
+    if (data.industries)      document.getElementById("prefIndustries").value      = data.industries;
+    if (data.postedWithin !== undefined) document.getElementById("prefPostedWithin").value = data.postedWithin;
+    if (data.remoteOnly)      document.getElementById("prefRemoteOnly").checked    = data.remoteOnly;
   } catch { /* non-fatal */ }
 }
 
@@ -572,12 +591,14 @@ async function savePreferences(e) {
       body: JSON.stringify({
         userId,
         jobTitle:        document.getElementById("prefJobTitle").value,
-        location:        document.getElementById("prefLocation").value,
+        locationCity:    document.getElementById("prefLocationCity").value,
+        locationRadius:  document.getElementById("prefLocationRadius").value,
         jobType:         document.getElementById("prefJobType").value,
         salaryMin:       document.getElementById("prefSalaryMin").value,
         experienceLevel: document.getElementById("prefExpLevel").value,
         companySize:     document.getElementById("prefCompanySize").value,
         industries:      document.getElementById("prefIndustries").value,
+        postedWithin:    document.getElementById("prefPostedWithin").value,
         remoteOnly:      document.getElementById("prefRemoteOnly").checked,
       }),
     });

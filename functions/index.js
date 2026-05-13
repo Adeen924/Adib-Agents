@@ -46,19 +46,34 @@ function buildSearchQuery(prefs) {
   const expLabels = {
     entry:     "entry level 0-2 years experience",
     mid:       "3-5 years experience",
-    senior:    "senior 5+ years experience",
-    staff:     "staff principal engineer 10+ years",
+    senior:    "senior 5+ years",
+    staff:     "staff principal 10+ years",
     manager:   "engineering manager director",
     executive: "VP executive",
   };
+
+  // Support both old `location` field and new `locationCity`+`locationRadius`
+  let locationStr = "";
+  if (prefs.remoteOnly) {
+    locationStr = "remote";
+  } else if (prefs.locationCity) {
+    locationStr = prefs.locationRadius
+      ? `near "${prefs.locationCity}" within ${prefs.locationRadius} miles`
+      : `"${prefs.locationCity}"`;
+  } else if (prefs.location) {
+    locationStr = prefs.location;
+  }
+
+  const postedStr = prefs.postedWithin ? `posted last ${prefs.postedWithin} days` : "posted this month";
+
   const parts = [
-    prefs.jobTitle  ? `"${prefs.jobTitle}"`                     : "software engineer",
-    prefs.location  ? prefs.location                            : "",
-    prefs.remoteOnly                            ? "remote"      : "",
-    prefs.experienceLevel ? expLabels[prefs.experienceLevel]    : "",
-    prefs.jobType && prefs.jobType !== "any"    ? prefs.jobType : "",
-    prefs.salaryMin                             ? `salary ${prefs.salaryMin}` : "",
-    prefs.industries ? prefs.industries.split(",")[0]?.trim()   : "",
+    prefs.jobTitle        ? `"${prefs.jobTitle}"`                  : "software engineer",
+    locationStr,
+    prefs.experienceLevel ? expLabels[prefs.experienceLevel]       : "",
+    prefs.jobType && prefs.jobType !== "any" ? prefs.jobType       : "",
+    prefs.salaryMin       ? `salary ${prefs.salaryMin}`            : "",
+    prefs.industries      ? prefs.industries.split(",")[0]?.trim() : "",
+    postedStr,
     "site:linkedin.com/jobs OR site:indeed.com OR site:greenhouse.io OR site:lever.co",
   ].filter(Boolean).join(" ");
   return parts;
@@ -78,15 +93,21 @@ async function runJobSearch(userId, prefs) {
   } catch { /* non-fatal */ }
 
   // Build strict criteria string so Claude knows what to enforce
+  const locationLabel = prefs.remoteOnly
+    ? "Remote only"
+    : prefs.locationCity
+      ? `Within ${prefs.locationRadius || "any distance"} of ${prefs.locationCity}`
+      : prefs.location || "";
+
   const criteria = [
     prefs.jobTitle        ? `Role: ${prefs.jobTitle}`                    : "",
-    prefs.location        ? `Location: ${prefs.location}`                : "",
-    prefs.remoteOnly      ? "Remote only: yes"                           : "",
-    prefs.experienceLevel ? `Experience level required: ${prefs.experienceLevel}` : "",
+    locationLabel         ? `Location: ${locationLabel}`                 : "",
+    prefs.experienceLevel ? `Experience level: ${prefs.experienceLevel}` : "",
     prefs.salaryMin       ? `Minimum salary: ${prefs.salaryMin}`         : "",
     prefs.industries      ? `Industries: ${prefs.industries}`            : "",
     prefs.companySize && prefs.companySize !== "any"
                           ? `Company size: ${prefs.companySize}`         : "",
+    prefs.postedWithin    ? `Posted within last ${prefs.postedWithin} days — REJECT older postings` : "Must be a recent posting",
   ].filter(Boolean).join("\n");
 
   const systemPrompt = `You are a job search agent. Search job boards and return ONLY a raw JSON array — no markdown, no explanation, nothing else.
@@ -108,7 +129,8 @@ Return 5 jobs as a JSON array with these fields (empty string if unknown):
   const response = await anthropic.messages.create({
     model:      "claude-sonnet-4-5",
     max_tokens: 1000,
-    tools:      [{ type: "web_search_20250305", name: "web_search" }],
+    // max_uses:1 limits Claude to ONE web search call — main cost control lever
+    tools:      [{ type: "web_search_20250305", name: "web_search", max_uses: 1 }],
     system:     systemPrompt,
     messages:   [{ role: "user", content: userQuery }],
   });
@@ -439,20 +461,23 @@ app.get("/preferences/:userId", async (req, res) => {
 });
 
 app.post("/preferences/save", async (req, res) => {
-  const { userId, jobTitle, location, jobType, salaryMin, resume,
-          experienceLevel, remoteOnly, industries, companySize } = req.body;
+  const { userId, jobTitle, location, locationCity, locationRadius,
+          jobType, salaryMin, experienceLevel, remoteOnly,
+          industries, companySize, postedWithin } = req.body;
   if (!userId) return res.status(400).json({ error: "userId is required" });
   try {
     await db.collection("preferences").doc(userId).set({
       jobTitle:        jobTitle        || "",
-      location:        location        || "",
+      location:        location        || "",   // legacy fallback
+      locationCity:    locationCity    || "",
+      locationRadius:  locationRadius  || "",
       jobType:         jobType         || "any",
       salaryMin:       salaryMin       || "",
-      resume:          resume          || "",
       experienceLevel: experienceLevel || "",
       remoteOnly:      remoteOnly      || false,
       industries:      industries      || "",
       companySize:     companySize     || "any",
+      postedWithin:    postedWithin    || "14",
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     }, { merge: true });
     res.json({ ok: true });

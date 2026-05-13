@@ -96,6 +96,12 @@
       </div>
 
       <div class="section-header">
+        <h3>Recent Jobs Found</h3>
+        <button class="btn btn-ghost" onclick="showPanel('jobs')" style="padding:6px 14px;font-size:0.8rem">View All →</button>
+      </div>
+      <div id="dashboardJobs"><div class="panel-loading">Loading…</div></div>
+
+      <div class="section-header" style="margin-top:8px">
         <h3>Active Applications</h3>
         <button class="btn btn-gold" id="addAppBtn" style="padding:7px 16px;font-size:0.8rem">+ Add Application</button>
       </div>
@@ -245,9 +251,23 @@
 
         <div class="prefs-two-col">
           <div class="input-group">
-            <label>Location</label>
-            <input type="text" id="prefLocation" placeholder="e.g. Seattle WA, New York" />
+            <label>City or Zip Code</label>
+            <input type="text" id="prefLocationCity" placeholder="e.g. Seattle, WA or 98101" />
           </div>
+          <div class="input-group">
+            <label>Search Radius</label>
+            <select id="prefLocationRadius">
+              <option value="">Any distance</option>
+              <option value="5">Within 5 miles</option>
+              <option value="10">Within 10 miles</option>
+              <option value="25">Within 25 miles</option>
+              <option value="50">Within 50 miles</option>
+              <option value="100">Within 100 miles</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="prefs-two-col">
           <div class="input-group">
             <label>Experience Level</label>
             <select id="prefExpLevel">
@@ -258,6 +278,16 @@
               <option value="staff">Staff / Principal (10+ yrs)</option>
               <option value="manager">Manager / Director</option>
               <option value="executive">VP / Executive</option>
+            </select>
+          </div>
+          <div class="input-group">
+            <label>Posted Within</label>
+            <select id="prefPostedWithin">
+              <option value="3">Last 3 days</option>
+              <option value="7">Last 7 days</option>
+              <option value="14" selected>Last 14 days</option>
+              <option value="30">Last 30 days</option>
+              <option value="">Any time</option>
             </select>
           </div>
         </div>
