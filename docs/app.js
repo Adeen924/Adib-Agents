@@ -85,6 +85,10 @@ function init() {
   document.getElementById("prefsForm").addEventListener("submit",   savePreferences);
   document.getElementById("kbForm").addEventListener("submit",      saveKnowledge);
 
+  // Target company watchlist
+  document.getElementById("addTargetCompanyBtn").addEventListener("click", () => addTargetCompanyRow("", ""));
+  document.getElementById("saveWatchlistBtn").addEventListener("click", saveWatchlistCompanies);
+
   // Search Now button
   document.getElementById("searchNowBtn").addEventListener("click", searchNow);
 
@@ -122,7 +126,7 @@ function showPanel(name) {
   // jobDetail loads its own data via openJobDetail()
   if (name === "documents")  loadDocuments(currentDocType);
   if (name === "digest")     loadDigest();
-  if (name === "prefs")      loadPreferences();
+  if (name === "prefs")      { loadPreferences(); loadTargetCompanies(); }
   if (name === "knowledge")  loadKnowledge();
 }
 
@@ -399,29 +403,59 @@ async function loadJobs() {
   const body = document.getElementById("jobsBody");
   body.innerHTML = '<div class="panel-loading" style="padding:28px">Loading jobs…</div>';
   try {
-    const res  = await fetch(`${BACKEND_URL}/jobs/${encodeURIComponent(userId)}`);
-    const data = await res.json();
-    if (!data.jobs || data.jobs.length === 0) {
+    const [jobsRes, watchlistRes] = await Promise.all([
+      fetch(`${BACKEND_URL}/jobs/${encodeURIComponent(userId)}`),
+      fetch(`${BACKEND_URL}/watchlist-jobs/${encodeURIComponent(userId)}`),
+    ]);
+    const jobsData     = await jobsRes.json();
+    const watchlistData = await watchlistRes.json();
+
+    const jobs          = jobsData.jobs      || [];
+    const watchlistJobs = watchlistData.jobs || [];
+
+    if (jobs.length === 0 && watchlistJobs.length === 0) {
       body.innerHTML = `<div class="digest-empty"><div class="empty-icon">💼</div>
         <h3>No jobs found yet</h3>
         <p>Set your preferences and hit "Search Now" in the Daily Digest tab, or wait for the 8am daily search.</p></div>`;
       return;
     }
-    body.innerHTML = `<div class="jobs-grid">${data.jobs.map(j => jobCard(j)).join("")}</div>`;
+
+    let html = "";
+
+    if (watchlistJobs.length > 0) {
+      html += `<div style="padding:20px 28px 8px">
+        <div class="prefs-section-label" style="margin:0 0 12px">Target Company Watchlist</div>
+        <div class="jobs-grid">${watchlistJobs.map(j => jobCard(j, "watchlist")).join("")}</div>
+      </div>`;
+    }
+
+    if (jobs.length > 0) {
+      const sectionLabel = watchlistJobs.length > 0
+        ? `<div style="padding:20px 28px 8px"><div class="prefs-section-label" style="margin:0 0 12px">Daily Search Results</div></div>`
+        : "";
+      html += sectionLabel + `<div class="jobs-grid" style="padding:0 28px 28px">${jobs.map(j => jobCard(j)).join("")}</div>`;
+    }
+
+    body.innerHTML = html;
   } catch {
     body.innerHTML = '<div class="panel-loading" style="padding:28px">Failed to load jobs.</div>';
   }
 }
 
-function jobCard(j) {
-  const safeId = escapeAttr(j.id);
+function jobCard(j, source) {
+  const safeId     = escapeAttr(j.id);
+  const safeSource = source === "watchlist" ? "watchlist" : "";
+  const watchBadge = source === "watchlist"
+    ? `<span class="job-tag" style="background:rgba(212,175,55,0.15);color:var(--gold)">Target Company</span>`
+    : "";
   return `
-  <div class="job-card" onclick="openJobDetail('${safeId}')">
+  <div class="job-card" onclick="openJobDetail('${safeId}', '${safeSource}')">
     <div class="job-card-top">
       <div class="job-title">${escapeHtml(j.title || "Untitled Role")}</div>
       <div class="job-company">${escapeHtml(j.company || "")}</div>
     </div>
     <div class="job-tags">
+      ${watchBadge}
       ${j.location   ? `<span class="job-tag">📍 ${escapeHtml(j.location)}</span>`   : ""}
       ${j.salary     ? `<span class="job-tag">💰 ${escapeHtml(j.salary)}</span>`     : ""}
       ${j.experience ? `<span class="job-tag">📋 ${escapeHtml(j.experience)}</span>` : ""}
@@ -432,13 +466,16 @@ function jobCard(j) {
   </div>`;
 }
 
-async function openJobDetail(jobId) {
+async function openJobDetail(jobId, source) {
   showPanel("jobDetail");
   const body = document.getElementById("jobDetailBody");
   body.innerHTML = '<div class="panel-loading">Loading…</div>';
 
   try {
-    const res = await fetch(`${BACKEND_URL}/jobs/detail/${encodeURIComponent(jobId)}`);
+    const endpoint = source === "watchlist"
+      ? `${BACKEND_URL}/watchlist-jobs/detail/${encodeURIComponent(jobId)}`
+      : `${BACKEND_URL}/jobs/detail/${encodeURIComponent(jobId)}`;
+    const res = await fetch(endpoint);
     const j   = await res.json();
     if (!res.ok) throw new Error(j.error || "Not found");
 
@@ -975,6 +1012,68 @@ function downloadResumeAsPDF() {
   }
 
   doc.save("tailored-resume.pdf");
+}
+
+// ── Target Company Watchlist ──────────────────────────────────────────────────
+async function loadTargetCompanies() {
+  try {
+    const res  = await fetch(`${BACKEND_URL}/target-companies/${encodeURIComponent(userId)}`);
+    const data = await res.json();
+    renderTargetCompanies(data.companies || []);
+  } catch { /* non-fatal */ }
+}
+
+function renderTargetCompanies(companies) {
+  const list = document.getElementById("targetCompaniesList");
+  if (!list) return;
+  list.innerHTML = "";
+  if (companies.length === 0) {
+    addTargetCompanyRow("", "");
+    return;
+  }
+  companies.forEach(c => addTargetCompanyRow(c.name || "", c.url || ""));
+}
+
+function addTargetCompanyRow(name, url) {
+  const list = document.getElementById("targetCompaniesList");
+  if (!list) return;
+  const row = document.createElement("div");
+  row.className = "target-company-row";
+  row.style.cssText = "display:flex;gap:10px;align-items:center";
+  const inputStyle = "flex:1;min-width:0;padding:9px 12px;background:var(--input-bg,#111);border:1px solid var(--border);border-radius:8px;color:inherit;font-size:0.88rem;font-family:inherit";
+  row.innerHTML = `
+    <input type="text" class="tc-name" placeholder="Company name" value="${escapeAttr(name || "")}"
+      style="${inputStyle}" />
+    <input type="text" class="tc-url" placeholder="Career page URL" value="${escapeAttr(url || "")}"
+      style="${inputStyle};flex:2" />
+    <button type="button" class="btn btn-ghost tc-remove"
+      style="padding:8px 12px;flex-shrink:0;font-size:1.1rem;line-height:1">×</button>`;
+  row.querySelector(".tc-remove").addEventListener("click", () => row.remove());
+  list.appendChild(row);
+}
+
+async function saveWatchlistCompanies() {
+  const btn    = document.getElementById("saveWatchlistBtn");
+  const status = document.getElementById("watchlistStatus");
+  btn.disabled = true; btn.textContent = "Saving…";
+  try {
+    const rows     = document.querySelectorAll(".target-company-row");
+    const companies = Array.from(rows)
+      .map(row => ({
+        name: row.querySelector(".tc-name").value.trim(),
+        url:  row.querySelector(".tc-url").value.trim(),
+      }))
+      .filter(c => c.name && c.url);
+
+    const res = await fetch(`${BACKEND_URL}/target-companies/save`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ userId, companies }),
+    });
+    if (!res.ok) throw new Error("Save failed");
+    status.textContent = "Saved! The agent will check these companies daily at 9am.";
+  } catch {
+    status.textContent = "Failed to save. Please try again.";
+  } finally { btn.disabled = false; btn.textContent = "Save Watchlist"; }
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

@@ -42,6 +42,29 @@ function sortByDate(docs) {
   });
 }
 
+// Extract a platform-specific job ID from a posting URL for deduplication
+function extractJobId(url) {
+  if (!url) return null;
+  const li = url.match(/linkedin\.com\/jobs\/view\/(\d+)/i);
+  if (li) return `li-${li[1]}`;
+  const indeed = url.match(/[?&]jk=([a-zA-Z0-9]+)/i);
+  if (indeed) return `in-${indeed[1]}`;
+  const gh = url.match(/greenhouse\.io\/[^/?#]+\/jobs\/(\d+)/i);
+  if (gh) return `gh-${gh[1]}`;
+  const lever = url.match(/lever\.co\/[^/?#]+\/([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})/i);
+  if (lever) return `lv-${lever[1]}`;
+  return null;
+}
+
+// Build a stable fingerprint for deduplication: prefer URL-based ID, fall back to company::title
+function makeJobFingerprint(job) {
+  const jobId = extractJobId(job.url);
+  if (jobId) return jobId;
+  const co = (job.company || "").toLowerCase().replace(/\s+/g, " ").trim();
+  const ti = (job.title   || "").toLowerCase().replace(/\s+/g, " ").trim();
+  return `${co}::${ti}`;
+}
+
 // Build a specific, criteria-aware search query
 function buildSearchQuery(prefs) {
   const expLabels = {
@@ -109,6 +132,22 @@ async function runJobSearch(userId, prefs) {
     }
   } catch { /* non-fatal */ }
 
+  // Fetch last 7 days of jobs to build deduplication fingerprints
+  let recentJobs = [];
+  let seenFingerprints = new Set();
+  try {
+    const sevenDaysAgo = new Date();
+    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+    const recentSnap = await db.collection("jobs").where("userId", "==", userId).get();
+    recentJobs = recentSnap.docs
+      .map(d => d.data())
+      .filter(j => {
+        const ts = j.createdAt?.toDate?.();
+        return !ts || ts > sevenDaysAgo;
+      });
+    seenFingerprints = new Set(recentJobs.map(makeJobFingerprint));
+  } catch { /* non-fatal */ }
+
   // Build strict criteria string so Claude knows what to enforce
   const locationLabel = prefs.remoteOnly
     ? "Remote only"
@@ -127,11 +166,18 @@ async function runJobSearch(userId, prefs) {
     prefs.postedWithin    ? `Posted within last ${prefs.postedWithin} days — REJECT older postings` : "Must be a recent posting",
   ].filter(Boolean).join("\n");
 
+  // Tell Claude which jobs were already found this week so it returns different ones
+  const seenSection = recentJobs.length > 0
+    ? `\nALREADY FOUND THIS WEEK — do NOT return these again, find DIFFERENT jobs:\n${
+        recentJobs.slice(0, 20).map(j => `- ${j.company}: ${j.title}`).join("\n")
+      }\n`
+    : "";
+
   const systemPrompt = `You are a job search agent. Search job boards and return ONLY a raw JSON array — no markdown, no explanation, nothing else.
 
 REQUIRED CRITERIA (reject any job that does not match):
 ${criteria || "No specific criteria."}
-
+${seenSection}
 Rules:
 - Skip jobs where the posted experience requirement is significantly higher than the user's level
 - Only include direct job posting URLs (not search pages)
@@ -139,7 +185,7 @@ Rules:
 ${resumeSnippet ? `- Match roles to this candidate background:\n${resumeSnippet}` : ""}
 
 Return 5 jobs as a JSON array. Field rules:
-- url: must be the DIRECT permalink to this specific job posting (e.g. linkedin.com/jobs/view/1234567890 or indeed.com/viewjob?jk=abc123). Never a search or browse page. If you cannot find the direct link, use "".
+- url: CRITICAL — only include a URL you found verbatim in your search results. Do NOT construct, guess, or modify any URL. A fabricated URL is worse than an empty string — use "" if you cannot confirm the exact direct link to this specific posting.
 - posted: exact date as "Month DD, YYYY" (e.g. "May 10, 2026") or relative like "2 days ago". Never just a year. If unknown use "".
 - description: full job description — include what the role does, day-to-day responsibilities, required skills/qualifications, nice-to-haves, and any other details from the posting. Aim for at least 6-8 sentences. The more detail the better.
 
@@ -149,7 +195,7 @@ Return 5 jobs as a JSON array. Field rules:
 
   const response = await anthropic.messages.create({
     model:      "claude-sonnet-4-5",
-    max_tokens: 1000,
+    max_tokens: 1500,
     // max_uses:1 limits Claude to ONE web search call — main cost control lever
     tools:      [{ type: "web_search_20250305", name: "web_search", max_uses: 1 }],
     system:     systemPrompt,
@@ -173,15 +219,24 @@ Return 5 jobs as a JSON array. Field rules:
     jobs = [];
   }
 
+  // Server-side deduplication: remove jobs already found this week
+  const uniqueJobs = jobs.filter(job => {
+    if (!job.title && !job.company) return false;
+    const fp = makeJobFingerprint(job);
+    if (seenFingerprints.has(fp)) return false;
+    seenFingerprints.add(fp); // also dedupe within this batch
+    return true;
+  });
+
   // Save search summary to digests
   const digestRef = await db.collection("digests").add({
     userId, query,
-    jobCount:  jobs.length,
+    jobCount:  uniqueJobs.length,
     createdAt: admin.firestore.FieldValue.serverTimestamp(),
   });
 
-  // Save each job as an individual document
-  const savePromises = jobs.map(job =>
+  // Save each new job as an individual document
+  const savePromises = uniqueJobs.map(job =>
     db.collection("jobs").add({
       userId,
       digestId: digestRef.id,
@@ -210,7 +265,7 @@ Return 5 jobs as a JSON array. Field rules:
     });
   }
 
-  return jobs;
+  return uniqueJobs;
 }
 
 // ── Health check ──────────────────────────────────────────────────────────────
@@ -601,7 +656,140 @@ app.post("/search/now/:userId", async (req, res) => {
   }
 });
 
+// ── Target Companies (Watchlist) ─────────────────────────────────────────────
+app.get("/target-companies/:userId", async (req, res) => {
+  try {
+    const doc = await db.collection("targetCompanies").doc(req.params.userId).get();
+    res.json(doc.exists ? doc.data() : { companies: [] });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to load target companies" });
+  }
+});
+
+app.post("/target-companies/save", async (req, res) => {
+  const { userId, companies } = req.body;
+  if (!userId) return res.status(400).json({ error: "userId is required" });
+  if (!Array.isArray(companies)) return res.status(400).json({ error: "companies must be an array" });
+  try {
+    await db.collection("targetCompanies").doc(userId).set({
+      companies: companies.filter(c => c.name && c.url).map(c => ({
+        name: c.name.trim(),
+        url:  c.url.trim(),
+      })),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to save target companies" });
+  }
+});
+
+// IMPORTANT: /watchlist-jobs/detail/:jobId must come before /watchlist-jobs/:userId
+app.get("/watchlist-jobs/detail/:jobId", async (req, res) => {
+  try {
+    const doc = await db.collection("watchlistJobs").doc(req.params.jobId).get();
+    if (!doc.exists) return res.status(404).json({ error: "Job not found" });
+    res.json({ id: doc.id, ...doc.data() });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to load watchlist job" });
+  }
+});
+
+app.get("/watchlist-jobs/:userId", async (req, res) => {
+  try {
+    const snap = await db.collection("watchlistJobs").where("userId", "==", req.params.userId).get();
+    const jobs = sortByDate(snap.docs).slice(0, 100).map(d => ({ id: d.id, ...d.data() }));
+    res.json({ jobs });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to load watchlist jobs" });
+  }
+});
+
 exports.api = functions.https.onRequest(app);
+
+// ── Watchlist helpers ─────────────────────────────────────────────────────────
+function makeWatchlistFingerprint(company, title, url) {
+  const jobId = extractJobId(url);
+  if (jobId) return jobId;
+  const co = (company || "").toLowerCase().replace(/\s+/g, " ").trim();
+  const ti = (title   || "").toLowerCase().replace(/\s+/g, " ").trim();
+  return `${co}::${ti}`;
+}
+
+async function checkTargetCompany(userId, company) {
+  // Get fingerprints of jobs already seen for this company
+  const seenSnap = await db.collection("watchlistJobs")
+    .where("userId", "==", userId)
+    .where("company", "==", company.name)
+    .get();
+  const seenFingerprints = new Set(
+    seenSnap.docs.map(d => d.data().fingerprint).filter(Boolean)
+  );
+
+  const systemPrompt = `You are a job search agent monitoring a specific company's career page. Visit the URL provided and list all currently open positions.
+
+Return ONLY a raw JSON array — no markdown, no explanation:
+[{"title":"","location":"","url":"","salary":"","description":"","posted":""}]
+
+Rules:
+- url: copy the DIRECT job posting URL verbatim from the page. Do NOT construct or guess URLs. If no direct link is visible, use the career page URL.
+- description: 2-4 sentences describing the role and key requirements.
+- Return up to 25 jobs; if more exist, prioritise the most recently posted.
+- Return [] if the page is inaccessible or has no open positions.`;
+
+  let jobs = [];
+  try {
+    const response = await anthropic.messages.create({
+      model:      "claude-sonnet-4-5",
+      max_tokens: 3000,
+      tools:      [{ type: "web_search_20250305", name: "web_search", max_uses: 3 }],
+      system:     systemPrompt,
+      messages:   [{ role: "user", content: `Find all open jobs at ${company.name}. Career page: ${company.url}` }],
+    });
+
+    const raw = response.content
+      .filter(b => b.type === "text")
+      .map(b => b.text)
+      .join("\n\n")
+      .trim();
+
+    const clean = raw.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim();
+    const match = clean.match(/\[[\s\S]*\]/);
+    if (match) jobs = JSON.parse(match[0]);
+  } catch (err) {
+    console.error(`Watchlist check failed for ${company.name}:`, err.message);
+    return 0;
+  }
+
+  // Keep only jobs not seen before
+  const newJobs = jobs.filter(job => {
+    if (!job.title) return false;
+    const fp = makeWatchlistFingerprint(company.name, job.title, job.url);
+    return !seenFingerprints.has(fp);
+  });
+
+  if (newJobs.length > 0) {
+    const saves = newJobs.map(job => {
+      const fp = makeWatchlistFingerprint(company.name, job.title, job.url);
+      return db.collection("watchlistJobs").add({
+        userId,
+        company:    company.name,
+        companyUrl: company.url,
+        title:       job.title       || "",
+        location:    job.location    || "",
+        salary:      job.salary      || "",
+        description: job.description || "",
+        url:         job.url         || company.url,
+        posted:      job.posted      || "",
+        fingerprint: fp,
+        createdAt:   admin.firestore.FieldValue.serverTimestamp(),
+      });
+    });
+    await Promise.all(saves);
+  }
+
+  return newJobs.length;
+}
 
 // ── Daily job search — 8am Pacific ───────────────────────────────────────────
 exports.dailyJobSearch = onSchedule(
@@ -622,6 +810,32 @@ exports.dailyJobSearch = onSchedule(
       }
     } catch (err) {
       console.error("Daily job search error:", err.message);
+    }
+  }
+);
+
+// ── Daily watchlist check — 9am Pacific ──────────────────────────────────────
+exports.dailyWatchlistCheck = onSchedule(
+  { schedule: "0 9 * * *", timeZone: "America/Los_Angeles" },
+  async () => {
+    try {
+      const snap = await db.collection("targetCompanies").get();
+      if (snap.empty) return;
+      for (const doc of snap.docs) {
+        const userId    = doc.id;
+        const companies = doc.data().companies || [];
+        for (const company of companies) {
+          if (!company.name || !company.url) continue;
+          try {
+            const count = await checkTargetCompany(userId, company);
+            console.log(`Watchlist: ${count} new jobs at ${company.name} for ${userId}`);
+          } catch (err) {
+            console.error(`Watchlist failed for ${company.name} (${userId}):`, err.message);
+          }
+        }
+      }
+    } catch (err) {
+      console.error("Daily watchlist check error:", err.message);
     }
   }
 );

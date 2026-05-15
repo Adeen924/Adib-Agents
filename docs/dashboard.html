@@ -341,6 +341,23 @@
         <p class="prefs-status" id="prefsStatus"></p>
         <button type="submit" class="btn btn-gold">Save Preferences</button>
       </form>
+
+      <!-- Target Company Watchlist -->
+      <div style="max-width:580px;margin-top:40px;border-top:1px solid var(--border);padding-top:28px">
+        <div class="prefs-section-label">Target Company Watchlist</div>
+        <p style="font-size:0.85rem;color:var(--text-muted);margin:0 0 20px">
+          Add companies you really want to work at. Every day at 9am, the agent checks their career pages and surfaces any new openings separately from your daily job search.
+        </p>
+        <div id="targetCompaniesList" style="display:flex;flex-direction:column;gap:10px"></div>
+        <button type="button" class="btn btn-ghost" id="addTargetCompanyBtn"
+          style="margin-top:14px;font-size:0.85rem;padding:8px 18px">
+          + Add Company
+        </button>
+        <div style="margin-top:20px;display:flex;align-items:center;gap:16px;flex-wrap:wrap">
+          <button type="button" class="btn btn-gold" id="saveWatchlistBtn">Save Watchlist</button>
+          <p class="prefs-status" id="watchlistStatus" style="margin:0"></p>
+        </div>
+      </div>
     </div>
   </div>
 
