@@ -923,6 +923,31 @@ select:focus { border-color: var(--gold); box-shadow: 0 0 0 3px var(--gold-glow)
 }
 .upload-remove:hover { border-color: var(--danger); color: var(--danger); }
 
+/* ── Mobile hamburger button (hidden on desktop) ── */
+.menu-toggle {
+  display: none;
+  position: fixed;
+  top: 12px;
+  left: 12px;
+  z-index: 400;
+  width: 40px;
+  height: 40px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  font-size: 1.15rem;
+  cursor: pointer;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: border-color 0.15s;
+}
+.menu-toggle:hover { border-color: var(--gold); color: var(--gold); }
+
+/* Nav backdrop (hidden until .nav-open) */
+.nav-backdrop { display: none; }
+
 /* ── Save button on messages ── */
 .msg-save-btn {
   display: inline-flex;
@@ -947,4 +972,94 @@ select:focus { border-color: var(--gold); box-shadow: 0 0 0 3px var(--gold-glow)
   align-items: center;
   gap: 10px;
   padding: 4px 24px 16px 60px;
+}
+
+/* ══════════════════════════════════════
+   MOBILE  (≤ 768px)
+   Everything above this line is desktop-
+   only. Nothing below affects ≥ 769px.
+══════════════════════════════════════ */
+@media (max-width: 768px) {
+
+  /* Show hamburger */
+  .menu-toggle { display: flex; }
+
+  /* Sidebar slides in from the left as a fixed overlay */
+  .sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    height: 100%;
+    z-index: 300;
+    transform: translateX(-100%);
+    transition: transform 0.28s ease;
+    box-shadow: 6px 0 32px rgba(0, 0, 0, 0.6);
+  }
+  .nav-open .sidebar { transform: translateX(0); }
+
+  /* Dark backdrop appears behind the open sidebar */
+  .nav-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.55);
+    z-index: 200;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.28s ease;
+  }
+  .nav-open .nav-backdrop {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  /* Main content fills the full width */
+  .main-content { width: 100%; }
+
+  /* Indent every panel header to clear the hamburger button */
+  .main-header { padding-left: 60px; }
+
+  /* Tighten panel body on small screens */
+  .panel-body { padding: 16px; }
+
+  /* Jobs grid → single column */
+  .jobs-grid {
+    grid-template-columns: 1fr;
+    padding: 16px;
+    gap: 12px;
+  }
+
+  /* Dashboard mini job grid → single column */
+  .dashboard-jobs-grid { grid-template-columns: 1fr; }
+
+  /* Stats → 2 columns (already has a 900px rule, reinforce for mobile) */
+  .stats-grid {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 10px;
+  }
+
+  /* Job detail meta → 2 columns */
+  .jd-meta-grid { grid-template-columns: repeat(2, 1fr); }
+
+  /* Applications table: scrolls horizontally instead of overflowing */
+  .app-table { display: block; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+
+  /* Chat area */
+  .chat-area { padding: 14px; gap: 12px; }
+  .input-bar  { padding: 10px 14px; }
+  .message    { max-width: 100%; }
+
+  /* Prefs / KB forms fill full width */
+  .prefs-form,
+  .kb-form { max-width: 100%; }
+
+  /* Document tabs scroll horizontally */
+  .doc-tabs  { overflow-x: auto; flex-wrap: nowrap; -webkit-overflow-scrolling: touch; }
+  .doc-tab   { white-space: nowrap; }
+
+  /* Suggestion chips: slightly smaller */
+  .chip { font-size: 0.75rem; padding: 6px 11px; }
+
+  /* Resume download bar: remove deep left indent */
+  .resume-dl-bar { padding-left: 16px; }
 }

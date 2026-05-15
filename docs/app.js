@@ -89,6 +89,15 @@ function init() {
   document.getElementById("addTargetCompanyBtn").addEventListener("click", () => addTargetCompanyRow("", ""));
   document.getElementById("saveWatchlistBtn").addEventListener("click", saveWatchlistCompanies);
 
+  // Mobile navigation: hamburger opens sidebar, backdrop or any nav item closes it
+  const appLayout   = document.querySelector(".app-layout");
+  const navBackdrop = document.getElementById("navBackdrop");
+  document.getElementById("menuToggle").addEventListener("click",  () => appLayout.classList.add("nav-open"));
+  navBackdrop.addEventListener("click", () => appLayout.classList.remove("nav-open"));
+  document.querySelectorAll(".nav-item, [data-view], #newChatBtn, #signOutBtn").forEach(btn =>
+    btn.addEventListener("click", () => appLayout.classList.remove("nav-open"))
+  );
+
   // Search Now button
   document.getElementById("searchNowBtn").addEventListener("click", searchNow);
 
