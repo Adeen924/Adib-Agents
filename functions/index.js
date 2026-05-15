@@ -7,6 +7,10 @@ const admin     = require("firebase-admin");
 
 admin.initializeApp();
 
+// Live site URL — used as the click-through destination in push notifications.
+// Update this if you move to a custom domain.
+const SITE_URL = "https://adeen924.github.io/Adib-Agents";
+
 const app = express();
 app.use(cors({ origin: true }));
 app.use(express.json({ limit: "2mb" }));
@@ -252,6 +256,15 @@ Return 5 jobs as a JSON array. Field rules:
     })
   );
   await Promise.all(savePromises);
+
+  // Send push notification if new jobs were found
+  if (uniqueJobs.length > 0) {
+    const preview = uniqueJobs.slice(0, 2).map(j => `${j.title} at ${j.company}`).join(" · ");
+    const notifTitle = uniqueJobs.length === 1
+      ? "1 new job found"
+      : `${uniqueJobs.length} new jobs found`;
+    sendPushNotification(userId, notifTitle, preview).catch(() => {});
+  }
 
   // Track cost using Sonnet rates
   if (response.usage) {
@@ -656,6 +669,22 @@ app.post("/search/now/:userId", async (req, res) => {
   }
 });
 
+// ── Push Notification token management ───────────────────────────────────────
+app.post("/notifications/token", async (req, res) => {
+  const { userId, token } = req.body;
+  if (!userId || !token) return res.status(400).json({ error: "userId and token required" });
+  try {
+    const ref = db.collection("fcmTokens").doc(userId);
+    await ref.set(
+      { tokens: admin.firestore.FieldValue.arrayUnion(token), updatedAt: admin.firestore.FieldValue.serverTimestamp() },
+      { merge: true }
+    );
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to save token" });
+  }
+});
+
 // ── Target Companies (Watchlist) ─────────────────────────────────────────────
 app.get("/target-companies/:userId", async (req, res) => {
   try {
@@ -706,6 +735,44 @@ app.get("/watchlist-jobs/:userId", async (req, res) => {
 });
 
 exports.api = functions.https.onRequest(app);
+
+// ── Push notification sender ──────────────────────────────────────────────────
+async function sendPushNotification(userId, title, body) {
+  try {
+    const doc = await db.collection("fcmTokens").doc(userId).get();
+    if (!doc.exists) return;
+    const tokens = doc.data().tokens || [];
+    if (tokens.length === 0) return;
+
+    const deadTokens = [];
+    for (const token of tokens) {
+      try {
+        await admin.messaging().send({
+          token,
+          notification: { title, body },
+          webpush: {
+            notification: { icon: `${SITE_URL}/favicon.ico` },
+            fcmOptions:   { link: `${SITE_URL}/dashboard.html` },
+          },
+        });
+      } catch (err) {
+        // Stale tokens (uninstalled app, revoked permission) should be pruned
+        if (err.code === "messaging/registration-token-not-registered" ||
+            err.code === "messaging/invalid-registration-token") {
+          deadTokens.push(token);
+        }
+      }
+    }
+
+    if (deadTokens.length > 0) {
+      await db.collection("fcmTokens").doc(userId).update({
+        tokens: admin.firestore.FieldValue.arrayRemove(...deadTokens),
+      });
+    }
+  } catch (err) {
+    console.error(`sendPushNotification failed for ${userId}:`, err.message);
+  }
+}
 
 // ── Watchlist helpers ─────────────────────────────────────────────────────────
 function makeWatchlistFingerprint(company, title, url) {
@@ -786,6 +853,13 @@ Rules:
       });
     });
     await Promise.all(saves);
+
+    // Notify the user about new openings at their target company
+    const notifTitle = newJobs.length === 1
+      ? `New job at ${company.name}`
+      : `${newJobs.length} new jobs at ${company.name}`;
+    const notifBody = newJobs.slice(0, 2).map(j => j.title).join(" · ");
+    sendPushNotification(userId, notifTitle, notifBody).catch(() => {});
   }
 
   return newJobs.length;
