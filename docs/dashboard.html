@@ -441,6 +441,14 @@
 <script>pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";</script>
 <!-- Mammoth.js for DOCX text extraction -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
+<!-- Firebase compat SDKs (auth already initialized in session; messaging added here) -->
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-messaging-compat.js"></script>
+<script src="firebase-config.js"></script>
+<script>
+  // Guard: only init if Firebase hasn't been initialised yet (index.html may have already done it)
+  if (!firebase.apps.length) firebase.initializeApp(firebaseConfig);
+</script>
 <script src="app.js"></script>
 </body>
 </html>

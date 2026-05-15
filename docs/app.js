@@ -89,6 +89,9 @@ function init() {
   document.getElementById("addTargetCompanyBtn").addEventListener("click", () => addTargetCompanyRow("", ""));
   document.getElementById("saveWatchlistBtn").addEventListener("click", saveWatchlistCompanies);
 
+  // Push notifications: request permission + register token after page settles
+  setTimeout(initNotifications, 1500);
+
   // Mobile navigation: hamburger opens sidebar, backdrop or any nav item closes it
   const appLayout   = document.querySelector(".app-layout");
   const navBackdrop = document.getElementById("navBackdrop");
@@ -1021,6 +1024,73 @@ function downloadResumeAsPDF() {
   }
 
   doc.save("tailored-resume.pdf");
+}
+
+// ── Push Notifications ────────────────────────────────────────────────────────
+async function initNotifications() {
+  try {
+    // Messaging requires the Firebase SDK and browser support
+    if (typeof firebase === "undefined" || !firebase.messaging) return;
+    if (!("Notification" in window) || !("serviceWorker" in navigator)) return;
+    if (firebaseConfig.vapidKey === "YOUR_VAPID_KEY_HERE") return; // not yet configured
+
+    const messaging = firebase.messaging();
+
+    // Register our service worker explicitly so it works on GitHub Pages sub-paths
+    const swReg = await navigator.serviceWorker.register("./firebase-messaging-sw.js");
+
+    // Request permission (browser prompt shown only the first time)
+    const permission = await Notification.requestPermission();
+    if (permission !== "granted") return;
+
+    // Get the FCM token for this device
+    const token = await messaging.getToken({ vapidKey: firebaseConfig.vapidKey, serviceWorkerRegistration: swReg });
+    if (!token) return;
+
+    // Save the token to the backend so the server can send this device notifications
+    await fetch(`${BACKEND_URL}/notifications/token`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ userId, token }),
+    });
+
+    // Handle messages while the app is open (foreground) — show an in-app toast
+    messaging.onMessage(payload => {
+      const title = payload.notification?.title || "Adib Agents";
+      const body  = payload.notification?.body  || "";
+      showToast(title, body);
+    });
+
+  } catch (err) {
+    // Notifications are non-critical — fail silently
+    console.log("Push notifications unavailable:", err.message);
+  }
+}
+
+function showToast(title, body) {
+  // Remove any existing toast first
+  document.querySelector(".notif-toast")?.remove();
+
+  const toast = document.createElement("div");
+  toast.className = "notif-toast";
+  toast.innerHTML = `
+    <span class="notif-toast-icon">🔔</span>
+    <div class="notif-toast-body">
+      <div class="notif-toast-title">${escapeHtml(title)}</div>
+      ${body ? `<div class="notif-toast-msg">${escapeHtml(body)}</div>` : ""}
+    </div>
+    <button class="notif-toast-close" aria-label="Dismiss">✕</button>`;
+
+  document.body.appendChild(toast);
+
+  const dismiss = () => {
+    toast.classList.add("hiding");
+    toast.addEventListener("animationend", () => toast.remove(), { once: true });
+  };
+
+  toast.querySelector(".notif-toast-close").addEventListener("click", dismiss);
+  // Auto-dismiss after 6 seconds
+  setTimeout(dismiss, 6000);
 }
 
 // ── Target Company Watchlist ──────────────────────────────────────────────────

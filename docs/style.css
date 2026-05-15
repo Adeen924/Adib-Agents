@@ -923,6 +923,50 @@ select:focus { border-color: var(--gold); box-shadow: 0 0 0 3px var(--gold-glow)
 }
 .upload-remove:hover { border-color: var(--danger); color: var(--danger); }
 
+/* ── In-app notification toast ── */
+.notif-toast {
+  position: fixed;
+  top: 20px;
+  right: 20px;
+  z-index: 1000;
+  background: var(--surface);
+  border: 1px solid var(--gold);
+  border-radius: 12px;
+  padding: 14px 16px;
+  width: 320px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  animation: toastSlideIn 0.3s ease;
+}
+@keyframes toastSlideIn {
+  from { transform: translateX(110%); opacity: 0; }
+  to   { transform: translateX(0);    opacity: 1; }
+}
+.notif-toast.hiding {
+  animation: toastSlideOut 0.3s ease forwards;
+}
+@keyframes toastSlideOut {
+  to { transform: translateX(110%); opacity: 0; }
+}
+.notif-toast-icon  { font-size: 1.2rem; flex-shrink: 0; margin-top: 1px; }
+.notif-toast-body  { flex: 1; min-width: 0; }
+.notif-toast-title { font-size: 0.875rem; font-weight: 600; color: var(--text); margin-bottom: 3px; }
+.notif-toast-msg   { font-size: 0.8rem; color: var(--text-muted); line-height: 1.4; }
+.notif-toast-close {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 1rem;
+  padding: 0;
+  flex-shrink: 0;
+  line-height: 1;
+  margin-top: 1px;
+}
+.notif-toast-close:hover { color: var(--text); }
+
 /* ── Mobile hamburger button (hidden on desktop) ── */
 .menu-toggle {
   display: none;
@@ -1062,4 +1106,13 @@ select:focus { border-color: var(--gold); box-shadow: 0 0 0 3px var(--gold-glow)
 
   /* Resume download bar: remove deep left indent */
   .resume-dl-bar { padding-left: 16px; }
+
+  /* Toast slides up from bottom on mobile */
+  .notif-toast {
+    top: auto;
+    bottom: 20px;
+    right: 16px;
+    left: 16px;
+    width: auto;
+  }
 }
