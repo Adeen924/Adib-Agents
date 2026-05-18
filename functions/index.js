@@ -829,24 +829,21 @@ app.post("/user/tier", async (req, res) => {
 
 // ── Stripe Checkout ───────────────────────────────────────────────────────────
 app.post("/create-checkout-session", async (req, res) => {
-  const { userId, userEmail, lookupKey } = req.body;
+  const { userId, userEmail } = req.body;
   if (!userId) return res.status(400).json({ error: "userId required" });
 
+  const priceId = process.env.STRIPE_PRO_PRICE_ID;
+  if (!priceId) return res.status(500).json({ error: "Stripe price not configured" });
+
   const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
-  const key    = lookupKey || process.env.STRIPE_PRO_LOOKUP_KEY || "pro_monthly";
 
   try {
-    const prices = await stripe.prices.list({ lookup_keys: [key], expand: ["data.product"] });
-    if (!prices.data.length) return res.status(404).json({ error: "Price not found for lookup key: " + key });
-
     const session = await stripe.checkout.sessions.create({
       mode: "subscription",
-      line_items: [{ price: prices.data[0].id, quantity: 1 }],
+      line_items: [{ price: priceId, quantity: 1 }],
       client_reference_id: userId,
       customer_email: userEmail || undefined,
-      subscription_data: {
-        trial_period_days: 7,
-      },
+      subscription_data: { trial_period_days: 7 },
       success_url: `${SITE_URL}/dashboard.html?subscription=success`,
       cancel_url:  `${SITE_URL}/dashboard.html?subscription=canceled`,
     });
@@ -946,7 +943,7 @@ app.get("/watchlist-jobs/:userId", async (req, res) => {
 });
 
 exports.api = functions
-  .runWith({ secrets: ["ANTHROPIC_API_KEY", "STRIPE_SECRET_KEY", "STRIPE_WEBHOOK_SECRET"] })
+  .runWith({ secrets: ["ANTHROPIC_API_KEY", "STRIPE_SECRET_KEY", "STRIPE_WEBHOOK_SECRET", "STRIPE_PRO_PRICE_ID"] })
   .https.onRequest(app);
 
 // ── Push notification sender ──────────────────────────────────────────────────
