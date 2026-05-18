@@ -199,9 +199,9 @@ Return 5 jobs as a JSON array. Field rules:
 
   const response = await anthropic.messages.create({
     model:      "claude-sonnet-4-6",
-    max_tokens: 1500,
-    // max_uses:1 limits Claude to ONE web search call — main cost control lever
-    tools:      [{ type: "web_search_20250305", name: "web_search", max_uses: 1 }],
+    max_tokens: 2000,
+    // max_uses:2 allows a refinement search if the first query comes back sparse (~$0.06-0.10/search total)
+    tools:      [{ type: "web_search_20250305", name: "web_search", max_uses: 2 }],
     system:     systemPrompt,
     messages:   [{ role: "user", content: userQuery }],
   });
