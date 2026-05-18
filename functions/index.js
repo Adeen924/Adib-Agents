@@ -945,7 +945,9 @@ app.get("/watchlist-jobs/:userId", async (req, res) => {
   }
 });
 
-exports.api = functions.https.onRequest(app);
+exports.api = functions
+  .runWith({ secrets: ["ANTHROPIC_API_KEY", "STRIPE_SECRET_KEY", "STRIPE_WEBHOOK_SECRET"] })
+  .https.onRequest(app);
 
 // ── Push notification sender ──────────────────────────────────────────────────
 async function sendPushNotification(userId, title, body) {
