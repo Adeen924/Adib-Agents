@@ -198,7 +198,7 @@ Return 5 jobs as a JSON array. Field rules:
   const userQuery = `Find 5 current job listings. Search: ${query}`;
 
   const response = await anthropic.messages.create({
-    model:      "claude-sonnet-4-5",
+    model:      "claude-sonnet-4-6",
     max_tokens: 1500,
     // max_uses:1 limits Claude to ONE web search call — main cost control lever
     tools:      [{ type: "web_search_20250305", name: "web_search", max_uses: 1 }],
@@ -327,7 +327,7 @@ app.post("/chat", async (req, res) => {
 
   try {
     const response = await anthropic.messages.create({
-      model:      "claude-sonnet-4-5",
+      model:      "claude-sonnet-4-6",
       max_tokens: 2048,
       system:     fullSystem,
       tools:      [{ type: "web_search_20250305", name: "web_search" }],
@@ -552,24 +552,34 @@ app.get("/preferences/:userId", async (req, res) => {
 app.post("/preferences/save", async (req, res) => {
   const { userId, jobTitle, location, locationCity, locationRadius,
           jobType, salaryMin, experienceLevel, remoteOnly,
-          industries, companySize, postedWithin, customSites } = req.body;
+          industries, companySize, postedWithin, customSites,
+          searchEnabled, searchTimesPerDay, searchStartHour,
+          notifTimezone, notifEmail, notifPhone } = req.body;
   if (!userId) return res.status(400).json({ error: "userId is required" });
+
+  const update = { updatedAt: admin.firestore.FieldValue.serverTimestamp() };
+  // Only include fields that were explicitly sent so partial saves don't overwrite
+  if (jobTitle        !== undefined) update.jobTitle        = jobTitle        || "";
+  if (location        !== undefined) update.location        = location        || "";
+  if (locationCity    !== undefined) update.locationCity    = locationCity    || "";
+  if (locationRadius  !== undefined) update.locationRadius  = locationRadius  || "";
+  if (jobType         !== undefined) update.jobType         = jobType         || "any";
+  if (salaryMin       !== undefined) update.salaryMin       = salaryMin       || "";
+  if (experienceLevel !== undefined) update.experienceLevel = experienceLevel || "";
+  if (remoteOnly      !== undefined) update.remoteOnly      = !!remoteOnly;
+  if (industries      !== undefined) update.industries      = industries      || "";
+  if (companySize     !== undefined) update.companySize     = companySize     || "any";
+  if (postedWithin    !== undefined) update.postedWithin    = postedWithin    || "14";
+  if (customSites     !== undefined) update.customSites     = customSites     || "";
+  if (searchEnabled   !== undefined) update.searchEnabled   = searchEnabled !== false;
+  if (searchTimesPerDay !== undefined) update.searchTimesPerDay = Number(searchTimesPerDay) || 1;
+  if (searchStartHour !== undefined) update.searchStartHour = Number(searchStartHour) ?? 8;
+  if (notifTimezone   !== undefined) update.notifTimezone   = notifTimezone   || "America/Los_Angeles";
+  if (notifEmail      !== undefined) update.notifEmail      = notifEmail      || "";
+  if (notifPhone      !== undefined) update.notifPhone      = notifPhone      || "";
+
   try {
-    await db.collection("preferences").doc(userId).set({
-      jobTitle:        jobTitle        || "",
-      location:        location        || "",   // legacy fallback
-      locationCity:    locationCity    || "",
-      locationRadius:  locationRadius  || "",
-      jobType:         jobType         || "any",
-      salaryMin:       salaryMin       || "",
-      experienceLevel: experienceLevel || "",
-      remoteOnly:      remoteOnly      || false,
-      industries:      industries      || "",
-      companySize:     companySize     || "any",
-      postedWithin:    postedWithin    || "14",
-      customSites:     customSites     || "",
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-    }, { merge: true });
+    await db.collection("preferences").doc(userId).set(update, { merge: true });
     res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: "Failed to save preferences" });
@@ -584,7 +594,7 @@ app.post("/knowledge/parse-resume", async (req, res) => {
 
   try {
     const response = await anthropic.messages.create({
-      model:      "claude-sonnet-4-5",
+      model:      "claude-sonnet-4-6",
       max_tokens: 1024,
       messages: [{
         role:    "user",
@@ -807,7 +817,7 @@ Rules:
   let jobs = [];
   try {
     const response = await anthropic.messages.create({
-      model:      "claude-sonnet-4-5",
+      model:      "claude-sonnet-4-6",
       max_tokens: 3000,
       tools:      [{ type: "web_search_20250305", name: "web_search", max_uses: 3 }],
       system:     systemPrompt,
@@ -865,19 +875,56 @@ Rules:
   return newJobs.length;
 }
 
-// ── Daily job search — 8am Pacific ───────────────────────────────────────────
+// ── Schedule helpers ──────────────────────────────────────────────────────────
+function getLocalHour(date, timezone) {
+  try {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: timezone,
+      hour: "numeric",
+      hour12: false,
+    }).formatToParts(date);
+    return parseInt(parts.find(p => p.type === "hour").value, 10) % 24;
+  } catch {
+    return date.getUTCHours(); // fallback if timezone is invalid
+  }
+}
+
+function computeSearchHours(prefs) {
+  const startHour   = prefs.searchStartHour   ?? 8;
+  const timesPerDay = Math.min(4, Math.max(1, prefs.searchTimesPerDay ?? 1));
+  const interval    = Math.floor(24 / timesPerDay);
+  const hours = [];
+  for (let i = 0; i < timesPerDay; i++) {
+    hours.push((startHour + i * interval) % 24);
+  }
+  return hours;
+}
+
+// ── Job search — runs every hour, fires per each user's schedule ──────────────
 exports.dailyJobSearch = onSchedule(
-  { schedule: "0 8 * * *", timeZone: "America/Los_Angeles" },
+  { schedule: "0 * * * *", timeZone: "UTC" },
   async () => {
     try {
+      const now       = new Date();
       const prefsSnap = await db.collection("preferences").get();
       if (prefsSnap.empty) return;
+
       for (const doc of prefsSnap.docs) {
         const userId = doc.id;
         const prefs  = doc.data();
+
+        // Skip if user has turned off automated search
+        if (prefs.searchEnabled === false) continue;
+
+        // Check if the current local hour matches any of this user's search hours
+        const tz        = prefs.notifTimezone || "America/Los_Angeles";
+        const localHour = getLocalHour(now, tz);
+        const searchHrs = computeSearchHours(prefs);
+        if (!searchHrs.includes(localHour)) continue;
+
         try {
           await runJobSearch(userId, prefs);
-          console.log(`Daily digest saved for ${userId}`);
+          console.log(`Job search completed for ${userId}`);
         } catch (err) {
           console.error(`Search failed for ${userId}:`, err.message);
         }
