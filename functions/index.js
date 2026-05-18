@@ -21,12 +21,50 @@ const db = admin.firestore();
 // Sonnet — used for chat and resume parsing
 const INPUT_COST_SONNET  = 3    / 1_000_000;
 const OUTPUT_COST_SONNET = 15   / 1_000_000;
-// Haiku 3.5 (claude-3-5-haiku-20241022) — used for job search, 3-4x cheaper
-const INPUT_COST_HAIKU   = 0.80 / 1_000_000;
-const OUTPUT_COST_HAIKU  = 4    / 1_000_000;
 // Legacy alias used by chat/parse routes
 const INPUT_COST  = INPUT_COST_SONNET;
 const OUTPUT_COST = OUTPUT_COST_SONNET;
+
+// ── Subscription tiers ────────────────────────────────────────────────────────
+// Enforce these limits in runJobSearch and the scheduler.
+// When Stripe is wired up, the webhook sets tier in the `users` collection.
+const TIERS = {
+  free: {
+    label:               "Free",
+    maxSearchesPerDay:   1,    // automated searches/day the scheduler will fire
+    webSearchesPerQuery: 1,    // max_uses on the web_search tool
+    maxOutputTokens:     1500, // max_tokens for the job search call
+    customSites:         false, // whether prefs.customSites is included in the query
+    maxTargetCompanies:  3,    // watchlist cap
+  },
+  pro: {
+    label:               "Pro",
+    maxSearchesPerDay:   4,
+    webSearchesPerQuery: 3,
+    maxOutputTokens:     2500,
+    customSites:         true,
+    maxTargetCompanies:  50,
+  },
+};
+
+async function getUserTier(userId) {
+  try {
+    const doc = await db.collection("users").doc(userId).get();
+    if (!doc.exists) return "free";
+    return doc.data().tier || "free";
+  } catch {
+    return "free";
+  }
+}
+
+// Ensure a user document exists (called on first sign-in / first search)
+async function ensureUser(userId) {
+  const ref = db.collection("users").doc(userId);
+  const doc = await ref.get();
+  if (!doc.exists) {
+    await ref.set({ tier: "free", email: userId, createdAt: admin.firestore.FieldValue.serverTimestamp() });
+  }
+}
 
 const DEFAULT_SYSTEM = `You are an AI job search agent helping the user land their next role. You help with:
 - Interview preparation and practice questions
@@ -123,9 +161,16 @@ function buildSearchQuery(prefs) {
   return parts;
 }
 
-// Run a job search for one user — uses Haiku to reduce cost
-async function runJobSearch(userId, prefs) {
-  const query = buildSearchQuery(prefs);
+// Run a job search for one user — limits are tier-based
+async function runJobSearch(userId, prefs, tier = "free") {
+  const tierConfig = TIERS[tier] || TIERS.free;
+
+  // Free tier: strip custom sites from the search query
+  const effectivePrefs = tierConfig.customSites
+    ? prefs
+    : { ...prefs, customSites: "" };
+
+  const query = buildSearchQuery(effectivePrefs);
 
   // Fetch resume from knowledge base for better matching
   let resumeSnippet = "";
@@ -199,9 +244,8 @@ Return 5 jobs as a JSON array. Field rules:
 
   const response = await anthropic.messages.create({
     model:      "claude-sonnet-4-6",
-    max_tokens: 2000,
-    // max_uses:2 allows a refinement search if the first query comes back sparse (~$0.06-0.10/search total)
-    tools:      [{ type: "web_search_20250305", name: "web_search", max_uses: 2 }],
+    max_tokens: tierConfig.maxOutputTokens,
+    tools:      [{ type: "web_search_20250305", name: "web_search", max_uses: tierConfig.webSearchesPerQuery }],
     system:     systemPrompt,
     messages:   [{ role: "user", content: userQuery }],
   });
@@ -665,17 +709,57 @@ app.get("/jobs/:userId", async (req, res) => {
 app.post("/search/now/:userId", async (req, res) => {
   const { userId } = req.params;
   try {
-    const prefDoc = await db.collection("preferences").doc(userId).get();
+    const [prefDoc, tier] = await Promise.all([
+      db.collection("preferences").doc(userId).get(),
+      getUserTier(userId),
+    ]);
     if (!prefDoc.exists) {
       return res.status(400).json({ error: "No preferences saved yet. Please set your preferences first." });
     }
+    await ensureUser(userId);
     const prefs = prefDoc.data();
-    const jobs = await runJobSearch(userId, prefs);
-    res.json({ ok: true, jobCount: jobs.length });
+    const jobs = await runJobSearch(userId, prefs, tier);
+    res.json({ ok: true, jobCount: jobs.length, tier });
   } catch (err) {
     console.error("Search now error:", err.message, err.stack);
-    // Return the real error so it's visible in the UI for debugging
     res.status(500).json({ error: err.message || "Search failed. Please try again." });
+  }
+});
+
+// ── User / tier management ────────────────────────────────────────────────────
+app.get("/user/:userId", async (req, res) => {
+  const { userId } = req.params;
+  try {
+    await ensureUser(userId);
+    const tier       = await getUserTier(userId);
+    const tierConfig = TIERS[tier] || TIERS.free;
+    res.json({ tier, tierConfig });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to load user" });
+  }
+});
+
+// Admin / Stripe-webhook endpoint — sets a user's tier.
+// Protect this with a shared secret before exposing to the internet.
+// When integrating Stripe: call this from your webhook handler after
+// a checkout.session.completed or customer.subscription.updated event.
+app.post("/user/tier", async (req, res) => {
+  const { userId, tier, secret } = req.body;
+  if (!userId || !tier) return res.status(400).json({ error: "userId and tier required" });
+  if (!["free", "pro"].includes(tier)) return res.status(400).json({ error: "Invalid tier" });
+  // Simple shared-secret guard — set ADMIN_SECRET in your Cloud Functions env vars
+  // to protect this endpoint until you have real Stripe auth in place.
+  if (process.env.ADMIN_SECRET && secret !== process.env.ADMIN_SECRET) {
+    return res.status(403).json({ error: "Forbidden" });
+  }
+  try {
+    await db.collection("users").doc(userId).set(
+      { tier, tierUpdatedAt: admin.firestore.FieldValue.serverTimestamp() },
+      { merge: true }
+    );
+    res.json({ ok: true, tier });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to update tier" });
   }
 });
 
@@ -916,15 +1000,26 @@ exports.dailyJobSearch = onSchedule(
         // Skip if user has turned off automated search
         if (prefs.searchEnabled === false) continue;
 
+        // Fetch user tier and clamp searches/day to tier limit
+        const tier       = await getUserTier(userId);
+        const tierConfig = TIERS[tier] || TIERS.free;
+        const cappedPrefs = {
+          ...prefs,
+          searchTimesPerDay: Math.min(
+            prefs.searchTimesPerDay ?? 1,
+            tierConfig.maxSearchesPerDay
+          ),
+        };
+
         // Check if the current local hour matches any of this user's search hours
         const tz        = prefs.notifTimezone || "America/Los_Angeles";
         const localHour = getLocalHour(now, tz);
-        const searchHrs = computeSearchHours(prefs);
+        const searchHrs = computeSearchHours(cappedPrefs);
         if (!searchHrs.includes(localHour)) continue;
 
         try {
-          await runJobSearch(userId, prefs);
-          console.log(`Job search completed for ${userId}`);
+          await runJobSearch(userId, prefs, tier);
+          console.log(`Job search completed for ${userId} (tier: ${tier})`);
         } catch (err) {
           console.error(`Search failed for ${userId}:`, err.message);
         }

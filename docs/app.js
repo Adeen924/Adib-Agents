@@ -39,6 +39,7 @@ let currentDocType         = "resume";
 let currentJob             = null;
 let pendingResumeDownload  = false;
 let latestResumeText       = "";
+let userTier               = "free";  // loaded on init, used for feature gating
 
 // ── Init ──────────────────────────────────────────────────────────────────────
 function init() {
@@ -116,6 +117,7 @@ function init() {
   showPanel("dashboard");
   renderChips(INTERVIEW_VIEW.chips);
   loadHistory();
+  loadUserTier();  // fetch tier early so gates are ready before Settings opens
 }
 
 // ── Panel switching ───────────────────────────────────────────────────────────
@@ -691,7 +693,74 @@ async function loadSettings() {
     loadPreferences(),
     loadTargetCompanies(),
     loadSettingsStats(),
+    loadUserTier(),
   ]);
+  // Wire upgrade button each time the panel opens (safe to call multiple times)
+  document.getElementById("upgradeBtn")?.addEventListener("click", handleUpgradeClick);
+}
+
+function handleUpgradeClick() {
+  // ── Stripe integration point ──────────────────────────────────────────────
+  // When you're ready to take payments:
+  //   1. Create a Stripe Checkout session on the backend (/create-checkout-session)
+  //   2. Redirect here: window.location.href = session.url
+  //
+  // For now, show a placeholder message.
+  alert("Upgrade coming soon! To get early Pro access, contact the admin.");
+}
+
+async function loadUserTier() {
+  try {
+    const res  = await fetch(`${BACKEND_URL}/user/${encodeURIComponent(userId)}`);
+    const data = await res.json();
+    userTier   = data.tier || "free";
+    applyTierGates();
+    // Sidebar badge
+    const badge = document.getElementById("tierBadge");
+    if (badge) {
+      badge.textContent = userTier === "pro" ? "PRO" : "FREE";
+      badge.classList.toggle("pro", userTier === "pro");
+    }
+    // Subscription section
+    document.getElementById("planBadgeFree").style.display = userTier === "free" ? "" : "none";
+    document.getElementById("planBadgePro").style.display  = userTier === "pro"  ? "" : "none";
+    document.getElementById("upgradeBtn").style.display    = userTier === "pro"  ? "none" : "";
+    document.getElementById("upgradeNote").style.display   = userTier === "pro"  ? "" : "none";
+    document.getElementById("planCardFree").classList.toggle("plan-card-current", userTier === "free");
+    document.getElementById("planCardPro").classList.toggle("plan-card-current",  userTier === "pro");
+  } catch { /* non-fatal */ }
+}
+
+function applyTierGates() {
+  const isPro = userTier === "pro";
+
+  // "Times per day" > 1 is pro-only
+  const timesSelect = document.getElementById("settingTimesPerDay");
+  Array.from(timesSelect.options).forEach(opt => {
+    const val = parseInt(opt.value, 10);
+    if (val > 1) {
+      opt.disabled = !isPro;
+      opt.text = val > 1 && !isPro ? opt.text.replace(" 🔒", "") + " 🔒" : opt.text.replace(" 🔒", "");
+    }
+  });
+  // If user is free and somehow has > 1 selected, clamp to 1
+  if (!isPro && parseInt(timesSelect.value, 10) > 1) timesSelect.value = "1";
+
+  // Custom job sites is pro-only
+  const customSitesInput = document.getElementById("prefCustomSites");
+  const customSitesGroup = customSitesInput?.closest(".input-group");
+  if (customSitesGroup) {
+    customSitesInput.disabled = !isPro;
+    let proTag = customSitesGroup.querySelector(".pro-feature-tag");
+    if (!isPro && !proTag) {
+      proTag = document.createElement("span");
+      proTag.className = "pro-feature-tag";
+      proTag.textContent = "Pro only — upgrade to add custom sites";
+      customSitesGroup.appendChild(proTag);
+    } else if (isPro && proTag) {
+      proTag.remove();
+    }
+  }
 }
 
 async function loadSettingsStats() {

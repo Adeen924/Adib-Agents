@@ -1010,6 +1010,104 @@ select:focus { border-color: var(--gold); box-shadow: 0 0 0 3px var(--gold-glow)
 }
 .msg-save-btn:hover { background: rgba(212,175,55,0.25); }
 
+/* ── Tier badge (sidebar) ── */
+.tier-badge {
+  font-size: 0.6rem;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  letter-spacing: 0.06em;
+  flex-shrink: 0;
+  align-self: center;
+}
+.tier-badge.pro {
+  background: rgba(212,175,55,0.15);
+  color: var(--gold);
+  border-color: var(--gold-dim);
+}
+
+/* ── Plan comparison cards ── */
+.plan-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  max-width: 640px;
+}
+@media (max-width: 600px) { .plan-grid { grid-template-columns: 1fr; } }
+
+.plan-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 20px 22px;
+  display: flex;
+  flex-direction: column;
+}
+.plan-card-pro {
+  border-color: var(--gold-dim);
+  background: linear-gradient(135deg, var(--surface) 0%, rgba(212,175,55,0.04) 100%);
+}
+.plan-card-current { border-color: var(--gold); box-shadow: 0 0 0 1px var(--gold-dim); }
+
+.plan-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 16px;
+}
+.plan-name  { font-size: 1rem; font-weight: 700; color: var(--text); }
+.plan-price { font-size: 0.8rem; color: var(--text-muted); margin-top: 3px; }
+.pro-crown  { font-size: 0.9rem; }
+
+.plan-active-badge {
+  font-size: 0.68rem;
+  font-weight: 700;
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: var(--surface-2);
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  white-space: nowrap;
+}
+.plan-active-badge-pro {
+  background: rgba(212,175,55,0.15);
+  color: var(--gold);
+  border-color: var(--gold-dim);
+}
+
+.plan-features {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 0.83rem;
+  color: var(--text-muted);
+  flex: 1;
+}
+.plan-features li { line-height: 1.4; }
+
+.plan-upgrade-note {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  margin-top: 12px;
+  text-align: center;
+}
+
+/* ── Pro-only feature tag (shown inline under locked inputs) ── */
+.pro-feature-tag {
+  display: inline-block;
+  margin-top: 6px;
+  font-size: 0.76rem;
+  color: var(--gold);
+  background: rgba(212,175,55,0.08);
+  border: 1px solid rgba(212,175,55,0.2);
+  border-radius: 6px;
+  padding: 3px 8px;
+}
+
 /* ── Settings panel ── */
 .settings-content {
   padding: 28px;

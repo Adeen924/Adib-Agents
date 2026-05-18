@@ -63,6 +63,7 @@
         <div class="user-avatar" id="userAvatar">?</div>
         <div class="user-info">
           <div class="user-email" id="userEmail">loading…</div>
+        <span class="tier-badge" id="tierBadge">FREE</span>
         </div>
         <button class="sign-out-btn" id="signOutBtn" title="Sign out">↩</button>
       </div>
@@ -242,6 +243,57 @@
     </header>
     <div style="overflow-y:auto;flex:1">
       <div class="settings-content">
+
+        <!-- Subscription -->
+        <div class="settings-section">
+          <div class="settings-section-title">Subscription</div>
+          <div class="plan-grid">
+
+            <!-- Free plan -->
+            <div class="plan-card" id="planCardFree">
+              <div class="plan-card-header">
+                <div>
+                  <div class="plan-name">Free</div>
+                  <div class="plan-price">$0 / month</div>
+                </div>
+                <span class="plan-active-badge" id="planBadgeFree" style="display:none">Current plan</span>
+              </div>
+              <ul class="plan-features">
+                <li>✓ 1 automated search per day</li>
+                <li>✓ 1 web search per query</li>
+                <li>✓ LinkedIn, Indeed, Greenhouse, Lever &amp; more</li>
+                <li>✓ Up to 3 target companies</li>
+                <li>✓ Interview prep chat</li>
+                <li>✓ Resume generation &amp; PDF export</li>
+              </ul>
+            </div>
+
+            <!-- Pro plan -->
+            <div class="plan-card plan-card-pro" id="planCardPro">
+              <div class="plan-card-header">
+                <div>
+                  <div class="plan-name">Pro <span class="pro-crown">✨</span></div>
+                  <div class="plan-price" id="planPrice">$9.99 / month</div>
+                </div>
+                <span class="plan-active-badge plan-active-badge-pro" id="planBadgePro" style="display:none">Current plan</span>
+              </div>
+              <ul class="plan-features">
+                <li>✓ Up to 4 automated searches per day</li>
+                <li>✓ 3 web searches per query — deeper results</li>
+                <li>✓ All Free boards + your custom job sites</li>
+                <li>✓ Up to 50 target companies</li>
+                <li>✓ Everything in Free</li>
+              </ul>
+              <button class="btn btn-gold" id="upgradeBtn" style="margin-top:16px;width:100%">
+                Upgrade to Pro →
+              </button>
+              <p class="plan-upgrade-note" id="upgradeNote" style="display:none">
+                You're on Pro. To manage your subscription, contact support.
+              </p>
+            </div>
+
+          </div>
+        </div>
 
         <!-- Activity Stats -->
         <div class="settings-section">
