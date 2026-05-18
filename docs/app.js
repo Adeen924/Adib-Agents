@@ -292,7 +292,7 @@ async function loadRecentJobs() {
     const res  = await fetch(`${BACKEND_URL}/jobs/${encodeURIComponent(userId)}`);
     const data = await res.json();
     if (!data.jobs || data.jobs.length === 0) {
-      el.innerHTML = `<div class="empty-table">No jobs found yet — go to Daily Openings and hit "Search Now".</div>`;
+      el.innerHTML = `<div class="empty-table">No jobs found yet — your daily search will run automatically, or upgrade to Pro to search on demand.</div>`;
       return;
     }
     const recent = data.jobs.slice(0, 6);
@@ -440,7 +440,7 @@ async function loadJobs() {
     if (jobs.length === 0 && watchlistJobs.length === 0) {
       body.innerHTML = `<div class="digest-empty"><div class="empty-icon">💼</div>
         <h3>No jobs found yet</h3>
-        <p>Set your preferences and hit "Search Now" in the Daily Openings tab, or wait for the automated search.</p></div>`;
+        <p>Set your preferences in Settings — your daily search will run automatically, or upgrade to Pro to search on demand.</p></div>`;
       return;
     }
 
@@ -638,7 +638,7 @@ async function loadDigest() {
       body.innerHTML = `<div class="digest-empty">
         <div class="empty-icon">📬</div>
         <h3>No jobs found yet</h3>
-        <p>Save your preferences in Settings then hit "Search Now" above, or wait for the automated search.</p>
+        <p>Save your preferences in Settings — your daily search runs automatically, or upgrade to Pro to search on demand.</p>
       </div>`;
       return;
     }
@@ -783,6 +783,24 @@ async function loadUserTier() {
 function applyTierGates() {
   const isPro = userTier === "pro";
 
+  // Search Now button is pro-only
+  const searchBtn = document.getElementById("searchNowBtn");
+  if (searchBtn) {
+    searchBtn.style.display = isPro ? "" : "none";
+    if (!isPro) {
+      let proNote = document.getElementById("searchNowProNote");
+      if (!proNote) {
+        proNote = document.createElement("p");
+        proNote.id        = "searchNowProNote";
+        proNote.className = "pro-feature-tag";
+        proNote.textContent = "Manual search is a Pro feature — your daily search runs automatically.";
+        searchBtn.parentNode.insertBefore(proNote, searchBtn.nextSibling);
+      }
+    } else {
+      document.getElementById("searchNowProNote")?.remove();
+    }
+  }
+
   // "Times per day" > 1 is pro-only
   const timesSelect = document.getElementById("settingTimesPerDay");
   Array.from(timesSelect.options).forEach(opt => {
@@ -792,7 +810,6 @@ function applyTierGates() {
       opt.text = val > 1 && !isPro ? opt.text.replace(" 🔒", "") + " 🔒" : opt.text.replace(" 🔒", "");
     }
   });
-  // If user is free and somehow has > 1 selected, clamp to 1
   if (!isPro && parseInt(timesSelect.value, 10) > 1) timesSelect.value = "1";
 
   // Custom job sites is pro-only

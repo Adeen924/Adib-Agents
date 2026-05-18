@@ -95,19 +95,23 @@ const OUTPUT_COST = OUTPUT_COST_SONNET;
 const TIERS = {
   free: {
     label:               "Free",
-    maxSearchesPerDay:   1,    // automated searches/day the scheduler will fire
-    webSearchesPerQuery: 1,    // max_uses on the web_search tool
-    maxOutputTokens:     1500, // max_tokens for the job search call
-    customSites:         false, // whether prefs.customSites is included in the query
-    maxTargetCompanies:  3,    // watchlist cap
+    maxSearchesPerDay:   1,
+    webSearchesPerQuery: 1,
+    maxOutputTokens:     4000,
+    customSites:         false,
+    maxTargetCompanies:  3,
+    jobsPerSearch:       5,
+    manualSearch:        false, // scheduled only — no Search Now button
   },
   pro: {
     label:               "Pro",
     maxSearchesPerDay:   4,
     webSearchesPerQuery: 3,
-    maxOutputTokens:     2500,
+    maxOutputTokens:     4000,
     customSites:         true,
     maxTargetCompanies:  50,
+    jobsPerSearch:       5,
+    manualSearch:        true,
   },
 };
 
@@ -286,6 +290,8 @@ async function runJobSearch(userId, prefs, tier = "free") {
       }\n`
     : "";
 
+  const jobCount = tierConfig.jobsPerSearch || 5;
+
   const systemPrompt = `You are a job search agent. Search job boards and return ONLY a raw JSON array — no markdown, no explanation, nothing else.
 
 REQUIRED CRITERIA (reject any job that does not match):
@@ -297,14 +303,14 @@ Rules:
 - Prefer postings from the last 14 days
 ${resumeSnippet ? `- Match roles to this candidate background:\n${resumeSnippet}` : ""}
 
-Return 5 jobs as a JSON array. Field rules:
-- url: CRITICAL — only include a URL you found verbatim in your search results. Do NOT construct, guess, or modify any URL. A fabricated URL is worse than an empty string — use "" if you cannot confirm the exact direct link to this specific posting.
-- posted: exact date as "Month DD, YYYY" (e.g. "May 10, 2026") or relative like "2 days ago". Never just a year. If unknown use "".
-- description: full job description — include what the role does, day-to-day responsibilities, required skills/qualifications, nice-to-haves, and any other details from the posting. Aim for at least 6-8 sentences. The more detail the better.
+Return exactly ${jobCount} jobs as a JSON array. Field rules:
+- url: CRITICAL — only include a URL you found verbatim in your search results. Do NOT construct, guess, or modify any URL. Use "" if you cannot confirm the exact direct link.
+- posted: exact date as "Month DD, YYYY" or relative like "2 days ago". Use "" if unknown.
+- description: 3-4 sentences covering the role, key responsibilities, and required skills.
 
 [{"title":"","company":"","location":"","salary":"","experience":"","description":"","url":"","posted":""}]`;
 
-  const userQuery = `Find 5 current job listings. Search: ${query}`;
+  const userQuery = `Find ${jobCount} current job listings. Search: ${query}`;
 
   const response = await anthropic.messages.create({
     model:      "claude-sonnet-4-6",
