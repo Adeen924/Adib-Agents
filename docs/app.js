@@ -113,6 +113,18 @@ function init() {
   // Resume file upload
   initResumeUpload();
 
+  // Check for post-Stripe-checkout redirect params
+  const urlParams = new URLSearchParams(window.location.search);
+  const subStatus = urlParams.get("subscription");
+  if (subStatus === "success") {
+    showToast("CareerCopilot", "You're now on Pro! Enjoy your 7-day free trial.");
+    // Clean the URL so a refresh doesn't re-show the toast
+    history.replaceState({}, "", window.location.pathname);
+  } else if (subStatus === "canceled") {
+    showToast("CareerCopilot", "Checkout canceled — your plan was not changed.");
+    history.replaceState({}, "", window.location.pathname);
+  }
+
   // Load dashboard on start
   showPanel("dashboard");
   renderChips(INTERVIEW_VIEW.chips);
@@ -695,18 +707,53 @@ async function loadSettings() {
     loadSettingsStats(),
     loadUserTier(),
   ]);
-  // Wire upgrade button each time the panel opens (safe to call multiple times)
+  // Wire upgrade/manage buttons each time the panel opens (safe to call multiple times)
   document.getElementById("upgradeBtn")?.addEventListener("click", handleUpgradeClick);
+  document.getElementById("manageSubBtn")?.addEventListener("click", openBillingPortal);
 }
 
-function handleUpgradeClick() {
-  // ── Stripe integration point ──────────────────────────────────────────────
-  // When you're ready to take payments:
-  //   1. Create a Stripe Checkout session on the backend (/create-checkout-session)
-  //   2. Redirect here: window.location.href = session.url
-  //
-  // For now, show a placeholder message.
-  alert("Upgrade coming soon! To get early Pro access, contact the admin.");
+async function handleUpgradeClick() {
+  const btn = document.getElementById("upgradeBtn");
+  if (btn) { btn.disabled = true; btn.textContent = "Redirecting…"; }
+  try {
+    const res  = await fetch(`${BACKEND_URL}/create-checkout-session`, {
+      method:  "POST",
+      headers: { "Content-Type": "application/json" },
+      body:    JSON.stringify({ userId, userEmail: userId }),
+    });
+    const data = await res.json();
+    if (data.url) {
+      window.location.href = data.url;
+    } else {
+      showToast("CareerCopilot", data.error || "Could not start checkout. Try again.");
+      if (btn) { btn.disabled = false; btn.textContent = "Upgrade to Pro"; }
+    }
+  } catch {
+    showToast("CareerCopilot", "Network error. Please try again.");
+    if (btn) { btn.disabled = false; btn.textContent = "Upgrade to Pro"; }
+  }
+}
+
+async function openBillingPortal() {
+  const btn = document.getElementById("manageSubBtn");
+  if (btn) { btn.disabled = true; btn.textContent = "Opening…"; }
+  try {
+    const res  = await fetch(`${BACKEND_URL}/create-portal-session`, {
+      method:  "POST",
+      headers: { "Content-Type": "application/json" },
+      body:    JSON.stringify({ userId }),
+    });
+    const data = await res.json();
+    if (data.url) {
+      window.location.href = data.url;
+    } else {
+      showToast("CareerCopilot", data.error || "Could not open billing portal.");
+      if (btn) { btn.disabled = false; btn.textContent = "Manage Subscription"; }
+    }
+  } catch {
+    showToast("CareerCopilot", "Network error. Please try again.");
+    if (btn) { btn.disabled = false; btn.textContent = "Manage Subscription"; }
+  }
 }
 
 async function loadUserTier() {
@@ -726,6 +773,8 @@ async function loadUserTier() {
     document.getElementById("planBadgePro").style.display  = userTier === "pro"  ? "" : "none";
     document.getElementById("upgradeBtn").style.display    = userTier === "pro"  ? "none" : "";
     document.getElementById("upgradeNote").style.display   = userTier === "pro"  ? "" : "none";
+    const manageBtn = document.getElementById("manageSubBtn");
+    if (manageBtn) manageBtn.style.display = userTier === "pro" ? "" : "none";
     document.getElementById("planCardFree").classList.toggle("plan-card-current", userTier === "free");
     document.getElementById("planCardPro").classList.toggle("plan-card-current",  userTier === "pro");
   } catch { /* non-fatal */ }
@@ -1166,7 +1215,7 @@ async function initNotifications() {
     });
 
     messaging.onMessage(payload => {
-      const title = payload.notification?.title || "Adib Agents";
+      const title = payload.notification?.title || "CareerCopilot";
       const body  = payload.notification?.body  || "";
       showToast(title, body);
     });

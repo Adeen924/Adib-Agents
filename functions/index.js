@@ -4,6 +4,7 @@ const express   = require("express");
 const cors      = require("cors");
 const { Anthropic } = require("@anthropic-ai/sdk");
 const admin     = require("firebase-admin");
+const Stripe    = require("stripe");
 
 admin.initializeApp();
 
@@ -13,6 +14,69 @@ const SITE_URL = "https://adeen924.github.io/Adib-Agents";
 
 const app = express();
 app.use(cors({ origin: true }));
+
+// ── Stripe webhook — must be registered BEFORE express.json() so we get the raw body ──
+app.post("/webhook", express.raw({ type: "application/json" }), async (req, res) => {
+  const stripe        = Stripe(process.env.STRIPE_SECRET_KEY);
+  const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
+  const sig           = req.headers["stripe-signature"];
+
+  let event;
+  try {
+    event = stripe.webhooks.constructEvent(req.body, sig, webhookSecret);
+  } catch (err) {
+    console.error("Stripe webhook signature error:", err.message);
+    return res.status(400).send(`Webhook Error: ${err.message}`);
+  }
+
+  try {
+    switch (event.type) {
+      case "checkout.session.completed": {
+        const session  = event.data.object;
+        const userId   = session.client_reference_id;
+        const custId   = session.customer;
+        if (userId) {
+          await db.collection("users").doc(userId).set(
+            { tier: "pro", stripeCustomerId: custId, tierUpdatedAt: admin.firestore.FieldValue.serverTimestamp() },
+            { merge: true }
+          );
+        }
+        break;
+      }
+      case "customer.subscription.deleted": {
+        const sub    = event.data.object;
+        const custId = sub.customer;
+        const snap   = await db.collection("users").where("stripeCustomerId", "==", custId).limit(1).get();
+        for (const doc of snap.docs) {
+          await doc.ref.set(
+            { tier: "free", tierUpdatedAt: admin.firestore.FieldValue.serverTimestamp() },
+            { merge: true }
+          );
+        }
+        break;
+      }
+      case "customer.subscription.updated": {
+        const sub    = event.data.object;
+        const custId = sub.customer;
+        const active = sub.status === "active" || sub.status === "trialing";
+        const snap   = await db.collection("users").where("stripeCustomerId", "==", custId).limit(1).get();
+        for (const doc of snap.docs) {
+          await doc.ref.set(
+            { tier: active ? "pro" : "free", tierUpdatedAt: admin.firestore.FieldValue.serverTimestamp() },
+            { merge: true }
+          );
+        }
+        break;
+      }
+    }
+  } catch (err) {
+    console.error("Stripe webhook handler error:", err);
+    return res.status(500).send("Internal error");
+  }
+
+  res.json({ received: true });
+});
+
 app.use(express.json({ limit: "2mb" }));
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
@@ -760,6 +824,59 @@ app.post("/user/tier", async (req, res) => {
     res.json({ ok: true, tier });
   } catch (err) {
     res.status(500).json({ error: "Failed to update tier" });
+  }
+});
+
+// ── Stripe Checkout ───────────────────────────────────────────────────────────
+app.post("/create-checkout-session", async (req, res) => {
+  const { userId, userEmail, lookupKey } = req.body;
+  if (!userId) return res.status(400).json({ error: "userId required" });
+
+  const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
+  const key    = lookupKey || process.env.STRIPE_PRO_LOOKUP_KEY || "pro_monthly";
+
+  try {
+    const prices = await stripe.prices.list({ lookup_keys: [key], expand: ["data.product"] });
+    if (!prices.data.length) return res.status(404).json({ error: "Price not found for lookup key: " + key });
+
+    const session = await stripe.checkout.sessions.create({
+      mode: "subscription",
+      line_items: [{ price: prices.data[0].id, quantity: 1 }],
+      client_reference_id: userId,
+      customer_email: userEmail || undefined,
+      subscription_data: {
+        trial_period_days: 7,
+      },
+      success_url: `${SITE_URL}/dashboard.html?subscription=success`,
+      cancel_url:  `${SITE_URL}/dashboard.html?subscription=canceled`,
+    });
+
+    res.json({ url: session.url });
+  } catch (err) {
+    console.error("Stripe checkout error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/create-portal-session", async (req, res) => {
+  const { userId } = req.body;
+  if (!userId) return res.status(400).json({ error: "userId required" });
+
+  try {
+    const userDoc = await db.collection("users").doc(userId).get();
+    const customerId = userDoc.exists ? userDoc.data().stripeCustomerId : null;
+    if (!customerId) return res.status(404).json({ error: "No Stripe customer found for this user" });
+
+    const stripe  = Stripe(process.env.STRIPE_SECRET_KEY);
+    const session = await stripe.billingPortal.sessions.create({
+      customer:   customerId,
+      return_url: `${SITE_URL}/dashboard.html`,
+    });
+
+    res.json({ url: session.url });
+  } catch (err) {
+    console.error("Stripe portal error:", err);
+    res.status(500).json({ error: err.message });
   }
 });
 
