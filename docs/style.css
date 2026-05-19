@@ -1323,6 +1323,47 @@ select:focus { border-color: var(--gold); box-shadow: 0 0 0 3px var(--gold-glow)
   }
 }
 
+/* ── Billing period toggle ── */
+.billing-toggle {
+  display: flex;
+  gap: 0;
+  margin-top: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.billing-opt {
+  flex: 1;
+  padding: 9px 14px;
+  background: var(--surface-2);
+  border: none;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+  text-align: center;
+}
+.billing-opt:first-child { border-right: 1px solid var(--border); }
+.billing-opt-active {
+  background: var(--gold-glow);
+  color: var(--gold);
+}
+.billing-opt:hover:not(.billing-opt-active) { color: var(--text); background: var(--surface); }
+
+.billing-save-badge {
+  display: inline-block;
+  background: rgba(74, 222, 128, 0.15);
+  color: #4ade80;
+  border-radius: 4px;
+  font-size: 0.68rem;
+  font-weight: 700;
+  padding: 1px 5px;
+  margin-left: 4px;
+  vertical-align: middle;
+}
+
 /* ── Networking Copilot ── */
 .nc-strategy {
   font-size: 0.88rem;

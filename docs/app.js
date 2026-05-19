@@ -916,6 +916,22 @@ async function loadSettings() {
   document.getElementById("manageSubBtn")?.addEventListener("click", openBillingPortal);
 }
 
+// Update these to match your Stripe prices exactly
+const PLAN_PRICES = {
+  monthly: { display: "$29 / month",  period: "monthly" },
+  annual:  { display: "$290 / year",  period: "annual"  },
+};
+
+let selectedBillingPeriod = "monthly";
+
+function selectBilling(period) {
+  selectedBillingPeriod = period;
+  document.getElementById("billingMonthly")?.classList.toggle("billing-opt-active", period === "monthly");
+  document.getElementById("billingAnnual")?.classList.toggle("billing-opt-active", period === "annual");
+  const priceEl = document.getElementById("planPrice");
+  if (priceEl) priceEl.textContent = PLAN_PRICES[period]?.display ?? "";
+}
+
 async function handleUpgradeClick() {
   const btn = document.getElementById("upgradeBtn");
   if (btn) { btn.disabled = true; btn.textContent = "Redirecting…"; }
@@ -923,18 +939,18 @@ async function handleUpgradeClick() {
     const res  = await fetch(`${BACKEND_URL}/create-checkout-session`, {
       method:  "POST",
       headers: { "Content-Type": "application/json" },
-      body:    JSON.stringify({ userId, userEmail: userId }),
+      body:    JSON.stringify({ userId, userEmail: userId, billingPeriod: selectedBillingPeriod }),
     });
     const data = await res.json();
     if (data.url) {
       window.location.href = data.url;
     } else {
       showToast("CareerCopilot", data.error || "Could not start checkout. Try again.");
-      if (btn) { btn.disabled = false; btn.textContent = "Upgrade to Pro"; }
+      if (btn) { btn.disabled = false; btn.textContent = "Upgrade to Pro →"; }
     }
   } catch {
     showToast("CareerCopilot", "Network error. Please try again.");
-    if (btn) { btn.disabled = false; btn.textContent = "Upgrade to Pro"; }
+    if (btn) { btn.disabled = false; btn.textContent = "Upgrade to Pro →"; }
   }
 }
 
@@ -977,8 +993,11 @@ async function loadUserTier() {
     document.getElementById("planBadgePro").style.display  = userTier === "pro"  ? "" : "none";
     document.getElementById("upgradeBtn").style.display    = userTier === "pro"  ? "none" : "";
     document.getElementById("upgradeNote").style.display   = userTier === "pro"  ? "" : "none";
+    document.getElementById("billingToggle")?.style.setProperty("display", userTier === "pro" ? "none" : "");
     const manageBtn = document.getElementById("manageSubBtn");
     if (manageBtn) manageBtn.style.display = userTier === "pro" ? "" : "none";
+    // Initialise price display to the currently selected billing period
+    selectBilling(selectedBillingPeriod);
     document.getElementById("planCardFree").classList.toggle("plan-card-current", userTier === "free");
     document.getElementById("planCardPro").classList.toggle("plan-card-current",  userTier === "pro");
   } catch { /* non-fatal */ }

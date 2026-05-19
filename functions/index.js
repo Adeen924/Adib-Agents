@@ -1154,10 +1154,13 @@ app.post("/user/tier", async (req, res) => {
 
 // ── Stripe Checkout ───────────────────────────────────────────────────────────
 app.post("/create-checkout-session", async (req, res) => {
-  const { userId, userEmail } = req.body;
+  const { userId, userEmail, billingPeriod } = req.body;
   if (!userId) return res.status(400).json({ error: "userId required" });
 
-  const priceId = process.env.STRIPE_PRO_PRICE_ID;
+  // STRIPE_PRO_MONTHLY_PRICE_ID takes precedence; falls back to STRIPE_PRO_PRICE_ID for existing deployments
+  const priceId = billingPeriod === "annual"
+    ? process.env.STRIPE_PRO_ANNUAL_PRICE_ID
+    : (process.env.STRIPE_PRO_MONTHLY_PRICE_ID || process.env.STRIPE_PRO_PRICE_ID);
   if (!priceId) return res.status(500).json({ error: "Stripe price not configured" });
 
   const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
@@ -1268,7 +1271,7 @@ app.get("/watchlist-jobs/:userId", async (req, res) => {
 });
 
 exports.api = functions
-  .runWith({ secrets: ["ANTHROPIC_API_KEY", "STRIPE_SECRET_KEY", "STRIPE_WEBHOOK_SECRET", "STRIPE_PRO_PRICE_ID"] })
+  .runWith({ secrets: ["ANTHROPIC_API_KEY", "STRIPE_SECRET_KEY", "STRIPE_WEBHOOK_SECRET", "STRIPE_PRO_PRICE_ID", "STRIPE_PRO_ANNUAL_PRICE_ID"] })
   .https.onRequest(app);
 
 // ── Push notification sender ──────────────────────────────────────────────────

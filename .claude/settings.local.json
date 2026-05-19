@@ -22,7 +22,9 @@
       "Bash(firebase functions:log --only dailyJobSearch --project adib-job-agent)",
       "Bash(gcloud logging *)",
       "Bash(Get-ChildItem -Path \"C:\\\\Users\\\\amazl\\\\Documents\\\\GitHub\\\\Adib-Agents\" -Recurse -Directory)",
-      "Bash(Select-Object -ExpandProperty FullName)"
+      "Bash(Select-Object -ExpandProperty FullName)",
+      "Bash(firebase functions:secrets:set STRIPE_PRO_PRICE_ID)",
+      "Bash(firebase functions:secrets:set STRIPE_PRO_ANNUAL_PRICE_ID)"
     ]
   }
 }

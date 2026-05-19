@@ -273,7 +273,7 @@
               <div class="plan-card-header">
                 <div>
                   <div class="plan-name">Pro <span class="pro-crown">✨</span></div>
-                  <div class="plan-price" id="planPrice">$9.99 / month</div>
+                  <div class="plan-price" id="planPrice"><!-- set by billing toggle --></div>
                 </div>
                 <span class="plan-active-badge plan-active-badge-pro" id="planBadgePro" style="display:none">Current plan</span>
               </div>
@@ -284,6 +284,11 @@
                 <li>✓ Up to 50 target companies</li>
                 <li>✓ Everything in Free</li>
               </ul>
+              <!-- Billing period toggle (hidden once already subscribed) -->
+              <div class="billing-toggle" id="billingToggle">
+                <button class="billing-opt billing-opt-active" id="billingMonthly" onclick="selectBilling('monthly')">Monthly</button>
+                <button class="billing-opt" id="billingAnnual" onclick="selectBilling('annual')">Annual <span class="billing-save-badge">Save more</span></button>
+              </div>
               <button class="btn btn-gold" id="upgradeBtn" style="margin-top:16px;width:100%">
                 Upgrade to Pro →
               </button>
