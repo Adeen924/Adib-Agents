@@ -592,12 +592,14 @@ async function openJobDetail(jobId, source) {
           <button class="btn btn-gold" onclick="generateJobDoc('resume')">📄 Create Tailored Resume</button>
           <button class="btn btn-gold" onclick="generateJobDoc('cover-letter')">✉️ Create Cover Letter</button>
           <button class="btn btn-ghost" onclick="generateJobDoc('interview')">🎯 Prep for Interview</button>
+          <button class="btn btn-ghost" onclick="networkForRole()">🔗 Find Connections</button>
         </div>
       </div>
 
       ${renderJobDocSection("resume",       "Tailored Resume",  j.tailoredResume,  j.tailoredResumeAt)}
       ${renderJobDocSection("cover-letter", "Cover Letter",     j.coverLetter,     j.coverLetterAt)}
-      ${renderJobDocSection("interview",    "Interview Prep",   j.interviewPrep,   j.interviewPrepAt)}`;
+      ${renderJobDocSection("interview",    "Interview Prep",   j.interviewPrep,   j.interviewPrepAt)}
+      ${renderNetworkingSection(j.networkingContacts, j.networkingStrategy, j.networkingAt)}`;
   } catch (err) {
     body.innerHTML = `<div class="panel-loading">Failed to load job: ${escapeHtml(err.message)}</div>`;
   }
@@ -665,6 +667,115 @@ async function generateJobDoc(type) {
   } catch (err) {
     section.innerHTML = `<div style="padding:16px;color:var(--danger)">${escapeHtml(err.message)}</div>`;
   }
+}
+
+function renderNetworkingSection(contacts, strategy, networkingAt) {
+  if (!contacts || contacts.length === 0) {
+    return `<div id="jd-networking-section" style="display:none"></div>`;
+  }
+  const ts = networkingAt?._seconds
+    ? new Date(networkingAt._seconds * 1000).toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })
+    : null;
+
+  const typeLabels = { recruiter: "Recruiter", hiring_manager: "Hiring Manager", team_member: "Team Member", alumni: "Alumni", peer: "Peer" };
+  const scoreClass = s => s >= 75 ? "fit-score-high" : s >= 50 ? "fit-score-mid" : "fit-score-low";
+
+  const cards = contacts.map((c, i) => `
+    <div class="nc-card">
+      <div class="nc-card-header">
+        <div>
+          <div class="nc-name">${escapeHtml(c.name || "Unknown")}</div>
+          <div class="nc-title">${escapeHtml(c.title || "")}${c.type ? ` · <span class="nc-type-badge">${typeLabels[c.type] || c.type}</span>` : ""}</div>
+        </div>
+        ${typeof c.score === "number" ? `<span class="fit-score ${scoreClass(c.score)}" style="flex-shrink:0">${c.score}</span>` : ""}
+      </div>
+      ${c.why ? `<div class="nc-why">${escapeHtml(c.why)}</div>` : ""}
+      ${Array.isArray(c.sharedSignals) && c.sharedSignals.length ? `
+      <div class="nc-signals">
+        ${c.sharedSignals.map(s => `<span class="nc-signal-tag">${escapeHtml(s)}</span>`).join("")}
+      </div>` : ""}
+      ${c.messageDraft ? `
+      <div class="nc-message-section">
+        <div class="nc-message-label">Outreach Draft</div>
+        <textarea class="nc-message-textarea" id="nc-msg-${i}" rows="5">${escapePre(c.messageDraft)}</textarea>
+        <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">
+          <button class="btn btn-ghost" style="padding:5px 12px;font-size:0.8rem" onclick="copyNetworkMsg(${i})">Copy Message</button>
+          ${c.linkedinSearch ? `<a href="https://www.linkedin.com/search/results/people/?keywords=${encodeURIComponent(c.linkedinSearch)}" target="_blank" rel="noopener" class="btn btn-ghost" style="padding:5px 12px;font-size:0.8rem">Find on LinkedIn ↗</a>` : ""}
+        </div>
+      </div>` : ""}
+    </div>`).join("");
+
+  return `
+    <div class="jd-doc-section" id="jd-networking-section">
+      <div class="jd-doc-header">
+        <span class="jd-section-label" style="margin:0">Networking Copilot</span>
+        <div style="display:flex;gap:8px;align-items:center">
+          ${ts ? `<span style="font-size:0.75rem;color:var(--text-muted)">Generated ${ts}</span>` : ""}
+          <button class="btn btn-ghost" style="padding:5px 12px;font-size:0.8rem" onclick="networkForRole()">↻ Refresh</button>
+        </div>
+      </div>
+      <div style="padding:20px">
+        ${strategy ? `<div class="nc-strategy">${escapeHtml(strategy)}</div>` : ""}
+        <div class="nc-cards-list">${cards}</div>
+      </div>
+    </div>`;
+}
+
+async function networkForRole() {
+  if (!currentJob?.id) return;
+  const section = document.getElementById("jd-networking-section");
+  if (section) {
+    section.style.display = "";
+    section.innerHTML = `
+      <div class="jd-doc-header">
+        <span class="jd-section-label" style="margin:0">Networking Copilot</span>
+      </div>
+      <div style="padding:28px;text-align:center">
+        <div class="nc-loading-steps" id="nc-loading-steps">
+          <div class="nc-step nc-step-active">Analyzing the role and company…</div>
+          <div class="nc-step">Searching for recruiters and team members…</div>
+          <div class="nc-step">Ranking strategic contacts…</div>
+          <div class="nc-step">Drafting personalized messages…</div>
+        </div>
+      </div>`;
+
+    let stepIdx = 0;
+    const stepTimer = setInterval(() => {
+      stepIdx++;
+      const steps = document.querySelectorAll(".nc-step");
+      steps.forEach((s, i) => {
+        s.classList.toggle("nc-step-active", i === stepIdx);
+        s.classList.toggle("nc-step-done", i < stepIdx);
+      });
+      if (stepIdx >= steps.length - 1) clearInterval(stepTimer);
+    }, 5000);
+
+    try {
+      const res  = await fetch(`${BACKEND_URL}/jobs/${currentJob.id}/network`, {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({ userId }),
+      });
+      clearInterval(stepTimer);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Analysis failed");
+
+      currentJob.networkingContacts = data.contacts || [];
+      currentJob.networkingStrategy = data.strategy || "";
+      const wrapper = document.createElement("div");
+      wrapper.innerHTML = renderNetworkingSection(data.contacts, data.strategy, null);
+      section.replaceWith(wrapper.firstElementChild);
+    } catch (err) {
+      clearInterval(stepTimer);
+      section.innerHTML = `<div style="padding:16px;color:var(--danger)">${escapeHtml(err.message)}</div>`;
+    }
+  }
+}
+
+function copyNetworkMsg(idx) {
+  const el = document.getElementById(`nc-msg-${idx}`);
+  if (!el) return;
+  navigator.clipboard.writeText(el.value).then(() => showToast("CareerCopilot", "Message copied to clipboard."));
 }
 
 function copyJobDoc(type) {

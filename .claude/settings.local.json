@@ -20,7 +20,9 @@
       "Bash(export GOOGLE_APPLICATION_CREDENTIALS=\"C:/Users/Adibm/Downloads/firebase-key.json\")",
       "Bash(firebase functions:log --project adib-job-agent)",
       "Bash(firebase functions:log --only dailyJobSearch --project adib-job-agent)",
-      "Bash(gcloud logging *)"
+      "Bash(gcloud logging *)",
+      "Bash(Get-ChildItem -Path \"C:\\\\Users\\\\amazl\\\\Documents\\\\GitHub\\\\Adib-Agents\" -Recurse -Directory)",
+      "Bash(Select-Object -ExpandProperty FullName)"
     ]
   }
 }

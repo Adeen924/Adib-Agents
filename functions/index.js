@@ -928,6 +928,93 @@ ${job.description || ""}`,
   }
 });
 
+app.post("/jobs/:jobId/network", async (req, res) => {
+  const { userId } = req.body;
+  if (!userId) return res.status(400).json({ error: "userId required" });
+  try {
+    const [jobDoc, kbDoc] = await Promise.all([
+      db.collection("jobs").doc(req.params.jobId).get(),
+      db.collection("knowledge").doc(userId).get(),
+    ]);
+    if (!jobDoc.exists) throw new Error("Job not found");
+    const job = { id: jobDoc.id, ...jobDoc.data() };
+    const kb  = kbDoc.exists ? kbDoc.data() : {};
+
+    const backgroundParts = [
+      kb.currentPosition && `Current: ${kb.currentPosition}`,
+      kb.previousPositions && `Previous: ${kb.previousPositions}`,
+      kb.education && `Education: ${kb.education}`,
+      kb.skills && `Skills: ${kb.skills}`,
+    ].filter(Boolean);
+    const background = backgroundParts.join(" | ") || (kb.resume ? kb.resume.slice(0, 600) : "");
+
+    const response = await anthropic.messages.create({
+      model:      "claude-sonnet-4-6",
+      max_tokens: 3000,
+      tools:      [{ type: "web_search_20250305", name: "web_search", max_uses: 3 }],
+      messages: [{
+        role:    "user",
+        content: `You are a networking strategist helping a job seeker strategically contact the right people at ${job.company || "the target company"} for a ${job.title || "role"} position.
+
+Use web search to find real people at this company:
+1. Search for recruiters or talent acquisition staff at ${job.company}
+2. Search for engineering managers, team leads, or hiring staff relevant to "${job.title}" at ${job.company}
+
+CANDIDATE BACKGROUND:
+${background || "Not provided"}
+
+JOB:
+Role: ${job.title || ""}
+Company: ${job.company || ""}
+Location: ${job.location || ""}
+${job.description ? `Description:\n${job.description.slice(0, 600)}` : ""}
+
+Based on your research, identify the 5 most strategic people for this candidate to contact. For each, write a personalized LinkedIn message (under 120 words) that:
+- Opens with a specific genuine hook (shared background, their work, or role context)
+- Does NOT say "I'm applying" — frames the outreach as seeking advice or insight
+- Ends with a single soft ask (brief call, insight, or introduction)
+- Feels human and specific, NOT like a template
+
+Respond with ONLY a valid JSON object, no text before or after:
+{
+  "contacts": [
+    {
+      "name": "Full Name",
+      "title": "Their Job Title",
+      "linkedinSearch": "name company search query to find them",
+      "type": "recruiter|hiring_manager|team_member|alumni|peer",
+      "score": 85,
+      "why": "2-sentence explanation of why contacting this person is valuable",
+      "sharedSignals": ["signal 1", "signal 2"],
+      "messageDraft": "Hi [Name], ..."
+    }
+  ],
+  "strategy": "2-3 sentence recommended outreach strategy and order"
+}`,
+      }],
+    });
+
+    const rawText = response.content.filter(b => b.type === "text").map(b => b.text).join("").trim();
+    let networking;
+    try {
+      const jsonMatch = rawText.match(/\{[\s\S]*\}/);
+      networking = JSON.parse(jsonMatch ? jsonMatch[0] : rawText);
+    } catch {
+      throw new Error("Could not parse networking results — please try again.");
+    }
+
+    await jobDoc.ref.update({
+      networkingContacts: networking.contacts || [],
+      networkingStrategy: networking.strategy || "",
+      networkingAt:       admin.firestore.FieldValue.serverTimestamp(),
+    });
+    res.json(networking);
+  } catch (err) {
+    console.error("network error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.get("/jobs/:userId", async (req, res) => {
   try {
     const snap = await db.collection("jobs").where("userId", "==", req.params.userId).get();
