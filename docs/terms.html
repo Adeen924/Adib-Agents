@@ -1,0 +1,514 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Terms of Service — CareerCopilot</title>
+  <link rel="stylesheet" href="style.css" />
+  <style>
+    body { background: var(--bg); color: var(--text); }
+
+    .privacy-page {
+      min-height: 100vh;
+      padding: 48px 24px 80px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+
+    .privacy-topbar {
+      width: 100%;
+      max-width: 760px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 48px;
+    }
+
+    .privacy-logo {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      text-decoration: none;
+    }
+    .privacy-logo .logo-icon {
+      width: 34px;
+      height: 34px;
+      background: var(--gold-glow);
+      border: 1.5px solid var(--gold);
+      border-radius: 9px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1rem;
+    }
+    .privacy-logo .logo-text { font-size: 0.95rem; font-weight: 700; color: var(--text); }
+
+    .privacy-back {
+      font-size: 0.82rem;
+      color: var(--text-muted);
+      text-decoration: none;
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      padding: 6px 14px;
+      transition: border-color 0.2s, color 0.2s;
+    }
+    .privacy-back:hover { border-color: var(--gold); color: var(--gold); }
+
+    .privacy-doc { width: 100%; max-width: 760px; }
+
+    .privacy-title {
+      font-size: 2rem;
+      font-weight: 800;
+      color: var(--text);
+      margin-bottom: 6px;
+      line-height: 1.2;
+    }
+    .privacy-meta {
+      font-size: 0.82rem;
+      color: var(--text-muted);
+      margin-bottom: 40px;
+      padding-bottom: 28px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .privacy-highlight {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-left: 3px solid var(--gold);
+      border-radius: 8px;
+      padding: 16px 18px;
+      margin-bottom: 28px;
+      font-size: 0.88rem;
+      color: var(--text-muted);
+      line-height: 1.65;
+    }
+
+    .privacy-toc {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 22px 26px;
+      margin-bottom: 40px;
+    }
+    .privacy-toc-title {
+      font-size: 0.75rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.07em;
+      color: var(--text-muted);
+      margin-bottom: 14px;
+    }
+    .privacy-toc ol {
+      list-style: decimal;
+      padding-left: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .privacy-toc a { font-size: 0.875rem; color: var(--gold); text-decoration: none; }
+    .privacy-toc a:hover { text-decoration: underline; }
+
+    .privacy-section {
+      margin-bottom: 44px;
+      scroll-margin-top: 24px;
+    }
+    .privacy-section h2 {
+      font-size: 1.15rem;
+      font-weight: 700;
+      color: var(--text);
+      margin-bottom: 16px;
+      padding-bottom: 10px;
+      border-bottom: 1px solid var(--border);
+    }
+    .privacy-section p {
+      font-size: 0.9rem;
+      color: var(--text-muted);
+      line-height: 1.75;
+      margin-bottom: 14px;
+    }
+    .privacy-section p:last-child { margin-bottom: 0; }
+    .privacy-section ul, .privacy-section ol {
+      padding-left: 22px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      margin-bottom: 14px;
+    }
+    .privacy-section li {
+      font-size: 0.9rem;
+      color: var(--text-muted);
+      line-height: 1.65;
+    }
+    .privacy-section strong { color: var(--text); font-weight: 600; }
+
+    .privacy-contact-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 24px 28px;
+      margin-top: 8px;
+    }
+    .privacy-contact-card p { margin-bottom: 6px; }
+    .privacy-contact-card a { color: var(--gold); text-decoration: none; }
+    .privacy-contact-card a:hover { text-decoration: underline; }
+
+    .privacy-footer {
+      width: 100%;
+      max-width: 760px;
+      margin-top: 48px;
+      padding-top: 24px;
+      border-top: 1px solid var(--border);
+      font-size: 0.8rem;
+      color: var(--text-muted);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+    .privacy-footer a { color: var(--text-muted); text-decoration: none; }
+    .privacy-footer a:hover { color: var(--gold); }
+
+    @media (max-width: 600px) {
+      .privacy-title { font-size: 1.5rem; }
+      .privacy-topbar { margin-bottom: 32px; }
+    }
+  </style>
+</head>
+<body class="privacy-page">
+
+  <div class="privacy-topbar">
+    <a class="privacy-logo" href="index.html">
+      <div class="logo-icon">✦</div>
+      <span class="logo-text">CareerCopilot</span>
+    </a>
+    <a class="privacy-back" href="index.html">← Back to Sign In</a>
+  </div>
+
+  <div class="privacy-doc">
+
+    <h1 class="privacy-title">Terms of Service</h1>
+    <p class="privacy-meta">
+      Effective date: May 19, 2026 &nbsp;·&nbsp; Last updated: May 19, 2026
+    </p>
+
+    <div class="privacy-highlight">
+      <strong>Please read these Terms carefully.</strong> By creating an account or using CareerCopilot, you agree to be bound by these Terms of Service. If you do not agree, do not use the platform.
+    </div>
+
+    <div class="privacy-toc">
+      <div class="privacy-toc-title">Contents</div>
+      <ol>
+        <li><a href="#t1">Acceptance of Terms</a></li>
+        <li><a href="#t2">Description of Service</a></li>
+        <li><a href="#t3">Account Registration</a></li>
+        <li><a href="#t4">Subscriptions and Payment</a></li>
+        <li><a href="#t5">Acceptable Use</a></li>
+        <li><a href="#t6">AI-Generated Content</a></li>
+        <li><a href="#t7">Your Content and Data</a></li>
+        <li><a href="#t8">Intellectual Property</a></li>
+        <li><a href="#t9">Third-Party Services</a></li>
+        <li><a href="#t10">Disclaimer of Warranties</a></li>
+        <li><a href="#t11">Limitation of Liability</a></li>
+        <li><a href="#t12">Indemnification</a></li>
+        <li><a href="#t13">Termination</a></li>
+        <li><a href="#t14">Governing Law and Disputes</a></li>
+        <li><a href="#t15">Changes to These Terms</a></li>
+        <li><a href="#t16">Contact Us</a></li>
+      </ol>
+    </div>
+
+    <!-- 1 -->
+    <div class="privacy-section" id="t1">
+      <h2>1. Acceptance of Terms</h2>
+      <p>
+        These Terms of Service ("Terms") constitute a legally binding agreement between you ("User," "you," or "your") and CareerCopilot ("we," "us," or "our") governing your access to and use of the CareerCopilot platform, including all features, content, and functionality available at our website (the "Service").
+      </p>
+      <p>
+        By creating an account — whether through email and password or a third-party sign-in provider such as Google — you confirm that you have read, understood, and agree to be bound by these Terms and our <a href="privacy.html" style="color:var(--gold);text-decoration:none" target="_blank">Privacy Policy</a>, which is incorporated herein by reference.
+      </p>
+      <p>
+        If you are using CareerCopilot on behalf of an organization or employer, you represent and warrant that you have the authority to bind that organization to these Terms.
+      </p>
+    </div>
+
+    <!-- 2 -->
+    <div class="privacy-section" id="t2">
+      <h2>2. Description of Service</h2>
+      <p>
+        CareerCopilot is an AI-powered job search platform that provides the following features, subject to your subscription tier:
+      </p>
+      <ul>
+        <li>Automated job discovery across job boards, company career pages, and other public sources</li>
+        <li>AI-assisted tailoring of your resume to match specific job descriptions</li>
+        <li>AI-generated cover letters personalized for individual job postings</li>
+        <li>AI-generated interview preparation materials based on job descriptions and your background</li>
+        <li>Professional networking suggestions, connection discovery, and outreach drafting assistance</li>
+        <li>Application tracking and job search management tools</li>
+        <li>Notification delivery via browser push, email, and SMS</li>
+      </ul>
+      <p>
+        The Service is intended to assist — not replace — your own judgment in career decision-making. All AI-generated content should be reviewed by you before use. We make no guarantee of job placement, interview invitations, or employment outcomes.
+      </p>
+    </div>
+
+    <!-- 3 -->
+    <div class="privacy-section" id="t3">
+      <h2>3. Account Registration</h2>
+      <p>
+        To use CareerCopilot, you must create an account. You agree to:
+      </p>
+      <ul>
+        <li>Provide accurate, current, and complete information during registration</li>
+        <li>Maintain the security of your password and account credentials</li>
+        <li>Notify us immediately of any unauthorized access to your account</li>
+        <li>Be solely responsible for all activity that occurs under your account</li>
+        <li>Not create more than one account per person, or create an account on behalf of someone else without their consent</li>
+      </ul>
+      <p>
+        You must be at least 16 years of age to create an account. By registering, you represent that you meet this requirement.
+      </p>
+      <p>
+        We reserve the right to suspend or terminate accounts that contain false information, violate these Terms, or are otherwise used in an abusive or fraudulent manner.
+      </p>
+    </div>
+
+    <!-- 4 -->
+    <div class="privacy-section" id="t4">
+      <h2>4. Subscriptions and Payment</h2>
+      <p>
+        CareerCopilot offers a free tier and a paid Pro subscription. By upgrading to Pro, you agree to the following:
+      </p>
+      <p><strong>Billing</strong></p>
+      <ul>
+        <li>Subscription fees are billed in advance on a monthly or annual basis, as selected at checkout</li>
+        <li>All payments are processed securely by Stripe. Your payment details are not stored on our servers</li>
+        <li>By providing a payment method, you authorize us to charge the applicable subscription fee on a recurring basis until you cancel</li>
+      </ul>
+      <p><strong>Free Trial</strong></p>
+      <ul>
+        <li>We may offer a free trial period for the Pro plan. At the end of the trial, your payment method will be automatically charged unless you cancel before the trial ends</li>
+      </ul>
+      <p><strong>Cancellation and Refunds</strong></p>
+      <ul>
+        <li>You may cancel your subscription at any time through the Account panel or Stripe's billing portal</li>
+        <li>Cancellation takes effect at the end of your current billing period — you will retain Pro access until that date</li>
+        <li>We do not offer refunds for partial billing periods, except as required by applicable law</li>
+        <li>If you believe you were charged in error, contact us within 30 days of the charge</li>
+      </ul>
+      <p><strong>Price Changes</strong></p>
+      <ul>
+        <li>We reserve the right to change subscription pricing with at least 30 days' advance notice. Continued use of the Pro plan after a price change constitutes acceptance of the new pricing</li>
+      </ul>
+    </div>
+
+    <!-- 5 -->
+    <div class="privacy-section" id="t5">
+      <h2>5. Acceptable Use</h2>
+      <p>
+        You agree to use CareerCopilot only for lawful purposes and in accordance with these Terms. You agree not to:
+      </p>
+      <ul>
+        <li>Use the Service to submit false, misleading, or fraudulent job applications or misrepresent your qualifications to employers</li>
+        <li>Use automated scripts, bots, or other tools to access or interact with the Service beyond the features we provide</li>
+        <li>Attempt to reverse engineer, decompile, or otherwise extract source code from the platform</li>
+        <li>Upload content that is illegal, harmful, defamatory, obscene, or infringes on the intellectual property rights of others</li>
+        <li>Attempt to gain unauthorized access to any part of the Service, its servers, or any system connected to the Service</li>
+        <li>Use the Service in any manner that could damage, disable, overburden, or impair its functionality</li>
+        <li>Resell, sublicense, or otherwise commercially exploit the Service without our written consent</li>
+        <li>Upload personally identifiable information of others (including references or colleagues) without their consent</li>
+      </ul>
+      <p>
+        Violation of this section may result in immediate termination of your account without refund.
+      </p>
+    </div>
+
+    <!-- 6 -->
+    <div class="privacy-section" id="t6">
+      <h2>6. AI-Generated Content</h2>
+      <p>
+        CareerCopilot uses artificial intelligence — specifically the Anthropic Claude API — to generate resumes, cover letters, interview preparation materials, and networking messages. By using these features, you acknowledge and agree that:
+      </p>
+      <ul>
+        <li><strong>You are responsible for reviewing all AI-generated content</strong> before using it in any job application, interview, or professional communication</li>
+        <li>AI-generated content may contain inaccuracies, hallucinations, or statements that do not accurately reflect your experience or qualifications — you must verify all factual claims before submitting them to an employer</li>
+        <li>Submitting AI-generated content that misrepresents your qualifications may constitute fraud and is solely your responsibility</li>
+        <li>We make no warranty that AI-generated content will be effective, error-free, or appropriate for any particular employer or role</li>
+        <li>CareerCopilot shall not be liable for any consequences arising from your use of AI-generated content in job applications or professional communications</li>
+      </ul>
+      <p>
+        You retain ownership of the content you upload (your resume, preferences, and profile data). By using the AI features, you grant us a limited, non-exclusive license to process your content through our AI provider for the sole purpose of generating the requested output.
+      </p>
+    </div>
+
+    <!-- 7 -->
+    <div class="privacy-section" id="t7">
+      <h2>7. Your Content and Data</h2>
+      <p>
+        You retain ownership of all content you upload to CareerCopilot, including your resume, profile information, and job preferences ("Your Content"). By uploading Your Content, you grant CareerCopilot a limited, worldwide, non-exclusive, royalty-free license to store, process, and use Your Content solely to provide and improve the Service for you.
+      </p>
+      <p>
+        We do not claim ownership of Your Content and do not use it for advertising purposes. We do not sell Your Content to third parties. See our <a href="privacy.html" style="color:var(--gold);text-decoration:none" target="_blank">Privacy Policy</a> for full details on how your data is handled.
+      </p>
+      <p>
+        You represent and warrant that You have the right to upload Your Content and that it does not violate the rights of any third party.
+      </p>
+    </div>
+
+    <!-- 8 -->
+    <div class="privacy-section" id="t8">
+      <h2>8. Intellectual Property</h2>
+      <p>
+        CareerCopilot and its original content, features, functionality, design, code, and branding are and will remain the exclusive property of CareerCopilot and its licensors. Our trademarks and trade dress may not be used in connection with any product or service without our prior written consent.
+      </p>
+      <p>
+        Nothing in these Terms grants you a right to use our name, logo, or other proprietary information without our express written consent. All rights not expressly granted to you are reserved by CareerCopilot.
+      </p>
+    </div>
+
+    <!-- 9 -->
+    <div class="privacy-section" id="t9">
+      <h2>9. Third-Party Services</h2>
+      <p>
+        The Service integrates with third-party platforms and services, including Google Firebase, Anthropic, and Stripe. Your use of these services is subject to their respective terms of service and privacy policies. CareerCopilot is not responsible for the practices, content, or availability of any third-party service.
+      </p>
+      <p>
+        The Service may also surface links to third-party job postings, company career pages, and external websites. We do not endorse, control, or assume responsibility for the content or accuracy of any third-party website or job listing. Applying to jobs through external links is at your own discretion.
+      </p>
+    </div>
+
+    <!-- 10 -->
+    <div class="privacy-section" id="t10">
+      <h2>10. Disclaimer of Warranties</h2>
+      <p>
+        THE SERVICE IS PROVIDED ON AN "AS IS" AND "AS AVAILABLE" BASIS WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, NON-INFRINGEMENT, OR UNINTERRUPTED OR ERROR-FREE OPERATION.
+      </p>
+      <p>
+        We do not warrant that:
+      </p>
+      <ul>
+        <li>The Service will meet your specific requirements or expectations</li>
+        <li>Job matches discovered by the AI will be accurate, current, or suitable for you</li>
+        <li>AI-generated content will be free from errors or appropriate for submission to employers</li>
+        <li>The Service will be available at all times or free from interruptions, bugs, or security vulnerabilities</li>
+        <li>Using the Service will result in job interviews, offers, or employment</li>
+      </ul>
+    </div>
+
+    <!-- 11 -->
+    <div class="privacy-section" id="t11">
+      <h2>11. Limitation of Liability</h2>
+      <p>
+        TO THE MAXIMUM EXTENT PERMITTED BY APPLICABLE LAW, CAREERCOP ILOT AND ITS OFFICERS, DIRECTORS, EMPLOYEES, AND AGENTS SHALL NOT BE LIABLE FOR ANY INDIRECT, INCIDENTAL, SPECIAL, CONSEQUENTIAL, OR PUNITIVE DAMAGES, INCLUDING BUT NOT LIMITED TO LOSS OF PROFITS, DATA, GOODWILL, OR OTHER INTANGIBLE LOSSES, ARISING OUT OF OR RELATED TO:
+      </p>
+      <ul>
+        <li>Your use of or inability to use the Service</li>
+        <li>Any content generated by AI features of the Service</li>
+        <li>Any employment decisions made by you or an employer in connection with the Service</li>
+        <li>Unauthorized access to or alteration of your data</li>
+        <li>Any third-party services or content accessible through the Service</li>
+      </ul>
+      <p>
+        IN NO EVENT SHALL OUR TOTAL LIABILITY TO YOU FOR ALL CLAIMS RELATED TO THE SERVICE EXCEED THE GREATER OF (A) THE AMOUNT YOU PAID TO US IN THE TWELVE MONTHS PRECEDING THE CLAIM, OR (B) ONE HUNDRED US DOLLARS ($100).
+      </p>
+      <p>
+        Some jurisdictions do not allow the exclusion of certain warranties or limitation of liability. In such jurisdictions, our liability shall be limited to the fullest extent permitted by law.
+      </p>
+    </div>
+
+    <!-- 12 -->
+    <div class="privacy-section" id="t12">
+      <h2>12. Indemnification</h2>
+      <p>
+        You agree to defend, indemnify, and hold harmless CareerCopilot and its officers, directors, employees, and agents from and against any claims, liabilities, damages, judgments, awards, losses, costs, expenses, or fees (including reasonable attorneys' fees) arising out of or relating to:
+      </p>
+      <ul>
+        <li>Your violation of these Terms</li>
+        <li>Your use of the Service, including any AI-generated content you submit to employers</li>
+        <li>Your violation of any third-party rights, including intellectual property or privacy rights</li>
+        <li>Any content you upload to the Service that causes harm to a third party</li>
+      </ul>
+    </div>
+
+    <!-- 13 -->
+    <div class="privacy-section" id="t13">
+      <h2>13. Termination</h2>
+      <p>
+        <strong>By you:</strong> You may close your account at any time by contacting us. Upon closure, your data will be deleted in accordance with our Privacy Policy.
+      </p>
+      <p>
+        <strong>By us:</strong> We reserve the right to suspend or permanently terminate your access to the Service at our sole discretion, with or without notice, for conduct that we believe:
+      </p>
+      <ul>
+        <li>Violates these Terms or our Privacy Policy</li>
+        <li>Is harmful, fraudulent, or deceptive</li>
+        <li>Poses a legal or reputational risk to CareerCopilot or other users</li>
+        <li>Involves non-payment of subscription fees</li>
+      </ul>
+      <p>
+        Upon termination, your right to use the Service ceases immediately. Sections 6, 7, 8, 10, 11, 12, and 14 of these Terms shall survive termination.
+      </p>
+    </div>
+
+    <!-- 14 -->
+    <div class="privacy-section" id="t14">
+      <h2>14. Governing Law and Disputes</h2>
+      <p>
+        These Terms shall be governed by and construed in accordance with the laws of the United States, without regard to its conflict of law provisions. For users outside the United States, local mandatory consumer protection laws may also apply.
+      </p>
+      <p>
+        <strong>Informal Resolution:</strong> Before initiating any formal legal proceeding, you agree to first contact us at the address in Section 16 and provide a written description of the dispute. We will attempt to resolve the dispute informally within 30 days.
+      </p>
+      <p>
+        <strong>Arbitration:</strong> If informal resolution fails, any dispute, claim, or controversy arising out of or relating to these Terms or the Service shall be resolved by binding arbitration rather than in court, except that either party may bring individual claims in small claims court.
+      </p>
+      <p>
+        <strong>Class Action Waiver:</strong> You agree that any arbitration or claim will be conducted on an individual basis only, and not as a class, consolidated, or representative action.
+      </p>
+    </div>
+
+    <!-- 15 -->
+    <div class="privacy-section" id="t15">
+      <h2>15. Changes to These Terms</h2>
+      <p>
+        We reserve the right to modify these Terms at any time. When we make material changes, we will:
+      </p>
+      <ul>
+        <li>Update the "Last updated" date at the top of this page</li>
+        <li>Display a notice in the CareerCopilot dashboard on your next login</li>
+        <li>For significant changes, send a notification to your registered email address</li>
+      </ul>
+      <p>
+        Your continued use of the Service after the effective date of any changes constitutes your acceptance of the updated Terms. If you do not agree to the revised Terms, you must stop using the Service and close your account.
+      </p>
+    </div>
+
+    <!-- 16 -->
+    <div class="privacy-section" id="t16">
+      <h2>16. Contact Us</h2>
+      <p>
+        If you have questions about these Terms, please contact us:
+      </p>
+      <div class="privacy-contact-card">
+        <p><strong>CareerCopilot</strong></p>
+        <p>Email: <a href="mailto:legal@careercop ilot.app">legal@careercop ilot.app</a></p>
+        <p style="margin-top:12px;font-size:0.82rem;color:var(--text-muted)">
+          We aim to respond to all legal inquiries within 5 business days.
+        </p>
+      </div>
+    </div>
+
+  </div>
+
+  <div class="privacy-footer">
+    <span>© 2026 CareerCopilot. All rights reserved.</span>
+    <div style="display:flex;gap:16px">
+      <a href="index.html">Sign In</a>
+      <a href="terms.html">Terms of Service</a>
+      <a href="privacy.html">Privacy Policy</a>
+    </div>
+  </div>
+
+</body>
+</html>

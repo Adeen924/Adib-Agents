@@ -62,6 +62,13 @@
 
       <p class="error-msg" id="signUpError"></p>
 
+      <div class="tos-agree">
+        <label class="tos-check-label">
+          <input type="checkbox" id="suTosCheck" />
+          <span>I agree to the <a href="terms.html" target="_blank">Terms of Service</a> and <a href="privacy.html" target="_blank">Privacy Policy</a></span>
+        </label>
+      </div>
+
       <button type="submit" class="btn btn-gold" id="signUpBtn">Create Account</button>
 
       <div class="auth-or-divider"><span>or</span></div>
@@ -79,9 +86,28 @@
       <p class="auth-switch">Already have an account? <a href="#" id="toSignIn">Sign in</a></p>
     </form>
 
-    <p class="login-privacy-note">
-      By signing up, you agree to our <a href="privacy.html" target="_blank">Privacy Policy</a>.
-    </p>
+  </div>
+
+  <!-- ── ToS acceptance modal (shown when a NEW user signs in via Google on the sign-in tab) ── -->
+  <div id="tosOverlay" class="tos-overlay" aria-modal="true" role="dialog" aria-labelledby="tosModalTitle" style="display:none">
+    <div class="tos-modal-card">
+      <div class="tos-modal-icon">✦</div>
+      <h2 class="tos-modal-title" id="tosModalTitle">One Last Step</h2>
+      <p class="tos-modal-body">
+        It looks like this is your first time signing in. Before we create your account, please read and agree to our terms.
+      </p>
+      <div class="tos-agree" style="margin-bottom:0">
+        <label class="tos-check-label">
+          <input type="checkbox" id="tosModalCheck" />
+          <span>I agree to the <a href="terms.html" target="_blank">Terms of Service</a> and <a href="privacy.html" target="_blank">Privacy Policy</a></span>
+        </label>
+      </div>
+      <p class="error-msg" id="tosModalError" style="min-height:18px;margin-top:6px"></p>
+      <div class="tos-modal-actions">
+        <button class="btn btn-gold" id="tosModalAccept">Continue →</button>
+        <button class="btn btn-ghost" id="tosModalCancel">Cancel</button>
+      </div>
+    </div>
   </div>
 
   <!-- Firebase compat SDK -->
@@ -114,7 +140,52 @@
       window.location.href = "dashboard.html";
     }
 
-    // ── Sign In ──────────────────────────────────────────────────────────────
+    // ── ToS checkbox helper ──────────────────────────────────────────────────
+    function tosChecked() {
+      return document.getElementById("suTosCheck").checked;
+    }
+    function requireTos(errorElId) {
+      if (!tosChecked()) {
+        document.getElementById(errorElId).textContent =
+          "You must agree to the Terms of Service and Privacy Policy to continue.";
+        document.getElementById("suTosCheck").closest(".tos-agree").classList.add("tos-shake");
+        setTimeout(() =>
+          document.getElementById("suTosCheck").closest(".tos-agree").classList.remove("tos-shake"), 500);
+        return false;
+      }
+      return true;
+    }
+
+    // ── ToS modal (shown when a new user signs up via the sign-in tab Google button) ──
+    function showTosModal() {
+      return new Promise((resolve) => {
+        const overlay   = document.getElementById("tosOverlay");
+        const checkEl   = document.getElementById("tosModalCheck");
+        const errorEl   = document.getElementById("tosModalError");
+        const acceptBtn = document.getElementById("tosModalAccept");
+        const cancelBtn = document.getElementById("tosModalCancel");
+
+        // Reset state
+        checkEl.checked     = false;
+        errorEl.textContent = "";
+        overlay.style.display = "flex";
+
+        acceptBtn.onclick = () => {
+          if (!checkEl.checked) {
+            errorEl.textContent = "Please check the box above to continue.";
+            return;
+          }
+          overlay.style.display = "none";
+          resolve(true);
+        };
+        cancelBtn.onclick = () => {
+          overlay.style.display = "none";
+          resolve(false);
+        };
+      });
+    }
+
+    // ── Sign In (email/password — no ToS required, already agreed at signup) ─
     document.getElementById("signInForm").addEventListener("submit", async (e) => {
       e.preventDefault();
       const errorEl = document.getElementById("signInError");
@@ -134,12 +205,15 @@
       }
     });
 
-    // ── Sign Up ──────────────────────────────────────────────────────────────
+    // ── Sign Up (email/password — ToS checkbox required) ────────────────────
     document.getElementById("signUpForm").addEventListener("submit", async (e) => {
       e.preventDefault();
       const errorEl = document.getElementById("signUpError");
       const btn     = document.getElementById("signUpBtn");
       errorEl.textContent = "";
+
+      if (!requireTos("signUpError")) return;
+
       const email    = document.getElementById("suEmail").value.trim();
       const password = document.getElementById("suPassword").value;
       const confirm  = document.getElementById("suConfirm").value;
@@ -163,11 +237,33 @@
       }
     });
 
-    // ── Google sign-in (shared for both forms) ───────────────────────────────
-    async function signInWithGoogle() {
+    // ── Google — sign-up tab (ToS checkbox required before OAuth fires) ──────
+    document.getElementById("googleSignUpBtn").addEventListener("click", async () => {
+      if (!requireTos("signUpError")) return;
+      await googleOAuth(false);
+    });
+
+    // ── Google — sign-in tab (ToS modal shown only if the account is new) ────
+    document.getElementById("googleSignInBtn").addEventListener("click", () => googleOAuth(true));
+
+    async function googleOAuth(isSignInTab) {
       const provider = new firebase.auth.GoogleAuthProvider();
       try {
         const cred = await auth.signInWithPopup(provider);
+
+        const isNew = cred.additionalUserInfo && cred.additionalUserInfo.isNewUser;
+        if (isSignInTab && isNew) {
+          // New account created from the sign-in tab — need explicit ToS agreement
+          const agreed = await showTosModal();
+          if (!agreed) {
+            // User declined — remove the account Firebase just created
+            await cred.user.delete();
+            document.getElementById("signInError").textContent =
+              "Account creation cancelled. You must agree to the Terms of Service to use CareerCopilot.";
+            return;
+          }
+        }
+
         await onAuthSuccess(cred.user);
       } catch (err) {
         if (err.code !== "auth/popup-closed-by-user") {
@@ -176,8 +272,6 @@
         }
       }
     }
-    document.getElementById("googleSignInBtn").addEventListener("click", signInWithGoogle);
-    document.getElementById("googleSignUpBtn").addEventListener("click", signInWithGoogle);
 
     // ── Error messages ───────────────────────────────────────────────────────
     function friendlyError(code) {
