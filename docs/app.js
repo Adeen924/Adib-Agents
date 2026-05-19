@@ -551,72 +551,98 @@ async function openJobDetail(jobId, source) {
       </div>
 
       <div class="jd-section">
-        <div class="jd-section-label">Actions</div>
+        <div class="jd-section-label">AI Tools</div>
         <div style="display:flex;gap:10px;flex-wrap:wrap">
-          <button class="btn btn-gold" onclick="createTailoredResume()">
-            📄 Create Tailored Resume
-          </button>
-          <button class="btn btn-ghost" onclick="prepForInterview()">
-            🎯 Prep for Interview
-          </button>
+          <button class="btn btn-gold" onclick="generateJobDoc('resume')">📄 Create Tailored Resume</button>
+          <button class="btn btn-gold" onclick="generateJobDoc('cover-letter')">✉️ Create Cover Letter</button>
+          <button class="btn btn-ghost" onclick="generateJobDoc('interview')">🎯 Prep for Interview</button>
         </div>
-      </div>`;
+      </div>
+
+      ${renderJobDocSection("resume",       "Tailored Resume",  j.tailoredResume,  j.tailoredResumeAt)}
+      ${renderJobDocSection("cover-letter", "Cover Letter",     j.coverLetter,     j.coverLetterAt)}
+      ${renderJobDocSection("interview",    "Interview Prep",   j.interviewPrep,   j.interviewPrepAt)}`;
   } catch (err) {
     body.innerHTML = `<div class="panel-loading">Failed to load job: ${escapeHtml(err.message)}</div>`;
   }
 }
 
-function createTailoredResume() {
-  if (!currentJob) return;
-  const { title = "", company = "", description = "" } = currentJob;
-  pendingResumeDownload = true;
-  showPanel("chat");
-  const input = document.getElementById("messageInput");
-  input.value = `Create a tailored, ATS-optimised resume for this job posting.
-
-CONTENT RULES:
-- Use ONLY my actual experience from my resume in the Knowledge Base. Do NOT fabricate, add, or imply anything that is not already there.
-- Do NOT add new skills, certifications, projects, or accomplishments I do not have.
-- DO reword and reorder my existing bullet points to emphasise skills most relevant to this role.
-- DO naturally incorporate keywords from the job description where they honestly apply to my background.
-
-FORMATTING RULES (critical for ATS scanners — follow exactly):
-- Output plain text only. No markdown, no ** bold **, no _ italic _, no special symbols.
-- Line 1: my full name only.
-- Line 2: email | phone | location (and LinkedIn if available).
-- Section headers in ALL CAPS on their own line: PROFESSIONAL SUMMARY, EXPERIENCE, EDUCATION, SKILLS, etc.
-- Each job: Job Title | Company Name | Month Year - Month Year
-- Bullet points start with a hyphen and space: - like this
-- Single column layout only. No tables, no side columns, no text boxes.
-
-Job Posting:
-Role: ${title}
-Company: ${company}
-Description:
-${description}`;
-  autoResize();
-  document.getElementById("messageInput").focus();
+function renderJobDocSection(type, label, savedText, savedAt) {
+  const ts = savedAt?._seconds
+    ? new Date(savedAt._seconds * 1000).toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })
+    : null;
+  const downloadBtn = (type === "resume" || type === "cover-letter")
+    ? `<button class="btn btn-ghost" style="padding:5px 12px;font-size:0.8rem" onclick="downloadJobDocPDF('${type}')">📄 Download PDF</button>`
+    : "";
+  if (!savedText) return `<div class="jd-doc-section" id="jd-doc-${type}" style="display:none"></div>`;
+  return `
+    <div class="jd-doc-section" id="jd-doc-${type}">
+      <div class="jd-doc-header">
+        <span class="jd-section-label" style="margin:0">${label}</span>
+        <div style="display:flex;gap:8px;align-items:center">
+          ${ts ? `<span style="font-size:0.75rem;color:var(--text-muted)">Generated ${ts}</span>` : ""}
+          ${downloadBtn}
+          <button class="btn btn-ghost" style="padding:5px 12px;font-size:0.8rem" onclick="copyJobDoc('${type}')">Copy</button>
+          <button class="btn btn-ghost" style="padding:5px 12px;font-size:0.8rem" onclick="generateJobDoc('${type}')">↻ Regenerate</button>
+        </div>
+      </div>
+      <pre class="jd-doc-text" id="jd-doc-text-${type}">${escapeHtml(savedText)}</pre>
+    </div>`;
 }
 
-function prepForInterview() {
-  if (!currentJob) return;
-  const { title = "", company = "", description = "" } = currentJob;
-  showPanel("chat");
-  const input = document.getElementById("messageInput");
-  input.value = `Prepare me for my interview at ${company} for the ${title} position.
+async function generateJobDoc(type) {
+  if (!currentJob?.id) return;
+  const section = document.getElementById(`jd-doc-${type}`);
+  section.style.display = "";
+  section.innerHTML = `<div class="panel-loading" style="padding:20px">Generating — this takes about 15 seconds…</div>`;
 
-Please give me all of the following:
+  const endpointMap = { "resume": "tailored-resume", "cover-letter": "cover-letter", "interview": "interview-prep" };
+  const labelMap    = { "resume": "Tailored Resume", "cover-letter": "Cover Letter", "interview": "Interview Prep" };
 
-1. TECHNICAL QUESTIONS (6-8 questions) — specific to the tech stack, tools, and skills mentioned in the job description. For each question, include a short note on how I should approach the answer based on my background.
+  try {
+    const res  = await fetch(`${BACKEND_URL}/jobs/${currentJob.id}/${endpointMap[type]}`, {
+      method:  "POST",
+      headers: { "Content-Type": "application/json" },
+      body:    JSON.stringify({ userId }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "Generation failed");
 
-2. BEHAVIORAL / SITUATIONAL QUESTIONS (5 questions) — using the STAR method (Situation, Task, Action, Result), tailored to what this role cares about.
+    // Update currentJob so regenerate/download works without re-fetching
+    if (type === "resume")       currentJob.tailoredResume = data.text;
+    if (type === "cover-letter") currentJob.coverLetter    = data.text;
+    if (type === "interview")    currentJob.interviewPrep  = data.text;
 
-3. QUESTIONS TO ASK THE INTERVIEWER (4 questions) — thoughtful questions that show genuine interest in the role and company.
+    const downloadBtn = (type === "resume" || type === "cover-letter")
+      ? `<button class="btn btn-ghost" style="padding:5px 12px;font-size:0.8rem" onclick="downloadJobDocPDF('${type}')">📄 Download PDF</button>`
+      : "";
+    section.innerHTML = `
+      <div class="jd-doc-header">
+        <span class="jd-section-label" style="margin:0">${labelMap[type]}</span>
+        <div style="display:flex;gap:8px;align-items:center">
+          ${downloadBtn}
+          <button class="btn btn-ghost" style="padding:5px 12px;font-size:0.8rem" onclick="copyJobDoc('${type}')">Copy</button>
+          <button class="btn btn-ghost" style="padding:5px 12px;font-size:0.8rem" onclick="generateJobDoc('${type}')">↻ Regenerate</button>
+        </div>
+      </div>
+      <pre class="jd-doc-text" id="jd-doc-text-${type}">${escapeHtml(data.text)}</pre>`;
+  } catch (err) {
+    section.innerHTML = `<div style="padding:16px;color:var(--danger)">${escapeHtml(err.message)}</div>`;
+  }
+}
 
-Job Description:
-${description}`;
-  autoResize();
-  document.getElementById("messageInput").focus();
+function copyJobDoc(type) {
+  const el = document.getElementById(`jd-doc-text-${type}`);
+  if (!el) return;
+  navigator.clipboard.writeText(el.textContent).then(() => showToast("CareerCopilot", "Copied to clipboard."));
+}
+
+function downloadJobDocPDF(type) {
+  const el = document.getElementById(`jd-doc-text-${type}`);
+  if (!el) return;
+  const text     = el.textContent;
+  const filename = type === "resume" ? "tailored-resume.pdf" : "cover-letter.pdf";
+  generatePDF(text, filename);
 }
 
 // ── Daily Openings ────────────────────────────────────────────────────────────
@@ -1131,7 +1157,10 @@ function appendResumeDownloadButton() {
 
 function downloadResumeAsPDF() {
   if (!latestResumeText) return;
+  generatePDF(latestResumeText, "tailored-resume.pdf");
+}
 
+function generatePDF(text, filename) {
   const { jsPDF } = window.jspdf;
   const doc = new jsPDF({ orientation: "portrait", unit: "pt", format: "letter" });
 
@@ -1143,7 +1172,7 @@ function downloadResumeAsPDF() {
   let y           = margin;
   let firstLine   = true;
 
-  const clean = latestResumeText
+  const clean = text
     .replace(/\*\*(.+?)\*\*/g, "$1")
     .replace(/\*(.+?)\*/g, "$1")
     .replace(/^#{1,4}\s+/gm, "")
@@ -1207,7 +1236,7 @@ function downloadResumeAsPDF() {
     }
   }
 
-  doc.save("tailored-resume.pdf");
+  doc.save(filename || "document.pdf");
 }
 
 // ── Push Notifications ────────────────────────────────────────────────────────

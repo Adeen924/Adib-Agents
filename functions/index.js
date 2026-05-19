@@ -752,6 +752,154 @@ app.get("/jobs/detail/:jobId", async (req, res) => {
   }
 });
 
+// ── Per-job AI document generation ───────────────────────────────────────────
+
+async function getJobAndResume(jobId, userId) {
+  const [jobDoc, kbDoc] = await Promise.all([
+    db.collection("jobs").doc(jobId).get(),
+    db.collection("knowledge").doc(userId).get(),
+  ]);
+  if (!jobDoc.exists) throw new Error("Job not found");
+  const job    = { id: jobDoc.id, ...jobDoc.data() };
+  const resume = kbDoc.exists ? kbDoc.data().resume || "" : "";
+  return { jobDoc, job, resume };
+}
+
+app.post("/jobs/:jobId/tailored-resume", async (req, res) => {
+  const { userId } = req.body;
+  if (!userId) return res.status(400).json({ error: "userId required" });
+  try {
+    const { jobDoc, job, resume } = await getJobAndResume(req.params.jobId, userId);
+
+    const response = await anthropic.messages.create({
+      model:      "claude-sonnet-4-6",
+      max_tokens: 3000,
+      system: `You are an expert resume writer. Output plain text only — no markdown, no ** bold **, no _ italic _, no special symbols.
+
+Formatting rules (ATS-critical — follow exactly):
+- Line 1: candidate's full name only
+- Line 2: email | phone | location (LinkedIn if available)
+- Section headers in ALL CAPS on their own line: PROFESSIONAL SUMMARY, EXPERIENCE, EDUCATION, SKILLS
+- Each role: Job Title | Company Name | Month Year – Month Year
+- Bullet points start with a hyphen and space: - like this
+- Single column layout only`,
+      messages: [{
+        role: "user",
+        content: `Create a tailored, ATS-optimised resume for this job.
+
+CONTENT RULES:
+- Use ONLY the candidate's actual experience from their resume below. Do NOT fabricate anything.
+- Reword and reorder existing bullet points to emphasise skills most relevant to this role.
+- Naturally incorporate keywords from the job description where they honestly apply.
+
+CANDIDATE'S RESUME:
+${resume || "No resume on file — write a clean template with [PLACEHOLDER] for the candidate to fill in."}
+
+JOB POSTING:
+Role: ${job.title || ""}
+Company: ${job.company || ""}
+${job.description ? `Description:\n${job.description}` : ""}`,
+      }],
+    });
+
+    const text = response.content.filter(b => b.type === "text").map(b => b.text).join("").trim();
+    await jobDoc.ref.update({
+      tailoredResume:   text,
+      tailoredResumeAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+    res.json({ text });
+  } catch (err) {
+    console.error("tailored-resume error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/jobs/:jobId/cover-letter", async (req, res) => {
+  const { userId } = req.body;
+  if (!userId) return res.status(400).json({ error: "userId required" });
+  try {
+    const { jobDoc, job, resume } = await getJobAndResume(req.params.jobId, userId);
+    const tailoredResume = job.tailoredResume || resume;
+
+    const response = await anthropic.messages.create({
+      model:      "claude-sonnet-4-6",
+      max_tokens: 1500,
+      tools:      [{ type: "web_search_20250305", name: "web_search", max_uses: 1 }],
+      messages: [{
+        role: "user",
+        content: `Write a professional cover letter for this job application.
+
+Search the web for "${job.company || ""} mission values culture" to find genuine details about the company — reference them specifically in the letter.
+
+Guidelines:
+- 3–4 paragraphs, professional but warm tone
+- Opening: name the specific role and a genuine reason for interest
+- Body: connect 2–3 specific experiences from the candidate's resume to the role's requirements
+- Company paragraph: reference real mission/values/products from your search
+- Closing: clear call to action, no clichés
+
+Output the letter only — no subject line, no "Here is your cover letter" preamble.
+
+CANDIDATE'S RESUME:
+${tailoredResume || "No resume on file — write a strong template the candidate can personalise."}
+
+JOB POSTING:
+Role: ${job.title || ""}
+Company: ${job.company || ""}
+${job.description ? `Description:\n${job.description}` : ""}`,
+      }],
+    });
+
+    const text = response.content.filter(b => b.type === "text").map(b => b.text).join("").trim();
+    await jobDoc.ref.update({
+      coverLetter:   text,
+      coverLetterAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+    res.json({ text });
+  } catch (err) {
+    console.error("cover-letter error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/jobs/:jobId/interview-prep", async (req, res) => {
+  const { userId } = req.body;
+  if (!userId) return res.status(400).json({ error: "userId required" });
+  try {
+    const { jobDoc, job, resume } = await getJobAndResume(req.params.jobId, userId);
+
+    const response = await anthropic.messages.create({
+      model:      "claude-sonnet-4-6",
+      max_tokens: 2500,
+      messages: [{
+        role: "user",
+        content: `Prepare me for my interview at ${job.company || "this company"} for the ${job.title || "role"} position.
+
+1. TECHNICAL QUESTIONS (6–8) — specific to the tech stack and skills in the job description. For each, include a short note on how to approach the answer.
+
+2. BEHAVIORAL / SITUATIONAL QUESTIONS (5) — STAR method, tailored to what this role values.
+
+3. QUESTIONS TO ASK THE INTERVIEWER (4) — thoughtful questions showing genuine interest.
+
+${resume ? `CANDIDATE BACKGROUND:\n${resume.slice(0, 1500)}` : ""}
+
+JOB DESCRIPTION:
+${job.description || ""}`,
+      }],
+    });
+
+    const text = response.content.filter(b => b.type === "text").map(b => b.text).join("").trim();
+    await jobDoc.ref.update({
+      interviewPrep:   text,
+      interviewPrepAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+    res.json({ text });
+  } catch (err) {
+    console.error("interview-prep error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.get("/jobs/:userId", async (req, res) => {
   try {
     const snap = await db.collection("jobs").where("userId", "==", req.params.userId).get();

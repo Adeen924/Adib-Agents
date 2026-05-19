@@ -810,6 +810,36 @@ select:focus { border-color: var(--gold); box-shadow: 0 0 0 3px var(--gold-glow)
 }
 
 .jd-section { margin-bottom: 28px; }
+
+.jd-doc-section {
+  margin-bottom: 28px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.jd-doc-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 14px 16px;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border);
+}
+.jd-doc-text {
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: "Courier New", Courier, monospace;
+  font-size: 0.82rem;
+  line-height: 1.6;
+  color: var(--text);
+  background: var(--surface);
+  padding: 20px;
+  margin: 0;
+  max-height: 520px;
+  overflow-y: auto;
+}
 .jd-section-label {
   font-size: 0.7rem;
   font-weight: 700;
