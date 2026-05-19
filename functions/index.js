@@ -134,6 +134,70 @@ async function ensureUser(userId) {
   }
 }
 
+// ── Feature usage limits ─────────────────────────────────────────────────────
+// Tracks per-day (free) or per-month (pro) usage in featureUsage/{userId}_{window}
+const FEATURE_LIMITS = {
+  free: {
+    resumes:         { limit: 1,   window: "day"   },
+    cover_letters:   { limit: 1,   window: "day"   },
+    interview_preps: { limit: 1,   window: "day"   },
+    networking:      null,  // pro only
+    searches_manual: null,  // pro only
+  },
+  pro: {
+    resumes:         { limit: 100, window: "month" },
+    cover_letters:   { limit: 100, window: "month" },
+    interview_preps: { limit: 100, window: "month" },
+    networking:      { limit: 20,  window: "month" },
+    searches_manual: { limit: 10,  window: "month" },
+  },
+};
+
+async function enforceFeatureLimit(userId, feature) {
+  const tier      = await getUserTier(userId);
+  const tierRules = FEATURE_LIMITS[tier] || FEATURE_LIMITS.free;
+  const rule      = tierRules[feature];
+
+  if (!rule) {
+    throw new Error("Upgrade to Pro to access this feature.");
+  }
+
+  const now       = new Date();
+  const windowKey = rule.window === "day"
+    ? now.toISOString().slice(0, 10)   // YYYY-MM-DD
+    : now.toISOString().slice(0, 7);   // YYYY-MM
+
+  const ref = db.collection("featureUsage").doc(`${userId}_${windowKey}`);
+
+  await db.runTransaction(async (txn) => {
+    const snap    = await txn.get(ref);
+    const current = snap.exists ? (snap.data()[feature] || 0) : 0;
+
+    if (current >= rule.limit) {
+      const names = {
+        resumes:         "tailored resumes",
+        cover_letters:   "cover letters",
+        interview_preps: "interview prep queries",
+        networking:      "Find Connections requests",
+        searches_manual: "on-demand searches",
+      };
+      const resetMsg = rule.window === "day"
+        ? "Try again tomorrow."
+        : "Resets at the start of next month.";
+      throw new Error(
+        `Limit reached: ${rule.limit} ${names[feature] || feature} ` +
+        `per ${rule.window} (${current}/${rule.limit}). ${resetMsg}`
+      );
+    }
+
+    txn.set(
+      ref,
+      { [feature]: current + 1, userId, updatedAt: admin.firestore.FieldValue.serverTimestamp() },
+      { merge: true }
+    );
+  });
+}
+
 const DEFAULT_SYSTEM = `You are an AI job search agent helping the user land their next role. You help with:
 - Interview preparation and practice questions
 - Salary negotiation advice
@@ -795,6 +859,7 @@ app.post("/jobs/:jobId/tailored-resume", async (req, res) => {
   const { userId } = req.body;
   if (!userId) return res.status(400).json({ error: "userId required" });
   try {
+    await enforceFeatureLimit(userId, "resumes");
     const { jobDoc, job, resume } = await getJobAndResume(req.params.jobId, userId);
 
     const response = await anthropic.messages.create({
@@ -846,6 +911,7 @@ app.post("/jobs/:jobId/cover-letter", async (req, res) => {
   const { userId } = req.body;
   if (!userId) return res.status(400).json({ error: "userId required" });
   try {
+    await enforceFeatureLimit(userId, "cover_letters");
     const { jobDoc, job, resume } = await getJobAndResume(req.params.jobId, userId);
     const tailoredResume = job.tailoredResume || resume;
 
@@ -894,6 +960,7 @@ app.post("/jobs/:jobId/interview-prep", async (req, res) => {
   const { userId } = req.body;
   if (!userId) return res.status(400).json({ error: "userId required" });
   try {
+    await enforceFeatureLimit(userId, "interview_preps");
     const { jobDoc, job, resume } = await getJobAndResume(req.params.jobId, userId);
 
     const response = await anthropic.messages.create({
@@ -932,6 +999,7 @@ app.post("/jobs/:jobId/network", async (req, res) => {
   const { userId } = req.body;
   if (!userId) return res.status(400).json({ error: "userId required" });
   try {
+    await enforceFeatureLimit(userId, "networking");
     const [jobDoc, kbDoc] = await Promise.all([
       db.collection("jobs").doc(req.params.jobId).get(),
       db.collection("knowledge").doc(userId).get(),
@@ -1037,6 +1105,7 @@ app.post("/search/now/:userId", async (req, res) => {
       return res.status(400).json({ error: "No preferences saved yet. Please set your preferences first." });
     }
     await ensureUser(userId);
+    await enforceFeatureLimit(userId, "searches_manual");
     const prefs = prefDoc.data();
     const jobs = await runJobSearch(userId, prefs, tier);
     res.json({ ok: true, jobCount: jobs.length, tier });
