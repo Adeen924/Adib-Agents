@@ -589,17 +589,15 @@ async function openJobDetail(jobId, source) {
       <div class="jd-section">
         <div class="jd-section-label">AI Tools</div>
         <div style="display:flex;gap:10px;flex-wrap:wrap">
-          <button class="btn btn-gold" onclick="generateJobDoc('resume')">📄 Create Tailored Resume</button>
-          <button class="btn btn-gold" onclick="generateJobDoc('cover-letter')">✉️ Create Cover Letter</button>
-          <button class="btn btn-ghost" onclick="generateJobDoc('interview')">🎯 Prep for Interview</button>
+          <button class="btn btn-gold"  onclick="generateJobDoc('resume')">📄 Tailor Resume</button>
+          <button class="btn btn-gold"  onclick="generateJobDoc('cover-letter')">✉️ Cover Letter</button>
           <button class="btn btn-ghost" onclick="networkForRole()">🔗 Find Connections</button>
+          ${j.url && j.url.startsWith("http") ? `<a href="${escapeHtml(j.url)}" target="_blank" rel="noopener" class="btn btn-ghost">Apply ↗</a>` : ""}
+          <button class="btn btn-ghost" onclick="generateJobDoc('interview')">🎯 Prep for Interview</button>
         </div>
       </div>
 
-      ${renderJobDocSection("resume",       "Tailored Resume",  j.tailoredResume,  j.tailoredResumeAt)}
-      ${renderJobDocSection("cover-letter", "Cover Letter",     j.coverLetter,     j.coverLetterAt)}
-      ${renderJobDocSection("interview",    "Interview Prep",   j.interviewPrep,   j.interviewPrepAt)}
-      ${renderNetworkingSection(j.networkingContacts, j.networkingStrategy, j.networkingAt)}`;
+      ${renderAiSections(j)}`;
   } catch (err) {
     body.innerHTML = `<div class="panel-loading">Failed to load job: ${escapeHtml(err.message)}</div>`;
   }
@@ -664,9 +662,40 @@ async function generateJobDoc(type) {
         </div>
       </div>
       <pre class="jd-doc-text" id="jd-doc-text-${type}">${escapePre(data.text)}</pre>`;
+    document.getElementById("jd-ai-sections")?.prepend(section);
   } catch (err) {
     section.innerHTML = `<div style="padding:16px;color:var(--danger)">${escapeHtml(err.message)}</div>`;
   }
+}
+
+function renderAiSections(j) {
+  const defs = [
+    {
+      at: j.tailoredResumeAt,
+      html: renderJobDocSection("resume",       "Tailored Resume",  j.tailoredResume,  j.tailoredResumeAt),
+      hasContent: !!j.tailoredResume,
+    },
+    {
+      at: j.coverLetterAt,
+      html: renderJobDocSection("cover-letter", "Cover Letter",     j.coverLetter,     j.coverLetterAt),
+      hasContent: !!j.coverLetter,
+    },
+    {
+      at: j.interviewPrepAt,
+      html: renderJobDocSection("interview",    "Interview Prep",   j.interviewPrep,   j.interviewPrepAt),
+      hasContent: !!j.interviewPrep,
+    },
+    {
+      at: j.networkingAt,
+      html: renderNetworkingSection(j.networkingContacts, j.networkingStrategy, j.networkingAt),
+      hasContent: !!(j.networkingContacts?.length),
+    },
+  ];
+
+  const withContent    = defs.filter(d => d.hasContent).sort((a, b) => (b.at?._seconds || 0) - (a.at?._seconds || 0));
+  const withoutContent = defs.filter(d => !d.hasContent);
+
+  return `<div id="jd-ai-sections">${[...withContent, ...withoutContent].map(d => d.html).join("")}</div>`;
 }
 
 function renderNetworkingSection(contacts, strategy, networkingAt) {
@@ -764,7 +793,9 @@ async function networkForRole() {
       currentJob.networkingStrategy = data.strategy || "";
       const wrapper = document.createElement("div");
       wrapper.innerHTML = renderNetworkingSection(data.contacts, data.strategy, null);
-      section.replaceWith(wrapper.firstElementChild);
+      const newEl = wrapper.firstElementChild;
+      section.replaceWith(newEl);
+      document.getElementById("jd-ai-sections")?.prepend(newEl);
     } catch (err) {
       clearInterval(stepTimer);
       section.innerHTML = `<div style="padding:16px;color:var(--danger)">${escapeHtml(err.message)}</div>`;
