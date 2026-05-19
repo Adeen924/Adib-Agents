@@ -586,7 +586,7 @@ function renderJobDocSection(type, label, savedText, savedAt) {
           <button class="btn btn-ghost" style="padding:5px 12px;font-size:0.8rem" onclick="generateJobDoc('${type}')">↻ Regenerate</button>
         </div>
       </div>
-      <pre class="jd-doc-text" id="jd-doc-text-${type}">${escapeHtml(savedText)}</pre>
+      <pre class="jd-doc-text" id="jd-doc-text-${type}">${escapePre(savedText)}</pre>
     </div>`;
 }
 
@@ -625,7 +625,7 @@ async function generateJobDoc(type) {
           <button class="btn btn-ghost" style="padding:5px 12px;font-size:0.8rem" onclick="generateJobDoc('${type}')">↻ Regenerate</button>
         </div>
       </div>
-      <pre class="jd-doc-text" id="jd-doc-text-${type}">${escapeHtml(data.text)}</pre>`;
+      <pre class="jd-doc-text" id="jd-doc-text-${type}">${escapePre(data.text)}</pre>`;
   } catch (err) {
     section.innerHTML = `<div style="padding:16px;color:var(--danger)">${escapeHtml(err.message)}</div>`;
   }
@@ -1164,76 +1164,107 @@ function generatePDF(text, filename) {
   const { jsPDF } = window.jspdf;
   const doc = new jsPDF({ orientation: "portrait", unit: "pt", format: "letter" });
 
-  const margin    = 50;
-  const pageW     = doc.internal.pageSize.getWidth();
-  const pageH     = doc.internal.pageSize.getHeight();
-  const contentW  = pageW - margin * 2;
-  const leading   = 13;
-  let y           = margin;
-  let firstLine   = true;
+  const margin   = 54;
+  const pageW    = doc.internal.pageSize.getWidth();
+  const pageH    = doc.internal.pageSize.getHeight();
+  const contentW = pageW - margin * 2;
+  const leading  = 14;
+  let y          = margin;
 
+  function addPage() { doc.addPage(); y = margin; }
+  function checkPage(linesCount) { if (y + linesCount * leading > pageH - margin) addPage(); }
+
+  // Strip markdown formatting, normalise line endings
   const clean = text
     .replace(/\*\*(.+?)\*\*/g, "$1")
     .replace(/\*(.+?)\*/g, "$1")
     .replace(/^#{1,4}\s+/gm, "")
-    .replace(/`(.+?)`/g, "$1");
+    .replace(/`(.+?)`/g, "$1")
+    .replace(/\r\n/g, "\n").replace(/\r/g, "\n");
 
-  const lines = clean.split(/\r?\n/);
+  const lines = clean.split("\n");
+  let isFirstContentLine = true;
 
-  for (const raw of lines) {
-    const line = raw.trimEnd();
+  for (let i = 0; i < lines.length; i++) {
+    const t = lines[i].trimEnd();
 
-    if (y > pageH - margin - leading) {
-      doc.addPage();
-      y = margin;
-    }
-
-    if (line.trim() === "") {
-      y += leading * 0.6;
+    if (t.trim() === "") {
+      y += leading * 0.5;
       continue;
     }
 
-    const t = line.trim();
+    const trimmed = t.trim();
 
-    if (firstLine) {
+    // First non-blank line = candidate name (14pt bold, centred)
+    if (isFirstContentLine) {
+      isFirstContentLine = false;
       doc.setFont("helvetica", "bold");
-      doc.setFontSize(18);
-      doc.text(t, margin, y);
-      y += 22;
-      firstLine = false;
+      doc.setFontSize(14);
+      const wrapped = doc.splitTextToSize(trimmed, contentW);
+      checkPage(wrapped.length);
+      doc.text(wrapped, pageW / 2, y, { align: "center" });
+      y += wrapped.length * 18;
+      continue;
+    }
 
-    } else if (/^\|/.test(t) === false && t === t.toUpperCase() && t.replace(/[^A-Z]/g, "").length > 2) {
-      y += 6;
+    // Second line: contact info (email | phone | location) — 9pt normal centred
+    if (i <= 3 && trimmed.includes("|") && trimmed.includes("@")) {
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(9);
+      const wrapped = doc.splitTextToSize(trimmed, contentW);
+      checkPage(wrapped.length);
+      doc.text(wrapped, pageW / 2, y, { align: "center" });
+      y += wrapped.length * leading + 6;
+      continue;
+    }
+
+    // Section header: all-caps, 3+ letters, no bullet
+    const isHeader = !trimmed.startsWith("-") && !trimmed.startsWith("•") &&
+                     trimmed === trimmed.toUpperCase() &&
+                     trimmed.replace(/[^A-Z]/g, "").length >= 3;
+    if (isHeader) {
+      y += 8;
       doc.setFont("helvetica", "bold");
       doc.setFontSize(10.5);
-      doc.text(t, margin, y);
-      doc.setDrawColor(180);
-      doc.setLineWidth(0.5);
+      checkPage(1);
+      doc.text(trimmed, margin, y);
+      doc.setDrawColor(160);
+      doc.setLineWidth(0.4);
       doc.line(margin, y + 2, pageW - margin, y + 2);
-      y += leading + 4;
+      y += leading + 6;
+      continue;
+    }
 
-    } else if (/^[-•]/.test(t)) {
-      doc.setFont("helvetica", "normal");
-      doc.setFontSize(10);
-      const bullet = "•  " + t.replace(/^[-•]\s*/, "");
-      const wrapped = doc.splitTextToSize(bullet, contentW - 16);
-      doc.text(wrapped, margin + 14, y);
-      y += wrapped.length * leading;
-
-    } else if (t.includes("|")) {
+    // Job title line: contains | but no @
+    if (trimmed.includes("|") && !trimmed.includes("@")) {
       doc.setFont("helvetica", "bold");
       doc.setFontSize(10);
-      const wrapped = doc.splitTextToSize(t, contentW);
+      const wrapped = doc.splitTextToSize(trimmed, contentW);
+      checkPage(wrapped.length);
       doc.text(wrapped, margin, y);
       y += wrapped.length * leading;
+      continue;
+    }
 
-    } else {
+    // Bullet point
+    if (/^[-•]/.test(trimmed)) {
       doc.setFont("helvetica", "normal");
       doc.setFontSize(10);
-      const wrapped = doc.splitTextToSize(t, contentW);
-      doc.text(wrapped, margin, y);
+      const bullet = "•  " + trimmed.replace(/^[-•]\s*/, "");
+      const wrapped = doc.splitTextToSize(bullet, contentW - 16);
+      checkPage(wrapped.length);
+      doc.text(wrapped, margin + 14, y);
       y += wrapped.length * leading;
+      continue;
     }
+
+    // Regular paragraph text
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(10);
+    const wrapped = doc.splitTextToSize(trimmed, contentW);
+    checkPage(wrapped.length);
+    doc.text(wrapped, margin, y);
+    y += wrapped.length * leading;
   }
 
   doc.save(filename || "document.pdf");
@@ -1364,6 +1395,11 @@ function escapeHtml(str) {
   return String(str)
     .replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")
     .replace(/"/g,"&quot;").replace(/\n/g,"<br>");
+}
+// Use for <pre> elements — preserves real newlines so textContent stays intact
+function escapePre(str) {
+  return String(str)
+    .replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
 }
 function escapeAttr(str) {
   return String(str).replace(/'/g,"\\'").replace(/"/g,"&quot;");

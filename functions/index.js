@@ -774,15 +774,17 @@ app.post("/jobs/:jobId/tailored-resume", async (req, res) => {
     const response = await anthropic.messages.create({
       model:      "claude-sonnet-4-6",
       max_tokens: 3000,
-      system: `You are an expert resume writer. Output plain text only — no markdown, no ** bold **, no _ italic _, no special symbols.
+      system: `You are an expert resume writer. Output plain text only — no markdown, no ** bold **, no _ italic _, no special symbols, no HTML.
 
-Formatting rules (ATS-critical — follow exactly):
-- Line 1: candidate's full name only
-- Line 2: email | phone | location (LinkedIn if available)
+Formatting rules (follow exactly — every rule matters for parsing):
+- LINE 1: candidate's full name ONLY — nothing else on this line
+- LINE 2: email | phone | location (LinkedIn URL if available) — contact info ONLY, nothing else
+- LINE 3: blank line
 - Section headers in ALL CAPS on their own line: PROFESSIONAL SUMMARY, EXPERIENCE, EDUCATION, SKILLS
-- Each role: Job Title | Company Name | Month Year – Month Year
+- Each role on its own line: Job Title | Company Name | Month Year – Month Year
 - Bullet points start with a hyphen and space: - like this
-- Single column layout only`,
+- Blank line between sections
+- Single column, no tables, no columns`,
       messages: [{
         role: "user",
         content: `Create a tailored, ATS-optimised resume for this job.
