@@ -17,8 +17,7 @@ const PANELS = {
   jobDetail: document.getElementById("jobDetailView"),
   documents: document.getElementById("documentsView"),
   digest:    document.getElementById("digestView"),
-  prefs:     document.getElementById("prefsView"),
-  knowledge: document.getElementById("knowledgeView"),
+  settings:  document.getElementById("settingsView"),
 };
 
 // ── Interview Prep chat config ────────────────────────────────────────────────
@@ -37,9 +36,10 @@ const INTERVIEW_VIEW = {
 let isLoading              = false;
 let conversationHistory    = [];
 let currentDocType         = "resume";
-let currentJob             = null;   // populated when a job detail page is opened
-let pendingResumeDownload  = false;  // true while waiting for a tailored resume reply
-let latestResumeText       = "";     // stores the last generated resume for PDF export
+let currentJob             = null;
+let pendingResumeDownload  = false;
+let latestResumeText       = "";
+let userTier               = "free";  // loaded on init, used for feature gating
 
 // ── Init ──────────────────────────────────────────────────────────────────────
 function init() {
@@ -51,8 +51,7 @@ function init() {
   document.getElementById("nav-jobs").addEventListener("click",      () => showPanel("jobs"));
   document.getElementById("nav-documents").addEventListener("click", () => showPanel("documents"));
   document.getElementById("nav-digest").addEventListener("click",    () => showPanel("digest"));
-  document.getElementById("nav-prefs").addEventListener("click",     () => showPanel("prefs"));
-  document.getElementById("nav-knowledge").addEventListener("click", () => showPanel("knowledge"));
+  document.getElementById("nav-settings").addEventListener("click",  () => showPanel("settings"));
   document.getElementById("newChatBtn").addEventListener("click",    () => showPanel("chat"));
   document.getElementById("signOutBtn").addEventListener("click",    signOut);
 
@@ -85,6 +84,10 @@ function init() {
   document.getElementById("prefsForm").addEventListener("submit",   savePreferences);
   document.getElementById("kbForm").addEventListener("submit",      saveKnowledge);
 
+  // Settings new sections
+  document.getElementById("saveScheduleBtn").addEventListener("click", saveScheduleSettings);
+  document.getElementById("saveNotifBtn").addEventListener("click",    saveNotificationSettings);
+
   // Target company watchlist
   document.getElementById("addTargetCompanyBtn").addEventListener("click", () => addTargetCompanyRow("", ""));
   document.getElementById("saveWatchlistBtn").addEventListener("click", saveWatchlistCompanies);
@@ -110,10 +113,23 @@ function init() {
   // Resume file upload
   initResumeUpload();
 
+  // Check for post-Stripe-checkout redirect params
+  const urlParams = new URLSearchParams(window.location.search);
+  const subStatus = urlParams.get("subscription");
+  if (subStatus === "success") {
+    showToast("CareerCopilot", "You're now on Pro! Enjoy your 7-day free trial.");
+    // Clean the URL so a refresh doesn't re-show the toast
+    history.replaceState({}, "", window.location.pathname);
+  } else if (subStatus === "canceled") {
+    showToast("CareerCopilot", "Checkout canceled — your plan was not changed.");
+    history.replaceState({}, "", window.location.pathname);
+  }
+
   // Load dashboard on start
   showPanel("dashboard");
   renderChips(INTERVIEW_VIEW.chips);
   loadHistory();
+  loadUserTier();  // fetch tier early so gates are ready before Settings opens
 }
 
 // ── Panel switching ───────────────────────────────────────────────────────────
@@ -127,19 +143,16 @@ function showPanel(name) {
     jobs:      "nav-jobs",
     documents: "nav-documents",
     digest:    "nav-digest",
-    prefs:     "nav-prefs",
-    knowledge: "nav-knowledge",
+    settings:  "nav-settings",
   };
   if (navIds[name]) document.getElementById(navIds[name])?.classList.add("active");
   if (name === "chat") document.querySelector("[data-view='interview']")?.classList.add("active");
 
   if (name === "dashboard")  { loadStats(); loadRecentJobs(); loadApplications(); }
   if (name === "jobs")       loadJobs();
-  // jobDetail loads its own data via openJobDetail()
   if (name === "documents")  loadDocuments(currentDocType);
   if (name === "digest")     loadDigest();
-  if (name === "prefs")      { loadPreferences(); loadTargetCompanies(); }
-  if (name === "knowledge")  loadKnowledge();
+  if (name === "settings")   loadSettings();
 }
 
 // ── Chat ──────────────────────────────────────────────────────────────────────
@@ -234,7 +247,6 @@ async function sendMessage() {
     appendMessage("assistant", data.reply);
     conversationHistory.push({ role: "assistant", content: data.reply });
 
-    // If this was a tailored resume request, add the PDF download button
     if (pendingResumeDownload) {
       pendingResumeDownload = false;
       latestResumeText = data.reply;
@@ -280,7 +292,7 @@ async function loadRecentJobs() {
     const res  = await fetch(`${BACKEND_URL}/jobs/${encodeURIComponent(userId)}`);
     const data = await res.json();
     if (!data.jobs || data.jobs.length === 0) {
-      el.innerHTML = `<div class="empty-table">No jobs found yet — go to Daily Digest and hit "Search Now".</div>`;
+      el.innerHTML = `<div class="empty-table">No jobs found yet — your daily search will run automatically, or upgrade to Pro to search on demand.</div>`;
       return;
     }
     const recent = data.jobs.slice(0, 6);
@@ -401,7 +413,7 @@ async function searchNow() {
     const res  = await fetch(`${BACKEND_URL}/search/now/${encodeURIComponent(userId)}`, { method: "POST" });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || "Search failed");
-    await loadDigest(); // reload the list
+    await loadDigest();
   } catch (err) {
     body.innerHTML = `<div class="panel-loading">Search failed: ${escapeHtml(err.message)}</div>`;
   } finally {
@@ -428,7 +440,7 @@ async function loadJobs() {
     if (jobs.length === 0 && watchlistJobs.length === 0) {
       body.innerHTML = `<div class="digest-empty"><div class="empty-icon">💼</div>
         <h3>No jobs found yet</h3>
-        <p>Set your preferences and hit "Search Now" in the Daily Digest tab, or wait for the 8am daily search.</p></div>`;
+        <p>Set your preferences in Settings — your daily search will run automatically, or upgrade to Pro to search on demand.</p></div>`;
       return;
     }
 
@@ -513,8 +525,6 @@ async function openJobDetail(jobId, source) {
       urlEl.style.display = "none";
     }
 
-
-    // Store job globally so action buttons can access it without passing args through HTML
     currentJob = j;
 
     const fields = [
@@ -577,80 +587,105 @@ async function openJobDetail(jobId, source) {
       </div>
 
       <div class="jd-section">
-        <div class="jd-section-label">Actions</div>
+        <div class="jd-section-label">AI Tools</div>
         <div style="display:flex;gap:10px;flex-wrap:wrap">
-          <button class="btn btn-gold" onclick="createTailoredResume()">
-            📄 Create Tailored Resume
-          </button>
-          <button class="btn btn-ghost" onclick="prepForInterview()">
-            🎯 Prep for Interview
-          </button>
+          <button class="btn btn-gold" onclick="generateJobDoc('resume')">📄 Create Tailored Resume</button>
+          <button class="btn btn-gold" onclick="generateJobDoc('cover-letter')">✉️ Create Cover Letter</button>
+          <button class="btn btn-ghost" onclick="generateJobDoc('interview')">🎯 Prep for Interview</button>
         </div>
-      </div>`;
+      </div>
+
+      ${renderJobDocSection("resume",       "Tailored Resume",  j.tailoredResume,  j.tailoredResumeAt)}
+      ${renderJobDocSection("cover-letter", "Cover Letter",     j.coverLetter,     j.coverLetterAt)}
+      ${renderJobDocSection("interview",    "Interview Prep",   j.interviewPrep,   j.interviewPrepAt)}`;
   } catch (err) {
     body.innerHTML = `<div class="panel-loading">Failed to load job: ${escapeHtml(err.message)}</div>`;
   }
 }
 
-function createTailoredResume() {
-  if (!currentJob) return;
-  const { title = "", company = "", description = "" } = currentJob;
-  pendingResumeDownload = true;
-  showPanel("chat");
-  const input = document.getElementById("messageInput");
-  input.value = `Create a tailored, ATS-optimised resume for this job posting.
-
-CONTENT RULES:
-- Use ONLY my actual experience from my resume in the Knowledge Base. Do NOT fabricate, add, or imply anything that is not already there.
-- Do NOT add new skills, certifications, projects, or accomplishments I do not have.
-- DO reword and reorder my existing bullet points to emphasise skills most relevant to this role.
-- DO naturally incorporate keywords from the job description where they honestly apply to my background.
-
-FORMATTING RULES (critical for ATS scanners — follow exactly):
-- Output plain text only. No markdown, no ** bold **, no _ italic _, no special symbols.
-- Line 1: my full name only.
-- Line 2: email | phone | location (and LinkedIn if available).
-- Section headers in ALL CAPS on their own line: PROFESSIONAL SUMMARY, EXPERIENCE, EDUCATION, SKILLS, etc.
-- Each job: Job Title | Company Name | Month Year - Month Year
-- Bullet points start with a hyphen and space: - like this
-- Single column layout only. No tables, no side columns, no text boxes.
-
-Job Posting:
-Role: ${title}
-Company: ${company}
-Description:
-${description}`;
-  autoResize();
-  document.getElementById("messageInput").focus();
+function renderJobDocSection(type, label, savedText, savedAt) {
+  const ts = savedAt?._seconds
+    ? new Date(savedAt._seconds * 1000).toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })
+    : null;
+  const downloadBtn = (type === "resume" || type === "cover-letter")
+    ? `<button class="btn btn-ghost" style="padding:5px 12px;font-size:0.8rem" onclick="downloadJobDocPDF('${type}')">📄 Download PDF</button>`
+    : "";
+  if (!savedText) return `<div class="jd-doc-section" id="jd-doc-${type}" style="display:none"></div>`;
+  return `
+    <div class="jd-doc-section" id="jd-doc-${type}">
+      <div class="jd-doc-header">
+        <span class="jd-section-label" style="margin:0">${label}</span>
+        <div style="display:flex;gap:8px;align-items:center">
+          ${ts ? `<span style="font-size:0.75rem;color:var(--text-muted)">Generated ${ts}</span>` : ""}
+          ${downloadBtn}
+          <button class="btn btn-ghost" style="padding:5px 12px;font-size:0.8rem" onclick="copyJobDoc('${type}')">Copy</button>
+          <button class="btn btn-ghost" style="padding:5px 12px;font-size:0.8rem" onclick="generateJobDoc('${type}')">↻ Regenerate</button>
+        </div>
+      </div>
+      <pre class="jd-doc-text" id="jd-doc-text-${type}">${escapePre(savedText)}</pre>
+    </div>`;
 }
 
-function prepForInterview() {
-  if (!currentJob) return;
-  const { title = "", company = "", description = "" } = currentJob;
-  showPanel("chat");
-  const input = document.getElementById("messageInput");
-  input.value = `Prepare me for my interview at ${company} for the ${title} position.
+async function generateJobDoc(type) {
+  if (!currentJob?.id) return;
+  const section = document.getElementById(`jd-doc-${type}`);
+  section.style.display = "";
+  section.innerHTML = `<div class="panel-loading" style="padding:20px">Generating — this takes about 15 seconds…</div>`;
 
-Please give me all of the following:
+  const endpointMap = { "resume": "tailored-resume", "cover-letter": "cover-letter", "interview": "interview-prep" };
+  const labelMap    = { "resume": "Tailored Resume", "cover-letter": "Cover Letter", "interview": "Interview Prep" };
 
-1. TECHNICAL QUESTIONS (6-8 questions) — specific to the tech stack, tools, and skills mentioned in the job description. For each question, include a short note on how I should approach the answer based on my background.
+  try {
+    const res  = await fetch(`${BACKEND_URL}/jobs/${currentJob.id}/${endpointMap[type]}`, {
+      method:  "POST",
+      headers: { "Content-Type": "application/json" },
+      body:    JSON.stringify({ userId }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "Generation failed");
 
-2. BEHAVIORAL / SITUATIONAL QUESTIONS (5 questions) — using the STAR method (Situation, Task, Action, Result), tailored to what this role cares about.
+    // Update currentJob so regenerate/download works without re-fetching
+    if (type === "resume")       currentJob.tailoredResume = data.text;
+    if (type === "cover-letter") currentJob.coverLetter    = data.text;
+    if (type === "interview")    currentJob.interviewPrep  = data.text;
 
-3. QUESTIONS TO ASK THE INTERVIEWER (4 questions) — thoughtful questions that show genuine interest in the role and company.
-
-Job Description:
-${description}`;
-  autoResize();
-  document.getElementById("messageInput").focus();
+    const downloadBtn = (type === "resume" || type === "cover-letter")
+      ? `<button class="btn btn-ghost" style="padding:5px 12px;font-size:0.8rem" onclick="downloadJobDocPDF('${type}')">📄 Download PDF</button>`
+      : "";
+    section.innerHTML = `
+      <div class="jd-doc-header">
+        <span class="jd-section-label" style="margin:0">${labelMap[type]}</span>
+        <div style="display:flex;gap:8px;align-items:center">
+          ${downloadBtn}
+          <button class="btn btn-ghost" style="padding:5px 12px;font-size:0.8rem" onclick="copyJobDoc('${type}')">Copy</button>
+          <button class="btn btn-ghost" style="padding:5px 12px;font-size:0.8rem" onclick="generateJobDoc('${type}')">↻ Regenerate</button>
+        </div>
+      </div>
+      <pre class="jd-doc-text" id="jd-doc-text-${type}">${escapePre(data.text)}</pre>`;
+  } catch (err) {
+    section.innerHTML = `<div style="padding:16px;color:var(--danger)">${escapeHtml(err.message)}</div>`;
+  }
 }
 
-// ── Daily Digest ──────────────────────────────────────────────────────────────
+function copyJobDoc(type) {
+  const el = document.getElementById(`jd-doc-text-${type}`);
+  if (!el) return;
+  navigator.clipboard.writeText(el.textContent).then(() => showToast("CareerCopilot", "Copied to clipboard."));
+}
+
+function downloadJobDocPDF(type) {
+  const el = document.getElementById(`jd-doc-text-${type}`);
+  if (!el) return;
+  const text     = el.textContent;
+  const filename = type === "resume" ? "tailored-resume.pdf" : "cover-letter.pdf";
+  generatePDF(text, filename);
+}
+
+// ── Daily Openings ────────────────────────────────────────────────────────────
 async function loadDigest() {
   const body = document.getElementById("digestBody");
   body.innerHTML = '<div class="panel-loading" style="padding:28px">Loading…</div>';
   try {
-    // Fetch jobs and the most recent digest summary in parallel
     const [jobsRes, digestRes] = await Promise.all([
       fetch(`${BACKEND_URL}/jobs/${encodeURIComponent(userId)}`),
       fetch(`${BACKEND_URL}/digest/${encodeURIComponent(userId)}`),
@@ -665,12 +700,11 @@ async function loadDigest() {
       body.innerHTML = `<div class="digest-empty">
         <div class="empty-icon">📬</div>
         <h3>No jobs found yet</h3>
-        <p>Save your preferences then hit "Search Now" above, or wait for the automatic 8am search.</p>
+        <p>Save your preferences in Settings — your daily search runs automatically, or upgrade to Pro to search on demand.</p>
       </div>`;
       return;
     }
 
-    // Show last-searched banner if we have digest history
     let banner = "";
     if (digests.length > 0) {
       const last = digests[0];
@@ -726,6 +760,148 @@ async function deleteDocument(id, type) {
   loadDocuments(type);
 }
 
+// ── Settings ──────────────────────────────────────────────────────────────────
+async function loadSettings() {
+  await Promise.all([
+    loadKnowledge(),
+    loadPreferences(),
+    loadTargetCompanies(),
+    loadSettingsStats(),
+    loadUserTier(),
+  ]);
+  // Wire upgrade/manage buttons each time the panel opens (safe to call multiple times)
+  document.getElementById("upgradeBtn")?.addEventListener("click", handleUpgradeClick);
+  document.getElementById("manageSubBtn")?.addEventListener("click", openBillingPortal);
+}
+
+async function handleUpgradeClick() {
+  const btn = document.getElementById("upgradeBtn");
+  if (btn) { btn.disabled = true; btn.textContent = "Redirecting…"; }
+  try {
+    const res  = await fetch(`${BACKEND_URL}/create-checkout-session`, {
+      method:  "POST",
+      headers: { "Content-Type": "application/json" },
+      body:    JSON.stringify({ userId, userEmail: userId }),
+    });
+    const data = await res.json();
+    if (data.url) {
+      window.location.href = data.url;
+    } else {
+      showToast("CareerCopilot", data.error || "Could not start checkout. Try again.");
+      if (btn) { btn.disabled = false; btn.textContent = "Upgrade to Pro"; }
+    }
+  } catch {
+    showToast("CareerCopilot", "Network error. Please try again.");
+    if (btn) { btn.disabled = false; btn.textContent = "Upgrade to Pro"; }
+  }
+}
+
+async function openBillingPortal() {
+  const btn = document.getElementById("manageSubBtn");
+  if (btn) { btn.disabled = true; btn.textContent = "Opening…"; }
+  try {
+    const res  = await fetch(`${BACKEND_URL}/create-portal-session`, {
+      method:  "POST",
+      headers: { "Content-Type": "application/json" },
+      body:    JSON.stringify({ userId }),
+    });
+    const data = await res.json();
+    if (data.url) {
+      window.location.href = data.url;
+    } else {
+      showToast("CareerCopilot", data.error || "Could not open billing portal.");
+      if (btn) { btn.disabled = false; btn.textContent = "Manage Subscription"; }
+    }
+  } catch {
+    showToast("CareerCopilot", "Network error. Please try again.");
+    if (btn) { btn.disabled = false; btn.textContent = "Manage Subscription"; }
+  }
+}
+
+async function loadUserTier() {
+  try {
+    const res  = await fetch(`${BACKEND_URL}/user/${encodeURIComponent(userId)}`);
+    const data = await res.json();
+    userTier   = data.tier || "free";
+    applyTierGates();
+    // Sidebar badge
+    const badge = document.getElementById("tierBadge");
+    if (badge) {
+      badge.textContent = userTier === "pro" ? "PRO" : "FREE";
+      badge.classList.toggle("pro", userTier === "pro");
+    }
+    // Subscription section
+    document.getElementById("planBadgeFree").style.display = userTier === "free" ? "" : "none";
+    document.getElementById("planBadgePro").style.display  = userTier === "pro"  ? "" : "none";
+    document.getElementById("upgradeBtn").style.display    = userTier === "pro"  ? "none" : "";
+    document.getElementById("upgradeNote").style.display   = userTier === "pro"  ? "" : "none";
+    const manageBtn = document.getElementById("manageSubBtn");
+    if (manageBtn) manageBtn.style.display = userTier === "pro" ? "" : "none";
+    document.getElementById("planCardFree").classList.toggle("plan-card-current", userTier === "free");
+    document.getElementById("planCardPro").classList.toggle("plan-card-current",  userTier === "pro");
+  } catch { /* non-fatal */ }
+}
+
+function applyTierGates() {
+  const isPro = userTier === "pro";
+
+  // Search Now button is pro-only
+  const searchBtn = document.getElementById("searchNowBtn");
+  if (searchBtn) {
+    searchBtn.style.display = isPro ? "" : "none";
+    if (!isPro) {
+      let proNote = document.getElementById("searchNowProNote");
+      if (!proNote) {
+        proNote = document.createElement("p");
+        proNote.id        = "searchNowProNote";
+        proNote.className = "pro-feature-tag";
+        proNote.textContent = "Manual search is a Pro feature — your daily search runs automatically.";
+        searchBtn.parentNode.insertBefore(proNote, searchBtn.nextSibling);
+      }
+    } else {
+      document.getElementById("searchNowProNote")?.remove();
+    }
+  }
+
+  // "Times per day" > 1 is pro-only
+  const timesSelect = document.getElementById("settingTimesPerDay");
+  Array.from(timesSelect.options).forEach(opt => {
+    const val = parseInt(opt.value, 10);
+    if (val > 1) {
+      opt.disabled = !isPro;
+      opt.text = val > 1 && !isPro ? opt.text.replace(" 🔒", "") + " 🔒" : opt.text.replace(" 🔒", "");
+    }
+  });
+  if (!isPro && parseInt(timesSelect.value, 10) > 1) timesSelect.value = "1";
+
+  // Custom job sites is pro-only
+  const customSitesInput = document.getElementById("prefCustomSites");
+  const customSitesGroup = customSitesInput?.closest(".input-group");
+  if (customSitesGroup) {
+    customSitesInput.disabled = !isPro;
+    let proTag = customSitesGroup.querySelector(".pro-feature-tag");
+    if (!isPro && !proTag) {
+      proTag = document.createElement("span");
+      proTag.className = "pro-feature-tag";
+      proTag.textContent = "Pro only — upgrade to add custom sites";
+      customSitesGroup.appendChild(proTag);
+    } else if (isPro && proTag) {
+      proTag.remove();
+    }
+  }
+}
+
+async function loadSettingsStats() {
+  try {
+    const res  = await fetch(`${BACKEND_URL}/stats/${encodeURIComponent(userId)}`);
+    const data = await res.json();
+    document.getElementById("settings-stat-runs").textContent   = data.runs          ?? 0;
+    document.getElementById("settings-stat-tokens").textContent = (data.totalTokens  ?? 0).toLocaleString();
+    document.getElementById("settings-stat-cost").textContent   = data.costFormatted ?? "$0.0000";
+    document.getElementById("settings-stat-items").textContent  = data.runs          ?? 0;
+  } catch { /* non-fatal */ }
+}
+
 // ── Preferences ───────────────────────────────────────────────────────────────
 async function loadPreferences() {
   try {
@@ -742,6 +918,14 @@ async function loadPreferences() {
     if (data.customSites)     document.getElementById("prefCustomSites").value     = data.customSites;
     if (data.postedWithin !== undefined) document.getElementById("prefPostedWithin").value = data.postedWithin;
     if (data.remoteOnly)      document.getElementById("prefRemoteOnly").checked    = data.remoteOnly;
+    // Schedule settings
+    document.getElementById("settingSearchEnabled").checked = data.searchEnabled !== false;
+    if (data.searchTimesPerDay !== undefined) document.getElementById("settingTimesPerDay").value = data.searchTimesPerDay;
+    if (data.searchStartHour  !== undefined) document.getElementById("settingStartHour").value   = data.searchStartHour;
+    if (data.notifTimezone)   document.getElementById("settingTimezone").value    = data.notifTimezone;
+    // Notification contact
+    if (data.notifEmail)      document.getElementById("settingNotifEmail").value  = data.notifEmail;
+    if (data.notifPhone)      document.getElementById("settingNotifPhone").value  = data.notifPhone;
   } catch { /* non-fatal */ }
 }
 
@@ -771,7 +955,50 @@ async function savePreferences(e) {
     status.textContent = "✓ Saved! The agent will use these for your next job search.";
   } catch {
     status.textContent = "Failed to save. Please try again.";
-  } finally { btn.disabled = false; btn.textContent = "Save Preferences"; }
+  } finally { btn.disabled = false; btn.textContent = "Save Job Criteria"; }
+}
+
+async function saveScheduleSettings() {
+  const btn    = document.getElementById("saveScheduleBtn");
+  const status = document.getElementById("scheduleStatus");
+  btn.disabled = true; btn.textContent = "Saving…";
+  try {
+    await fetch(`${BACKEND_URL}/preferences/save`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        userId,
+        searchEnabled:     document.getElementById("settingSearchEnabled").checked,
+        searchTimesPerDay: parseInt(document.getElementById("settingTimesPerDay").value, 10),
+        searchStartHour:   parseInt(document.getElementById("settingStartHour").value, 10),
+        notifTimezone:     document.getElementById("settingTimezone").value,
+      }),
+    });
+    const enabled = document.getElementById("settingSearchEnabled").checked;
+    status.textContent = enabled
+      ? "✓ Schedule saved. The agent will search automatically on your schedule."
+      : "✓ Automated search disabled. You can still search manually from Daily Openings.";
+  } catch {
+    status.textContent = "Failed to save. Please try again.";
+  } finally { btn.disabled = false; btn.textContent = "Save Schedule"; }
+}
+
+async function saveNotificationSettings() {
+  const btn    = document.getElementById("saveNotifBtn");
+  const status = document.getElementById("notifStatus");
+  btn.disabled = true; btn.textContent = "Saving…";
+  try {
+    await fetch(`${BACKEND_URL}/preferences/save`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        userId,
+        notifEmail: document.getElementById("settingNotifEmail").value.trim(),
+        notifPhone: document.getElementById("settingNotifPhone").value.trim(),
+      }),
+    });
+    status.textContent = "✓ Contact info saved.";
+  } catch {
+    status.textContent = "Failed to save. Please try again.";
+  } finally { btn.disabled = false; btn.textContent = "Save Contact Info"; }
 }
 
 // ── Knowledge Base ────────────────────────────────────────────────────────────
@@ -813,7 +1040,7 @@ async function saveKnowledge(e) {
     status.textContent = "✓ Saved! Your resume and background will be used in every search and chat.";
   } catch {
     status.textContent = "Failed to save. Please try again.";
-  } finally { btn.disabled = false; btn.textContent = "Save Knowledge Base"; }
+  } finally { btn.disabled = false; btn.textContent = "Save Profile"; }
 }
 
 // ── Resume file upload ────────────────────────────────────────────────────────
@@ -822,15 +1049,10 @@ function initResumeUpload() {
   const fileInput = document.getElementById("resumeFileInput");
   const removeBtn = document.getElementById("uploadRemove");
 
-  // The zone is a <label> — clicking anywhere on it already opens the file picker.
-  // We only need to handle: file chosen, drag-and-drop, and remove.
-
-  // File picker change
   fileInput.addEventListener("change", () => {
     if (fileInput.files[0]) handleResumeFile(fileInput.files[0]);
   });
 
-  // Drag-and-drop
   zone.addEventListener("dragover", (e) => { e.preventDefault(); zone.classList.add("drag-over"); });
   zone.addEventListener("dragleave", () => zone.classList.remove("drag-over"));
   zone.addEventListener("drop", (e) => {
@@ -840,7 +1062,6 @@ function initResumeUpload() {
     if (file) handleResumeFile(file);
   });
 
-  // Remove button — prevent the label from also opening the file picker
   removeBtn?.addEventListener("click", (e) => {
     e.preventDefault();
     e.stopPropagation();
@@ -881,7 +1102,6 @@ async function handleResumeFile(file) {
 
   showUploadLoading();
   try {
-    // ── Step 1: extract text from file ──────────────────────────────────────
     let text = "";
     if (file.type === "application/pdf" || ext === "pdf") {
       text = await extractPdfText(file);
@@ -897,12 +1117,10 @@ async function handleResumeFile(file) {
     if (!text.trim()) throw new Error("No text could be extracted from this file.");
     document.getElementById("kbResumeText").value = text;
 
-    // Show done state immediately with a "parsing" message
     showUploadDone(file.name, text);
     document.getElementById("uploadWordCount").textContent = "Reading with AI — filling in your details…";
     setKbStatus("⏳ Parsing your resume…", "muted");
 
-    // ── Step 2: send to Claude to extract structured fields ─────────────────
     try {
       const res  = await fetch(`${BACKEND_URL}/knowledge/parse-resume`, {
         method:  "POST",
@@ -912,7 +1130,6 @@ async function handleResumeFile(file) {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Parse failed");
 
-      // Auto-fill all Knowledge Base fields
       if (data.currentPosition)   document.getElementById("kbCurrentPos").value  = data.currentPosition;
       if (data.previousPositions) document.getElementById("kbPrevPos").value     = data.previousPositions;
       if (data.targetRole)        document.getElementById("kbTargetRole").value  = data.targetRole;
@@ -976,135 +1193,152 @@ function appendResumeDownloadButton() {
 
 function downloadResumeAsPDF() {
   if (!latestResumeText) return;
+  generatePDF(latestResumeText, "tailored-resume.pdf");
+}
 
+function generatePDF(text, filename) {
   const { jsPDF } = window.jspdf;
   const doc = new jsPDF({ orientation: "portrait", unit: "pt", format: "letter" });
 
-  const margin    = 50;
-  const pageW     = doc.internal.pageSize.getWidth();
-  const pageH     = doc.internal.pageSize.getHeight();
-  const contentW  = pageW - margin * 2;
-  const leading   = 13;   // line height in points
-  let y           = margin;
-  let firstLine   = true;
+  const margin   = 54;
+  const pageW    = doc.internal.pageSize.getWidth();
+  const pageH    = doc.internal.pageSize.getHeight();
+  const contentW = pageW - margin * 2;
+  const leading  = 14;
+  let y          = margin;
 
-  // Strip any markdown that might have leaked through
-  const clean = latestResumeText
+  function addPage() { doc.addPage(); y = margin; }
+  function checkPage(linesCount) { if (y + linesCount * leading > pageH - margin) addPage(); }
+
+  // Strip markdown formatting, normalise line endings
+  const clean = text
     .replace(/\*\*(.+?)\*\*/g, "$1")
     .replace(/\*(.+?)\*/g, "$1")
     .replace(/^#{1,4}\s+/gm, "")
-    .replace(/`(.+?)`/g, "$1");
+    .replace(/`(.+?)`/g, "$1")
+    .replace(/\r\n/g, "\n").replace(/\r/g, "\n");
 
-  const lines = clean.split(/\r?\n/);
+  const lines = clean.split("\n");
+  let isFirstContentLine = true;
 
-  for (const raw of lines) {
-    const line = raw.trimEnd();
+  for (let i = 0; i < lines.length; i++) {
+    const t = lines[i].trimEnd();
 
-    // New page if needed
-    if (y > pageH - margin - leading) {
-      doc.addPage();
-      y = margin;
-    }
-
-    if (line.trim() === "") {
-      y += leading * 0.6;
+    if (t.trim() === "") {
+      y += leading * 0.5;
       continue;
     }
 
-    const t = line.trim();
+    const trimmed = t.trim();
 
-    if (firstLine) {
-      // Candidate name — large + bold
+    // First non-blank line = candidate name (14pt bold, centred)
+    if (isFirstContentLine) {
+      isFirstContentLine = false;
       doc.setFont("helvetica", "bold");
-      doc.setFontSize(18);
-      doc.text(t, margin, y);
-      y += 22;
-      firstLine = false;
+      doc.setFontSize(14);
+      const wrapped = doc.splitTextToSize(trimmed, contentW);
+      checkPage(wrapped.length);
+      doc.text(wrapped, pageW / 2, y, { align: "center" });
+      y += wrapped.length * 18;
+      continue;
+    }
 
-    } else if (/^\|/.test(t) === false && t === t.toUpperCase() && t.replace(/[^A-Z]/g, "").length > 2) {
-      // ALL-CAPS section header
-      y += 6;
+    // Second line: contact info (email | phone | location) — 9pt normal centred
+    if (i <= 3 && trimmed.includes("|") && trimmed.includes("@")) {
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(9);
+      const wrapped = doc.splitTextToSize(trimmed, contentW);
+      checkPage(wrapped.length);
+      doc.text(wrapped, pageW / 2, y, { align: "center" });
+      y += wrapped.length * leading + 6;
+      continue;
+    }
+
+    // Section header: all-caps, 3+ letters, no bullet
+    const isHeader = !trimmed.startsWith("-") && !trimmed.startsWith("•") &&
+                     trimmed === trimmed.toUpperCase() &&
+                     trimmed.replace(/[^A-Z]/g, "").length >= 3;
+    if (isHeader) {
+      y += 8;
       doc.setFont("helvetica", "bold");
       doc.setFontSize(10.5);
-      doc.text(t, margin, y);
-      doc.setDrawColor(180);
-      doc.setLineWidth(0.5);
+      checkPage(1);
+      doc.text(trimmed, margin, y);
+      doc.setDrawColor(160);
+      doc.setLineWidth(0.4);
       doc.line(margin, y + 2, pageW - margin, y + 2);
-      y += leading + 4;
+      y += leading + 6;
+      continue;
+    }
 
-    } else if (/^[-•]/.test(t)) {
-      // Bullet point — indent
-      doc.setFont("helvetica", "normal");
-      doc.setFontSize(10);
-      const bullet = "•  " + t.replace(/^[-•]\s*/, "");
-      const wrapped = doc.splitTextToSize(bullet, contentW - 16);
-      doc.text(wrapped, margin + 14, y);
-      y += wrapped.length * leading;
-
-    } else if (t.includes("|")) {
-      // Job title | Company | Dates  or  contact line
+    // Job title line: contains | but no @
+    if (trimmed.includes("|") && !trimmed.includes("@")) {
       doc.setFont("helvetica", "bold");
       doc.setFontSize(10);
-      const wrapped = doc.splitTextToSize(t, contentW);
+      const wrapped = doc.splitTextToSize(trimmed, contentW);
+      checkPage(wrapped.length);
       doc.text(wrapped, margin, y);
       y += wrapped.length * leading;
+      continue;
+    }
 
-    } else {
-      // Normal text
+    // Bullet point
+    if (/^[-•]/.test(trimmed)) {
       doc.setFont("helvetica", "normal");
       doc.setFontSize(10);
-      const wrapped = doc.splitTextToSize(t, contentW);
-      doc.text(wrapped, margin, y);
+      const bullet = "•  " + trimmed.replace(/^[-•]\s*/, "");
+      const wrapped = doc.splitTextToSize(bullet, contentW - 16);
+      checkPage(wrapped.length);
+      doc.text(wrapped, margin + 14, y);
       y += wrapped.length * leading;
+      continue;
     }
+
+    // Regular paragraph text
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(10);
+    const wrapped = doc.splitTextToSize(trimmed, contentW);
+    checkPage(wrapped.length);
+    doc.text(wrapped, margin, y);
+    y += wrapped.length * leading;
   }
 
-  doc.save("tailored-resume.pdf");
+  doc.save(filename || "document.pdf");
 }
 
 // ── Push Notifications ────────────────────────────────────────────────────────
 async function initNotifications() {
   try {
-    // Messaging requires the Firebase SDK and browser support
     if (typeof firebase === "undefined" || !firebase.messaging) return;
     if (!("Notification" in window) || !("serviceWorker" in navigator)) return;
-    if (firebaseConfig.vapidKey === "YOUR_VAPID_KEY_HERE") return; // not yet configured
+    if (firebaseConfig.vapidKey === "YOUR_VAPID_KEY_HERE") return;
 
     const messaging = firebase.messaging();
-
-    // Register our service worker explicitly so it works on GitHub Pages sub-paths
     const swReg = await navigator.serviceWorker.register("./firebase-messaging-sw.js");
-
-    // Request permission (browser prompt shown only the first time)
     const permission = await Notification.requestPermission();
     if (permission !== "granted") return;
 
-    // Get the FCM token for this device
     const token = await messaging.getToken({ vapidKey: firebaseConfig.vapidKey, serviceWorkerRegistration: swReg });
     if (!token) return;
 
-    // Save the token to the backend so the server can send this device notifications
     await fetch(`${BACKEND_URL}/notifications/token`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ userId, token }),
     });
 
-    // Handle messages while the app is open (foreground) — show an in-app toast
     messaging.onMessage(payload => {
-      const title = payload.notification?.title || "Adib Agents";
+      const title = payload.notification?.title || "CareerCopilot";
       const body  = payload.notification?.body  || "";
       showToast(title, body);
     });
 
   } catch (err) {
-    // Notifications are non-critical — fail silently
     console.log("Push notifications unavailable:", err.message);
   }
 }
 
 function showToast(title, body) {
-  // Remove any existing toast first
   document.querySelector(".notif-toast")?.remove();
 
   const toast = document.createElement("div");
@@ -1125,7 +1359,6 @@ function showToast(title, body) {
   };
 
   toast.querySelector(".notif-toast-close").addEventListener("click", dismiss);
-  // Auto-dismiss after 6 seconds
   setTimeout(dismiss, 6000);
 }
 
@@ -1185,7 +1418,7 @@ async function saveWatchlistCompanies() {
       body: JSON.stringify({ userId, companies }),
     });
     if (!res.ok) throw new Error("Save failed");
-    status.textContent = "Saved! The agent will check these companies daily at 9am.";
+    status.textContent = "Saved! The agent will check these companies on your search schedule.";
   } catch {
     status.textContent = "Failed to save. Please try again.";
   } finally { btn.disabled = false; btn.textContent = "Save Watchlist"; }
@@ -1198,6 +1431,11 @@ function escapeHtml(str) {
   return String(str)
     .replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")
     .replace(/"/g,"&quot;").replace(/\n/g,"<br>");
+}
+// Use for <pre> elements — preserves real newlines so textContent stays intact
+function escapePre(str) {
+  return String(str)
+    .replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
 }
 function escapeAttr(str) {
   return String(str).replace(/'/g,"\\'").replace(/"/g,"&quot;");

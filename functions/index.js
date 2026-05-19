@@ -4,6 +4,7 @@ const express   = require("express");
 const cors      = require("cors");
 const { Anthropic } = require("@anthropic-ai/sdk");
 const admin     = require("firebase-admin");
+const Stripe    = require("stripe");
 
 admin.initializeApp();
 
@@ -13,6 +14,69 @@ const SITE_URL = "https://adeen924.github.io/Adib-Agents";
 
 const app = express();
 app.use(cors({ origin: true }));
+
+// ── Stripe webhook — must be registered BEFORE express.json() so we get the raw body ──
+app.post("/webhook", express.raw({ type: "application/json" }), async (req, res) => {
+  const stripe        = Stripe(process.env.STRIPE_SECRET_KEY);
+  const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
+  const sig           = req.headers["stripe-signature"];
+
+  let event;
+  try {
+    event = stripe.webhooks.constructEvent(req.body, sig, webhookSecret);
+  } catch (err) {
+    console.error("Stripe webhook signature error:", err.message);
+    return res.status(400).send(`Webhook Error: ${err.message}`);
+  }
+
+  try {
+    switch (event.type) {
+      case "checkout.session.completed": {
+        const session  = event.data.object;
+        const userId   = session.client_reference_id;
+        const custId   = session.customer;
+        if (userId) {
+          await db.collection("users").doc(userId).set(
+            { tier: "pro", stripeCustomerId: custId, tierUpdatedAt: admin.firestore.FieldValue.serverTimestamp() },
+            { merge: true }
+          );
+        }
+        break;
+      }
+      case "customer.subscription.deleted": {
+        const sub    = event.data.object;
+        const custId = sub.customer;
+        const snap   = await db.collection("users").where("stripeCustomerId", "==", custId).limit(1).get();
+        for (const doc of snap.docs) {
+          await doc.ref.set(
+            { tier: "free", tierUpdatedAt: admin.firestore.FieldValue.serverTimestamp() },
+            { merge: true }
+          );
+        }
+        break;
+      }
+      case "customer.subscription.updated": {
+        const sub    = event.data.object;
+        const custId = sub.customer;
+        const active = sub.status === "active" || sub.status === "trialing";
+        const snap   = await db.collection("users").where("stripeCustomerId", "==", custId).limit(1).get();
+        for (const doc of snap.docs) {
+          await doc.ref.set(
+            { tier: active ? "pro" : "free", tierUpdatedAt: admin.firestore.FieldValue.serverTimestamp() },
+            { merge: true }
+          );
+        }
+        break;
+      }
+    }
+  } catch (err) {
+    console.error("Stripe webhook handler error:", err);
+    return res.status(500).send("Internal error");
+  }
+
+  res.json({ received: true });
+});
+
 app.use(express.json({ limit: "2mb" }));
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
@@ -21,12 +85,54 @@ const db = admin.firestore();
 // Sonnet — used for chat and resume parsing
 const INPUT_COST_SONNET  = 3    / 1_000_000;
 const OUTPUT_COST_SONNET = 15   / 1_000_000;
-// Haiku 3.5 (claude-3-5-haiku-20241022) — used for job search, 3-4x cheaper
-const INPUT_COST_HAIKU   = 0.80 / 1_000_000;
-const OUTPUT_COST_HAIKU  = 4    / 1_000_000;
 // Legacy alias used by chat/parse routes
 const INPUT_COST  = INPUT_COST_SONNET;
 const OUTPUT_COST = OUTPUT_COST_SONNET;
+
+// ── Subscription tiers ────────────────────────────────────────────────────────
+// Enforce these limits in runJobSearch and the scheduler.
+// When Stripe is wired up, the webhook sets tier in the `users` collection.
+const TIERS = {
+  free: {
+    label:               "Free",
+    maxSearchesPerDay:   1,
+    webSearchesPerQuery: 1,
+    maxOutputTokens:     4000,
+    customSites:         false,
+    maxTargetCompanies:  3,
+    jobsPerSearch:       5,
+    manualSearch:        false, // scheduled only — no Search Now button
+  },
+  pro: {
+    label:               "Pro",
+    maxSearchesPerDay:   4,
+    webSearchesPerQuery: 3,
+    maxOutputTokens:     4000,
+    customSites:         true,
+    maxTargetCompanies:  50,
+    jobsPerSearch:       5,
+    manualSearch:        true,
+  },
+};
+
+async function getUserTier(userId) {
+  try {
+    const doc = await db.collection("users").doc(userId).get();
+    if (!doc.exists) return "free";
+    return doc.data().tier || "free";
+  } catch {
+    return "free";
+  }
+}
+
+// Ensure a user document exists (called on first sign-in / first search)
+async function ensureUser(userId) {
+  const ref = db.collection("users").doc(userId);
+  const doc = await ref.get();
+  if (!doc.exists) {
+    await ref.set({ tier: "free", email: userId, createdAt: admin.firestore.FieldValue.serverTimestamp() });
+  }
+}
 
 const DEFAULT_SYSTEM = `You are an AI job search agent helping the user land their next role. You help with:
 - Interview preparation and practice questions
@@ -72,60 +178,50 @@ function makeJobFingerprint(job) {
 // Build a specific, criteria-aware search query
 function buildSearchQuery(prefs) {
   const expLabels = {
-    entry:     "entry level 0-2 years experience",
-    mid:       "3-5 years experience",
-    senior:    "senior 5+ years",
-    staff:     "staff principal 10+ years",
-    manager:   "engineering manager director",
-    executive: "VP executive",
+    entry:     "entry level",
+    mid:       "mid level",
+    senior:    "senior",
+    staff:     "staff",
+    manager:   "engineering manager",
+    executive: "executive",
   };
 
-  // Support both old `location` field and new `locationCity`+`locationRadius`
   let locationStr = "";
   if (prefs.remoteOnly) {
     locationStr = "remote";
   } else if (prefs.locationCity) {
     locationStr = prefs.locationRadius
-      ? `near "${prefs.locationCity}" within ${prefs.locationRadius} miles`
-      : `"${prefs.locationCity}"`;
+      ? `near ${prefs.locationCity} within ${prefs.locationRadius} miles`
+      : prefs.locationCity;
   } else if (prefs.location) {
     locationStr = prefs.location;
   }
 
-  const postedStr = prefs.postedWithin ? `posted last ${prefs.postedWithin} days` : "posted this month";
-
-  // Built-in job boards + any custom sites the user added in Preferences
-  const builtInSites = [
-    "site:hiring.cafe",
-    "site:spacecrew.com",
-    "site:linkedin.com/jobs",
-    "site:indeed.com",
-    "site:greenhouse.io",
-    "site:lever.co",
-  ];
-  const customSiteFilters = (prefs.customSites || "")
-    .split(",")
-    .map(s => s.trim().replace(/^https?:\/\//, "").replace(/\/$/, ""))
-    .filter(Boolean)
-    .map(s => `site:${s}`);
-  const allSites = [...customSiteFilters, ...builtInSites].join(" OR ");
-
   const parts = [
-    prefs.jobTitle        ? `"${prefs.jobTitle}"`                  : "software engineer",
+    prefs.jobTitle        ? prefs.jobTitle                         : "software engineer",
     locationStr,
     prefs.experienceLevel ? expLabels[prefs.experienceLevel]       : "",
     prefs.jobType && prefs.jobType !== "any" ? prefs.jobType       : "",
-    prefs.salaryMin       ? `salary ${prefs.salaryMin}`            : "",
     prefs.industries      ? prefs.industries.split(",")[0]?.trim() : "",
-    postedStr,
-    allSites,
+    "jobs",
   ].filter(Boolean).join(" ");
   return parts;
 }
 
-// Run a job search for one user — uses Haiku to reduce cost
-async function runJobSearch(userId, prefs) {
-  const query = buildSearchQuery(prefs);
+function buildJobBoardsContext(prefs, tierConfig) {
+  const builtIn = ["LinkedIn", "Indeed", "Greenhouse", "Lever", "Wellfound", "Builtin"];
+  const custom  = tierConfig.customSites
+    ? (prefs.customSites || "").split(",").map(s => s.trim()).filter(Boolean)
+    : [];
+  return [...custom, ...builtIn].join(", ");
+}
+
+// Run a job search for one user — limits are tier-based
+async function runJobSearch(userId, prefs, tier = "free") {
+  const tierConfig = TIERS[tier] || TIERS.free;
+
+  const query     = buildSearchQuery(prefs);
+  const jobBoards = buildJobBoardsContext(prefs, tierConfig);
 
   // Fetch full knowledge base for multi-dimensional matching
   let resumeSnippet = "";
@@ -178,15 +274,16 @@ async function runJobSearch(userId, prefs) {
     prefs.industries      ? `Industries: ${prefs.industries}`            : "",
     prefs.companySize && prefs.companySize !== "any"
                           ? `Company size: ${prefs.companySize}`         : "",
-    prefs.postedWithin    ? `Posted within last ${prefs.postedWithin} days — REJECT older postings` : "Must be a recent posting",
+    prefs.postedWithin    ? `Prefer jobs posted within last ${prefs.postedWithin} days` : "",
   ].filter(Boolean).join("\n");
 
-  // Tell Claude which jobs were already found this week so it returns different ones
   const seenSection = recentJobs.length > 0
-    ? `\nALREADY FOUND THIS WEEK — do NOT return these again, find DIFFERENT jobs:\n${
+    ? `\nAlready found this week — skip these, find different ones:\n${
         recentJobs.slice(0, 20).map(j => `- ${j.company}: ${j.title}`).join("\n")
       }\n`
     : "";
+
+  const jobCount = tierConfig.jobsPerSearch || 5;
 
   const systemPrompt = `You are an intelligent job matching agent. Search job boards, find real current postings, and evaluate each one across multiple dimensions to surface the best matches for this specific candidate.
 
@@ -211,7 +308,7 @@ Rules:
 - Prefer postings from the last 14 days
 - Skip jobs where the required experience is significantly above the candidate's level
 
-Return exactly 5 jobs as a raw JSON array — no markdown, no explanation, nothing else.
+Return exactly ${jobCount} jobs as a raw JSON array — no markdown, no explanation, nothing else.
 Field rules:
 - fitScore: integer 0-100 reflecting overall match quality across all 10 dimensions (not keyword count)
 - matchReasons: array of 3-5 short strings (1-2 sentences each) explaining WHY this job fits the candidate — reference specific dimensions and the candidate's actual background
@@ -221,13 +318,12 @@ Field rules:
 
 [{"title":"","company":"","location":"","salary":"","experience":"","description":"","url":"","posted":"","fitScore":85,"matchReasons":["Experience Depth: ...","Transferable Skills: ...","Project Similarity: ..."]}]`;
 
-  const userQuery = `Find 5 current job listings. Search: ${query}`;
+  const userQuery = `Find ${jobCount} job listings matching: ${query}`;
 
   const response = await anthropic.messages.create({
-    model:      "claude-sonnet-4-5",
-    max_tokens: 2500,
-    // max_uses:1 limits Claude to ONE web search call — main cost control lever
-    tools:      [{ type: "web_search_20250305", name: "web_search", max_uses: 1 }],
+    model:      "claude-sonnet-4-6",
+    max_tokens: Math.max(tierConfig.maxOutputTokens, 2500),
+    tools:      [{ type: "web_search_20250305", name: "web_search", max_uses: tierConfig.webSearchesPerQuery }],
     system:     systemPrompt,
     messages:   [{ role: "user", content: userQuery }],
   });
@@ -244,8 +340,11 @@ Field rules:
     const clean = raw.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim();
     const match = clean.match(/\[[\s\S]*\]/);
     if (match) jobs = JSON.parse(match[0]);
-  } catch {
-    console.error("Could not parse job search JSON:", raw.slice(0, 300));
+    if (jobs.length === 0) {
+      console.warn(`[runJobSearch] Parsed 0 jobs for ${userId}. stop_reason=${response.stop_reason} raw_preview=${raw.slice(0, 400)}`);
+    }
+  } catch (e) {
+    console.error(`[runJobSearch] JSON parse failed for ${userId}: ${e.message} | raw_preview=${raw.slice(0, 400)}`);
     jobs = [];
   }
 
@@ -355,7 +454,7 @@ app.post("/chat", async (req, res) => {
 
   try {
     const response = await anthropic.messages.create({
-      model:      "claude-sonnet-4-5",
+      model:      "claude-sonnet-4-6",
       max_tokens: 2048,
       system:     fullSystem,
       tools:      [{ type: "web_search_20250305", name: "web_search" }],
@@ -580,24 +679,34 @@ app.get("/preferences/:userId", async (req, res) => {
 app.post("/preferences/save", async (req, res) => {
   const { userId, jobTitle, location, locationCity, locationRadius,
           jobType, salaryMin, experienceLevel, remoteOnly,
-          industries, companySize, postedWithin, customSites } = req.body;
+          industries, companySize, postedWithin, customSites,
+          searchEnabled, searchTimesPerDay, searchStartHour,
+          notifTimezone, notifEmail, notifPhone } = req.body;
   if (!userId) return res.status(400).json({ error: "userId is required" });
+
+  const update = { updatedAt: admin.firestore.FieldValue.serverTimestamp() };
+  // Only include fields that were explicitly sent so partial saves don't overwrite
+  if (jobTitle        !== undefined) update.jobTitle        = jobTitle        || "";
+  if (location        !== undefined) update.location        = location        || "";
+  if (locationCity    !== undefined) update.locationCity    = locationCity    || "";
+  if (locationRadius  !== undefined) update.locationRadius  = locationRadius  || "";
+  if (jobType         !== undefined) update.jobType         = jobType         || "any";
+  if (salaryMin       !== undefined) update.salaryMin       = salaryMin       || "";
+  if (experienceLevel !== undefined) update.experienceLevel = experienceLevel || "";
+  if (remoteOnly      !== undefined) update.remoteOnly      = !!remoteOnly;
+  if (industries      !== undefined) update.industries      = industries      || "";
+  if (companySize     !== undefined) update.companySize     = companySize     || "any";
+  if (postedWithin    !== undefined) update.postedWithin    = postedWithin    || "14";
+  if (customSites     !== undefined) update.customSites     = customSites     || "";
+  if (searchEnabled   !== undefined) update.searchEnabled   = searchEnabled !== false;
+  if (searchTimesPerDay !== undefined) update.searchTimesPerDay = Number(searchTimesPerDay) || 1;
+  if (searchStartHour !== undefined) update.searchStartHour = Number(searchStartHour) ?? 8;
+  if (notifTimezone   !== undefined) update.notifTimezone   = notifTimezone   || "America/Los_Angeles";
+  if (notifEmail      !== undefined) update.notifEmail      = notifEmail      || "";
+  if (notifPhone      !== undefined) update.notifPhone      = notifPhone      || "";
+
   try {
-    await db.collection("preferences").doc(userId).set({
-      jobTitle:        jobTitle        || "",
-      location:        location        || "",   // legacy fallback
-      locationCity:    locationCity    || "",
-      locationRadius:  locationRadius  || "",
-      jobType:         jobType         || "any",
-      salaryMin:       salaryMin       || "",
-      experienceLevel: experienceLevel || "",
-      remoteOnly:      remoteOnly      || false,
-      industries:      industries      || "",
-      companySize:     companySize     || "any",
-      postedWithin:    postedWithin    || "14",
-      customSites:     customSites     || "",
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-    }, { merge: true });
+    await db.collection("preferences").doc(userId).set(update, { merge: true });
     res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: "Failed to save preferences" });
@@ -612,7 +721,7 @@ app.post("/knowledge/parse-resume", async (req, res) => {
 
   try {
     const response = await anthropic.messages.create({
-      model:      "claude-sonnet-4-5",
+      model:      "claude-sonnet-4-6",
       max_tokens: 1024,
       messages: [{
         role:    "user",
@@ -669,6 +778,156 @@ app.get("/jobs/detail/:jobId", async (req, res) => {
   }
 });
 
+// ── Per-job AI document generation ───────────────────────────────────────────
+
+async function getJobAndResume(jobId, userId) {
+  const [jobDoc, kbDoc] = await Promise.all([
+    db.collection("jobs").doc(jobId).get(),
+    db.collection("knowledge").doc(userId).get(),
+  ]);
+  if (!jobDoc.exists) throw new Error("Job not found");
+  const job    = { id: jobDoc.id, ...jobDoc.data() };
+  const resume = kbDoc.exists ? kbDoc.data().resume || "" : "";
+  return { jobDoc, job, resume };
+}
+
+app.post("/jobs/:jobId/tailored-resume", async (req, res) => {
+  const { userId } = req.body;
+  if (!userId) return res.status(400).json({ error: "userId required" });
+  try {
+    const { jobDoc, job, resume } = await getJobAndResume(req.params.jobId, userId);
+
+    const response = await anthropic.messages.create({
+      model:      "claude-sonnet-4-6",
+      max_tokens: 3000,
+      system: `You are an expert resume writer. Output plain text only — no markdown, no ** bold **, no _ italic _, no special symbols, no HTML.
+
+Formatting rules (follow exactly — every rule matters for parsing):
+- LINE 1: candidate's full name ONLY — nothing else on this line
+- LINE 2: email | phone | location (LinkedIn URL if available) — contact info ONLY, nothing else
+- LINE 3: blank line
+- Section headers in ALL CAPS on their own line: PROFESSIONAL SUMMARY, EXPERIENCE, EDUCATION, SKILLS
+- Each role on its own line: Job Title | Company Name | Month Year – Month Year
+- Bullet points start with a hyphen and space: - like this
+- Blank line between sections
+- Single column, no tables, no columns`,
+      messages: [{
+        role: "user",
+        content: `Create a tailored, ATS-optimised resume for this job.
+
+CONTENT RULES:
+- Use ONLY the candidate's actual experience from their resume below. Do NOT fabricate anything.
+- Reword and reorder existing bullet points to emphasise skills most relevant to this role.
+- Naturally incorporate keywords from the job description where they honestly apply.
+
+CANDIDATE'S RESUME:
+${resume || "No resume on file — write a clean template with [PLACEHOLDER] for the candidate to fill in."}
+
+JOB POSTING:
+Role: ${job.title || ""}
+Company: ${job.company || ""}
+${job.description ? `Description:\n${job.description}` : ""}`,
+      }],
+    });
+
+    const text = response.content.filter(b => b.type === "text").map(b => b.text).join("").trim();
+    await jobDoc.ref.update({
+      tailoredResume:   text,
+      tailoredResumeAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+    res.json({ text });
+  } catch (err) {
+    console.error("tailored-resume error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/jobs/:jobId/cover-letter", async (req, res) => {
+  const { userId } = req.body;
+  if (!userId) return res.status(400).json({ error: "userId required" });
+  try {
+    const { jobDoc, job, resume } = await getJobAndResume(req.params.jobId, userId);
+    const tailoredResume = job.tailoredResume || resume;
+
+    const response = await anthropic.messages.create({
+      model:      "claude-sonnet-4-6",
+      max_tokens: 1500,
+      tools:      [{ type: "web_search_20250305", name: "web_search", max_uses: 1 }],
+      messages: [{
+        role: "user",
+        content: `Write a professional cover letter for this job application.
+
+Search the web for "${job.company || ""} mission values culture" to find genuine details about the company — reference them specifically in the letter.
+
+Guidelines:
+- 3–4 paragraphs, professional but warm tone
+- Opening: name the specific role and a genuine reason for interest
+- Body: connect 2–3 specific experiences from the candidate's resume to the role's requirements
+- Company paragraph: reference real mission/values/products from your search
+- Closing: clear call to action, no clichés
+
+Output the letter only — no subject line, no "Here is your cover letter" preamble.
+
+CANDIDATE'S RESUME:
+${tailoredResume || "No resume on file — write a strong template the candidate can personalise."}
+
+JOB POSTING:
+Role: ${job.title || ""}
+Company: ${job.company || ""}
+${job.description ? `Description:\n${job.description}` : ""}`,
+      }],
+    });
+
+    const text = response.content.filter(b => b.type === "text").map(b => b.text).join("").trim();
+    await jobDoc.ref.update({
+      coverLetter:   text,
+      coverLetterAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+    res.json({ text });
+  } catch (err) {
+    console.error("cover-letter error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/jobs/:jobId/interview-prep", async (req, res) => {
+  const { userId } = req.body;
+  if (!userId) return res.status(400).json({ error: "userId required" });
+  try {
+    const { jobDoc, job, resume } = await getJobAndResume(req.params.jobId, userId);
+
+    const response = await anthropic.messages.create({
+      model:      "claude-sonnet-4-6",
+      max_tokens: 2500,
+      messages: [{
+        role: "user",
+        content: `Prepare me for my interview at ${job.company || "this company"} for the ${job.title || "role"} position.
+
+1. TECHNICAL QUESTIONS (6–8) — specific to the tech stack and skills in the job description. For each, include a short note on how to approach the answer.
+
+2. BEHAVIORAL / SITUATIONAL QUESTIONS (5) — STAR method, tailored to what this role values.
+
+3. QUESTIONS TO ASK THE INTERVIEWER (4) — thoughtful questions showing genuine interest.
+
+${resume ? `CANDIDATE BACKGROUND:\n${resume.slice(0, 1500)}` : ""}
+
+JOB DESCRIPTION:
+${job.description || ""}`,
+      }],
+    });
+
+    const text = response.content.filter(b => b.type === "text").map(b => b.text).join("").trim();
+    await jobDoc.ref.update({
+      interviewPrep:   text,
+      interviewPrepAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+    res.json({ text });
+  } catch (err) {
+    console.error("interview-prep error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.get("/jobs/:userId", async (req, res) => {
   try {
     const snap = await db.collection("jobs").where("userId", "==", req.params.userId).get();
@@ -683,17 +942,107 @@ app.get("/jobs/:userId", async (req, res) => {
 app.post("/search/now/:userId", async (req, res) => {
   const { userId } = req.params;
   try {
-    const prefDoc = await db.collection("preferences").doc(userId).get();
+    const [prefDoc, tier] = await Promise.all([
+      db.collection("preferences").doc(userId).get(),
+      getUserTier(userId),
+    ]);
     if (!prefDoc.exists) {
       return res.status(400).json({ error: "No preferences saved yet. Please set your preferences first." });
     }
+    await ensureUser(userId);
     const prefs = prefDoc.data();
-    const jobs = await runJobSearch(userId, prefs);
-    res.json({ ok: true, jobCount: jobs.length });
+    const jobs = await runJobSearch(userId, prefs, tier);
+    res.json({ ok: true, jobCount: jobs.length, tier });
   } catch (err) {
     console.error("Search now error:", err.message, err.stack);
-    // Return the real error so it's visible in the UI for debugging
     res.status(500).json({ error: err.message || "Search failed. Please try again." });
+  }
+});
+
+// ── User / tier management ────────────────────────────────────────────────────
+app.get("/user/:userId", async (req, res) => {
+  const { userId } = req.params;
+  try {
+    await ensureUser(userId);
+    const tier       = await getUserTier(userId);
+    const tierConfig = TIERS[tier] || TIERS.free;
+    res.json({ tier, tierConfig });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to load user" });
+  }
+});
+
+// Admin / Stripe-webhook endpoint — sets a user's tier.
+// Protect this with a shared secret before exposing to the internet.
+// When integrating Stripe: call this from your webhook handler after
+// a checkout.session.completed or customer.subscription.updated event.
+app.post("/user/tier", async (req, res) => {
+  const { userId, tier, secret } = req.body;
+  if (!userId || !tier) return res.status(400).json({ error: "userId and tier required" });
+  if (!["free", "pro"].includes(tier)) return res.status(400).json({ error: "Invalid tier" });
+  // Simple shared-secret guard — set ADMIN_SECRET in your Cloud Functions env vars
+  // to protect this endpoint until you have real Stripe auth in place.
+  if (process.env.ADMIN_SECRET && secret !== process.env.ADMIN_SECRET) {
+    return res.status(403).json({ error: "Forbidden" });
+  }
+  try {
+    await db.collection("users").doc(userId).set(
+      { tier, tierUpdatedAt: admin.firestore.FieldValue.serverTimestamp() },
+      { merge: true }
+    );
+    res.json({ ok: true, tier });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to update tier" });
+  }
+});
+
+// ── Stripe Checkout ───────────────────────────────────────────────────────────
+app.post("/create-checkout-session", async (req, res) => {
+  const { userId, userEmail } = req.body;
+  if (!userId) return res.status(400).json({ error: "userId required" });
+
+  const priceId = process.env.STRIPE_PRO_PRICE_ID;
+  if (!priceId) return res.status(500).json({ error: "Stripe price not configured" });
+
+  const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
+
+  try {
+    const session = await stripe.checkout.sessions.create({
+      mode: "subscription",
+      line_items: [{ price: priceId, quantity: 1 }],
+      client_reference_id: userId,
+      customer_email: userEmail || undefined,
+      subscription_data: { trial_period_days: 7 },
+      success_url: `${SITE_URL}/dashboard.html?subscription=success`,
+      cancel_url:  `${SITE_URL}/dashboard.html?subscription=canceled`,
+    });
+
+    res.json({ url: session.url });
+  } catch (err) {
+    console.error("Stripe checkout error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/create-portal-session", async (req, res) => {
+  const { userId } = req.body;
+  if (!userId) return res.status(400).json({ error: "userId required" });
+
+  try {
+    const userDoc = await db.collection("users").doc(userId).get();
+    const customerId = userDoc.exists ? userDoc.data().stripeCustomerId : null;
+    if (!customerId) return res.status(404).json({ error: "No Stripe customer found for this user" });
+
+    const stripe  = Stripe(process.env.STRIPE_SECRET_KEY);
+    const session = await stripe.billingPortal.sessions.create({
+      customer:   customerId,
+      return_url: `${SITE_URL}/dashboard.html`,
+    });
+
+    res.json({ url: session.url });
+  } catch (err) {
+    console.error("Stripe portal error:", err);
+    res.status(500).json({ error: err.message });
   }
 });
 
@@ -762,7 +1111,9 @@ app.get("/watchlist-jobs/:userId", async (req, res) => {
   }
 });
 
-exports.api = functions.https.onRequest(app);
+exports.api = functions
+  .runWith({ secrets: ["ANTHROPIC_API_KEY", "STRIPE_SECRET_KEY", "STRIPE_WEBHOOK_SECRET", "STRIPE_PRO_PRICE_ID"] })
+  .https.onRequest(app);
 
 // ── Push notification sender ──────────────────────────────────────────────────
 async function sendPushNotification(userId, title, body) {
@@ -835,7 +1186,7 @@ Rules:
   let jobs = [];
   try {
     const response = await anthropic.messages.create({
-      model:      "claude-sonnet-4-5",
+      model:      "claude-sonnet-4-6",
       max_tokens: 3000,
       tools:      [{ type: "web_search_20250305", name: "web_search", max_uses: 3 }],
       system:     systemPrompt,
@@ -893,19 +1244,67 @@ Rules:
   return newJobs.length;
 }
 
-// ── Daily job search — 8am Pacific ───────────────────────────────────────────
+// ── Schedule helpers ──────────────────────────────────────────────────────────
+function getLocalHour(date, timezone) {
+  try {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: timezone,
+      hour: "numeric",
+      hour12: false,
+    }).formatToParts(date);
+    return parseInt(parts.find(p => p.type === "hour").value, 10) % 24;
+  } catch {
+    return date.getUTCHours(); // fallback if timezone is invalid
+  }
+}
+
+function computeSearchHours(prefs) {
+  const startHour   = prefs.searchStartHour   ?? 8;
+  const timesPerDay = Math.min(4, Math.max(1, prefs.searchTimesPerDay ?? 1));
+  const interval    = Math.floor(24 / timesPerDay);
+  const hours = [];
+  for (let i = 0; i < timesPerDay; i++) {
+    hours.push((startHour + i * interval) % 24);
+  }
+  return hours;
+}
+
+// ── Job search — runs every hour, fires per each user's schedule ──────────────
 exports.dailyJobSearch = onSchedule(
-  { schedule: "0 8 * * *", timeZone: "America/Los_Angeles" },
+  { schedule: "0 * * * *", timeZone: "UTC" },
   async () => {
     try {
+      const now       = new Date();
       const prefsSnap = await db.collection("preferences").get();
       if (prefsSnap.empty) return;
+
       for (const doc of prefsSnap.docs) {
         const userId = doc.id;
         const prefs  = doc.data();
+
+        // Skip if user has turned off automated search
+        if (prefs.searchEnabled === false) continue;
+
+        // Fetch user tier and clamp searches/day to tier limit
+        const tier       = await getUserTier(userId);
+        const tierConfig = TIERS[tier] || TIERS.free;
+        const cappedPrefs = {
+          ...prefs,
+          searchTimesPerDay: Math.min(
+            prefs.searchTimesPerDay ?? 1,
+            tierConfig.maxSearchesPerDay
+          ),
+        };
+
+        // Check if the current local hour matches any of this user's search hours
+        const tz        = prefs.notifTimezone || "America/Los_Angeles";
+        const localHour = getLocalHour(now, tz);
+        const searchHrs = computeSearchHours(cappedPrefs);
+        if (!searchHrs.includes(localHour)) continue;
+
         try {
-          await runJobSearch(userId, prefs);
-          console.log(`Daily digest saved for ${userId}`);
+          await runJobSearch(userId, prefs, tier);
+          console.log(`Job search completed for ${userId} (tier: ${tier})`);
         } catch (err) {
           console.error(`Search failed for ${userId}:`, err.message);
         }

@@ -16,7 +16,11 @@
       "Bash(git commit -m 'Daily Digest now shows job cards directly instead of search summaries *)",
       "Bash(git commit -m 'Fix job URL and date display; add Google search fallback *)",
       "Bash(firebase deploy *)",
-      "PowerShell(Get-ChildItem -Path \"C:\\\\Users\\\\amazl\\\\Documents\\\\GitHub\\\\Adib-Agents\" -Recurse -Force | Select-Object -First 100 | Format-Table Name, @{Name=\"Path\";Expression={$_.FullName.Replace\\($PSScriptRoot, \"\"\\).TrimStart\\(\"\\\\\"\\)}})"
+      "PowerShell(Get-ChildItem -Path \"C:\\\\Users\\\\amazl\\\\Documents\\\\GitHub\\\\Adib-Agents\" -Recurse -Force | Select-Object -First 100 | Format-Table Name, @{Name=\"Path\";Expression={$_.FullName.Replace\\($PSScriptRoot, \"\"\\).TrimStart\\(\"\\\\\"\\)}})",
+      "Bash(export GOOGLE_APPLICATION_CREDENTIALS=\"C:/Users/Adibm/Downloads/firebase-key.json\")",
+      "Bash(firebase functions:log --project adib-job-agent)",
+      "Bash(firebase functions:log --only dailyJobSearch --project adib-job-agent)",
+      "Bash(gcloud logging *)"
     ]
   }
 }

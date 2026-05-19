@@ -20,7 +20,7 @@ const messaging = firebase.messaging();
 
 // Background message handler — fires when the app tab is closed or not focused
 messaging.onBackgroundMessage(payload => {
-  const title = payload.notification?.title || "Adib Agents";
+  const title = payload.notification?.title || "CareerCopilot";
   const body  = payload.notification?.body  || "";
   const link  = payload.data?.link          || "/Adib-Agents/dashboard.html";
 

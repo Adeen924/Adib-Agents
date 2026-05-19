@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Adib Agents — Dashboard</title>
+  <title>CareerCopilot — Dashboard</title>
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
@@ -18,7 +18,7 @@
     <div class="sidebar-logo">
       <div class="logo-icon">✦</div>
       <div>
-        <div class="logo-text">Adib Agents</div>
+        <div class="logo-text">CareerCopilot</div>
         <div class="logo-sub">Job Search AI</div>
       </div>
     </div>
@@ -44,15 +44,12 @@
 
       <div class="nav-label" style="margin-top:10px">Daily</div>
       <button class="nav-item" id="nav-digest">
-        <span class="nav-icon">📬</span> Daily Digest
-      </button>
-      <button class="nav-item" id="nav-prefs">
-        <span class="nav-icon">⚙️</span> Preferences
+        <span class="nav-icon">📬</span> Daily Openings
       </button>
 
-      <div class="nav-label" style="margin-top:10px">Me</div>
-      <button class="nav-item" id="nav-knowledge">
-        <span class="nav-icon">🧠</span> Knowledge Base
+      <div class="nav-label" style="margin-top:10px">Account</div>
+      <button class="nav-item" id="nav-settings">
+        <span class="nav-icon">⚙️</span> Settings
       </button>
 
       <div class="nav-label" style="margin-top:10px">Actions</div>
@@ -66,6 +63,7 @@
         <div class="user-avatar" id="userAvatar">?</div>
         <div class="user-info">
           <div class="user-email" id="userEmail">loading…</div>
+        <span class="tier-badge" id="tierBadge">FREE</span>
         </div>
         <button class="sign-out-btn" id="signOutBtn" title="Sign out">↩</button>
       </div>
@@ -224,10 +222,10 @@
     <div id="documentsBody" style="overflow-y:auto"><div class="panel-loading" style="padding:24px">Loading…</div></div>
   </div>
 
-  <!-- ── Daily Digest view ── -->
+  <!-- ── Daily Openings view ── -->
   <div class="main-content panel-view" id="digestView" style="display:none">
     <header class="main-header">
-      <div><h2>Daily Digest</h2><p>Job listings found automatically every morning at 8am Pacific</p></div>
+      <div><h2>Daily Openings</h2><p>Job listings found automatically based on your schedule</p></div>
       <div style="display:flex;align-items:center;gap:12px">
         <button class="btn btn-gold" id="searchNowBtn" style="padding:8px 18px;font-size:0.85rem">🔍 Search Now</button>
         <div class="header-status"><span class="status-dot"></span> Auto-updated</div>
@@ -238,198 +236,380 @@
     </div>
   </div>
 
-  <!-- ── Preferences view ── -->
-  <div class="main-content panel-view" id="prefsView" style="display:none">
+  <!-- ── Settings view (merged Preferences + Knowledge Base + Schedule + Notifications) ── -->
+  <div class="main-content panel-view" id="settingsView" style="display:none">
     <header class="main-header">
-      <div><h2>Preferences</h2><p>The agent uses these to find and match jobs for you every morning</p></div>
+      <div><h2>Settings</h2><p>Manage your profile, job search preferences, and notifications</p></div>
     </header>
-    <div class="panel-body" style="overflow-y:auto">
-      <form class="prefs-form" id="prefsForm" style="max-width:580px">
+    <div style="overflow-y:auto;flex:1">
+      <div class="settings-content">
 
-        <div class="prefs-section-label">Job Criteria</div>
+        <!-- Subscription -->
+        <div class="settings-section">
+          <div class="settings-section-title">Subscription</div>
+          <div class="plan-grid">
 
-        <div class="input-group">
-          <label>Target Job Title / Role</label>
-          <input type="text" id="prefJobTitle" placeholder="e.g. Software Engineer, Product Manager, Data Scientist" />
-        </div>
-
-        <div class="prefs-two-col">
-          <div class="input-group">
-            <label>City or Zip Code</label>
-            <input type="text" id="prefLocationCity" placeholder="e.g. Seattle, WA or 98101" />
-          </div>
-          <div class="input-group">
-            <label>Search Radius</label>
-            <select id="prefLocationRadius">
-              <option value="">Any distance</option>
-              <option value="5">Within 5 miles</option>
-              <option value="10">Within 10 miles</option>
-              <option value="25">Within 25 miles</option>
-              <option value="50">Within 50 miles</option>
-              <option value="100">Within 100 miles</option>
-            </select>
-          </div>
-        </div>
-
-        <div class="prefs-two-col">
-          <div class="input-group">
-            <label>Experience Level</label>
-            <select id="prefExpLevel">
-              <option value="">Any</option>
-              <option value="entry">Entry Level (0-2 yrs)</option>
-              <option value="mid">Mid Level (3-5 yrs)</option>
-              <option value="senior">Senior (5-10 yrs)</option>
-              <option value="staff">Staff / Principal (10+ yrs)</option>
-              <option value="manager">Manager / Director</option>
-              <option value="executive">VP / Executive</option>
-            </select>
-          </div>
-          <div class="input-group">
-            <label>Posted Within</label>
-            <select id="prefPostedWithin">
-              <option value="3">Last 3 days</option>
-              <option value="7">Last 7 days</option>
-              <option value="14" selected>Last 14 days</option>
-              <option value="30">Last 30 days</option>
-              <option value="">Any time</option>
-            </select>
-          </div>
-        </div>
-
-        <div class="prefs-two-col">
-          <div class="input-group">
-            <label>Job Type</label>
-            <select id="prefJobType">
-              <option value="any">Any</option>
-              <option value="full-time">Full-time</option>
-              <option value="part-time">Part-time</option>
-              <option value="contract">Contract</option>
-            </select>
-          </div>
-          <div class="input-group">
-            <label>Company Size</label>
-            <select id="prefCompanySize">
-              <option value="any">Any</option>
-              <option value="startup">Startup (1-50)</option>
-              <option value="small">Small (51-200)</option>
-              <option value="medium">Medium (201-1000)</option>
-              <option value="large">Large (1000+)</option>
-              <option value="enterprise">Enterprise (10,000+)</option>
-            </select>
-          </div>
-        </div>
-
-        <div class="prefs-two-col">
-          <div class="input-group">
-            <label>Minimum Salary</label>
-            <input type="text" id="prefSalaryMin" placeholder="e.g. $120,000" />
-          </div>
-          <div class="input-group" style="justify-content:flex-end;padding-top:22px">
-            <label class="checkbox-label">
-              <input type="checkbox" id="prefRemoteOnly" />
-              Remote positions only
-            </label>
-          </div>
-        </div>
-
-        <div class="input-group">
-          <label>Target Industries <span class="label-hint">— comma separated</span></label>
-          <input type="text" id="prefIndustries" placeholder="e.g. Fintech, Health Tech, SaaS, AI/ML, E-commerce" />
-        </div>
-
-        <div class="input-group">
-          <label>Custom Job Sites <span class="label-hint">— comma separated, the agent will search these too</span></label>
-          <input type="text" id="prefCustomSites" placeholder="e.g. spacecrew.com, wellfound.com, workatastartup.com" />
-        </div>
-
-        <p class="prefs-status" id="prefsStatus"></p>
-        <button type="submit" class="btn btn-gold">Save Preferences</button>
-      </form>
-
-      <!-- Target Company Watchlist -->
-      <div style="max-width:580px;margin-top:40px;border-top:1px solid var(--border);padding-top:28px">
-        <div class="prefs-section-label">Target Company Watchlist</div>
-        <p style="font-size:0.85rem;color:var(--text-muted);margin:0 0 20px">
-          Add companies you really want to work at. Every day at 9am, the agent checks their career pages and surfaces any new openings separately from your daily job search.
-        </p>
-        <div id="targetCompaniesList" style="display:flex;flex-direction:column;gap:10px"></div>
-        <button type="button" class="btn btn-ghost" id="addTargetCompanyBtn"
-          style="margin-top:14px;font-size:0.85rem;padding:8px 18px">
-          + Add Company
-        </button>
-        <div style="margin-top:20px;display:flex;align-items:center;gap:16px;flex-wrap:wrap">
-          <button type="button" class="btn btn-gold" id="saveWatchlistBtn">Save Watchlist</button>
-          <p class="prefs-status" id="watchlistStatus" style="margin:0"></p>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <!-- ── Knowledge Base view ── -->
-  <div class="main-content panel-view" id="knowledgeView" style="display:none">
-    <header class="main-header">
-      <div><h2>Knowledge Base</h2><p>Your background is injected into every chat to personalise responses</p></div>
-    </header>
-    <div class="panel-body" style="overflow-y:auto">
-      <form class="kb-form" id="kbForm">
-
-        <div class="input-group">
-          <label>Your Resume <span class="label-hint">— PDF, DOCX, or TXT · uploaded once, used in every search and chat</span></label>
-
-          <!-- Upload zone — using <label> so clicking anywhere opens the file picker -->
-          <label class="file-upload-zone" id="resumeUploadZone">
-            <input type="file" id="resumeFileInput" accept=".pdf,.docx,.txt" style="display:none" />
-            <div class="upload-idle" id="uploadIdle">
-              <div class="upload-icon-large">📄</div>
-              <div class="upload-title">Drop your resume here</div>
-              <div class="upload-sub">or <span class="upload-link">click to browse</span></div>
-              <div class="upload-hint-small">PDF · DOCX · TXT</div>
-            </div>
-            <div class="upload-loading" id="uploadLoading" style="display:none">
-              <div class="upload-spinner"></div>
-              <div>Reading file…</div>
-            </div>
-            <div class="upload-done" id="uploadDone" style="display:none">
-              <div class="upload-done-icon">✓</div>
-              <div>
-                <div class="upload-done-name" id="uploadFileName">resume.pdf</div>
-                <div class="upload-done-sub" id="uploadWordCount"></div>
+            <!-- Free plan -->
+            <div class="plan-card" id="planCardFree">
+              <div class="plan-card-header">
+                <div>
+                  <div class="plan-name">Free</div>
+                  <div class="plan-price">$0 / month</div>
+                </div>
+                <span class="plan-active-badge" id="planBadgeFree" style="display:none">Current plan</span>
               </div>
-              <button type="button" class="upload-remove" id="uploadRemove" title="Remove">✕</button>
+              <ul class="plan-features">
+                <li>✓ 1 automated search per day</li>
+                <li>✓ 1 web search per query</li>
+                <li>✓ LinkedIn, Indeed, Greenhouse, Lever &amp; more</li>
+                <li>✓ Up to 3 target companies</li>
+                <li>✓ Interview prep chat</li>
+                <li>✓ Resume generation &amp; PDF export</li>
+              </ul>
             </div>
-          </label>
 
-          <!-- Hidden field stores the extracted text -->
-          <textarea id="kbResumeText" style="display:none"></textarea>
+            <!-- Pro plan -->
+            <div class="plan-card plan-card-pro" id="planCardPro">
+              <div class="plan-card-header">
+                <div>
+                  <div class="plan-name">Pro <span class="pro-crown">✨</span></div>
+                  <div class="plan-price" id="planPrice">$9.99 / month</div>
+                </div>
+                <span class="plan-active-badge plan-active-badge-pro" id="planBadgePro" style="display:none">Current plan</span>
+              </div>
+              <ul class="plan-features">
+                <li>✓ Up to 4 automated searches per day</li>
+                <li>✓ 3 web searches per query — deeper results</li>
+                <li>✓ All Free boards + your custom job sites</li>
+                <li>✓ Up to 50 target companies</li>
+                <li>✓ Everything in Free</li>
+              </ul>
+              <button class="btn btn-gold" id="upgradeBtn" style="margin-top:16px;width:100%">
+                Upgrade to Pro →
+              </button>
+              <button class="btn btn-secondary" id="manageSubBtn" style="margin-top:12px;width:100%;display:none">
+                Manage Subscription
+              </button>
+              <p class="plan-upgrade-note" id="upgradeNote" style="display:none">
+                You're on Pro — manage or cancel your subscription above.
+              </p>
+            </div>
+
+          </div>
         </div>
 
-        <div class="input-group">
-          <label>Current Position</label>
-          <input type="text" id="kbCurrentPos" placeholder="e.g. Senior Software Engineer at Acme Corp (2022–present)" />
+        <!-- Activity Stats -->
+        <div class="settings-section">
+          <div class="settings-section-title">Activity (Last 24 Hours)</div>
+          <div class="stats-grid">
+            <div class="stat-card">
+              <div class="stat-value" id="settings-stat-runs">—</div>
+              <div class="stat-label">Agent Runs</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-value" id="settings-stat-tokens">—</div>
+              <div class="stat-label">Tokens Used</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-value" id="settings-stat-cost">—</div>
+              <div class="stat-label">Cost</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-value" id="settings-stat-items">—</div>
+              <div class="stat-label">Items Processed</div>
+            </div>
+          </div>
         </div>
-        <div class="input-group">
-          <label>Previous Positions <span class="label-hint">— one per line</span></label>
-          <textarea id="kbPrevPos" rows="4" placeholder="e.g.&#10;Software Engineer at Startup Inc (2019–2022)&#10;Junior Developer at Agency (2017–2019)"></textarea>
+
+        <!-- My Profile (Knowledge Base) -->
+        <div class="settings-section">
+          <div class="settings-section-title">My Profile</div>
+          <form class="kb-form" id="kbForm">
+
+            <div class="input-group">
+              <label>Your Resume <span class="label-hint">— PDF, DOCX, or TXT · uploaded once, used in every search and chat</span></label>
+              <label class="file-upload-zone" id="resumeUploadZone">
+                <input type="file" id="resumeFileInput" accept=".pdf,.docx,.txt" style="display:none" />
+                <div class="upload-idle" id="uploadIdle">
+                  <div class="upload-icon-large">📄</div>
+                  <div class="upload-title">Drop your resume here</div>
+                  <div class="upload-sub">or <span class="upload-link">click to browse</span></div>
+                  <div class="upload-hint-small">PDF · DOCX · TXT</div>
+                </div>
+                <div class="upload-loading" id="uploadLoading" style="display:none">
+                  <div class="upload-spinner"></div>
+                  <div>Reading file…</div>
+                </div>
+                <div class="upload-done" id="uploadDone" style="display:none">
+                  <div class="upload-done-icon">✓</div>
+                  <div>
+                    <div class="upload-done-name" id="uploadFileName">resume.pdf</div>
+                    <div class="upload-done-sub" id="uploadWordCount"></div>
+                  </div>
+                  <button type="button" class="upload-remove" id="uploadRemove" title="Remove">✕</button>
+                </div>
+              </label>
+              <textarea id="kbResumeText" style="display:none"></textarea>
+            </div>
+
+            <div class="input-group">
+              <label>Current Position</label>
+              <input type="text" id="kbCurrentPos" placeholder="e.g. Senior Software Engineer at Acme Corp (2022–present)" />
+            </div>
+            <div class="input-group">
+              <label>Previous Positions <span class="label-hint">— one per line</span></label>
+              <textarea id="kbPrevPos" rows="4" placeholder="e.g.&#10;Software Engineer at Startup Inc (2019–2022)&#10;Junior Developer at Agency (2017–2019)"></textarea>
+            </div>
+            <div class="input-group">
+              <label>Target Role</label>
+              <input type="text" id="kbTargetRole" placeholder="e.g. Staff Engineer, Head of Product" />
+            </div>
+            <div class="input-group">
+              <label>Skills <span class="label-hint">— comma separated</span></label>
+              <input type="text" id="kbSkills" placeholder="e.g. Python, React, AWS, Product Strategy" />
+            </div>
+            <div class="input-group">
+              <label>Education</label>
+              <input type="text" id="kbEducation" placeholder="e.g. BS Computer Science, University of Washington (2017)" />
+            </div>
+            <div class="input-group">
+              <label>What I'm Looking For</label>
+              <textarea id="kbContext" rows="4" placeholder="e.g. I want a remote-first company with strong eng culture, $150k+, ideally in fintech or health tech…"></textarea>
+            </div>
+            <p class="prefs-status" id="kbStatus"></p>
+            <button type="submit" class="btn btn-gold">Save Profile</button>
+          </form>
         </div>
-        <div class="input-group">
-          <label>Target Role</label>
-          <input type="text" id="kbTargetRole" placeholder="e.g. Staff Engineer, Head of Product" />
+
+        <!-- Job Search Criteria -->
+        <div class="settings-section">
+          <div class="settings-section-title">Job Search Criteria</div>
+          <form class="prefs-form" id="prefsForm" style="max-width:100%">
+
+            <div class="input-group">
+              <label>Target Job Title / Role</label>
+              <input type="text" id="prefJobTitle" placeholder="e.g. Software Engineer, Product Manager, Data Scientist" />
+            </div>
+
+            <div class="prefs-two-col">
+              <div class="input-group">
+                <label>City or Zip Code</label>
+                <input type="text" id="prefLocationCity" placeholder="e.g. Seattle, WA or 98101" />
+              </div>
+              <div class="input-group">
+                <label>Search Radius</label>
+                <select id="prefLocationRadius">
+                  <option value="">Any distance</option>
+                  <option value="5">Within 5 miles</option>
+                  <option value="10">Within 10 miles</option>
+                  <option value="25">Within 25 miles</option>
+                  <option value="50">Within 50 miles</option>
+                  <option value="100">Within 100 miles</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="prefs-two-col">
+              <div class="input-group">
+                <label>Experience Level</label>
+                <select id="prefExpLevel">
+                  <option value="">Any</option>
+                  <option value="entry">Entry Level (0-2 yrs)</option>
+                  <option value="mid">Mid Level (3-5 yrs)</option>
+                  <option value="senior">Senior (5-10 yrs)</option>
+                  <option value="staff">Staff / Principal (10+ yrs)</option>
+                  <option value="manager">Manager / Director</option>
+                  <option value="executive">VP / Executive</option>
+                </select>
+              </div>
+              <div class="input-group">
+                <label>Posted Within</label>
+                <select id="prefPostedWithin">
+                  <option value="3">Last 3 days</option>
+                  <option value="7">Last 7 days</option>
+                  <option value="14" selected>Last 14 days</option>
+                  <option value="30">Last 30 days</option>
+                  <option value="">Any time</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="prefs-two-col">
+              <div class="input-group">
+                <label>Job Type</label>
+                <select id="prefJobType">
+                  <option value="any">Any</option>
+                  <option value="full-time">Full-time</option>
+                  <option value="part-time">Part-time</option>
+                  <option value="contract">Contract</option>
+                </select>
+              </div>
+              <div class="input-group">
+                <label>Company Size</label>
+                <select id="prefCompanySize">
+                  <option value="any">Any</option>
+                  <option value="startup">Startup (1-50)</option>
+                  <option value="small">Small (51-200)</option>
+                  <option value="medium">Medium (201-1000)</option>
+                  <option value="large">Large (1000+)</option>
+                  <option value="enterprise">Enterprise (10,000+)</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="prefs-two-col">
+              <div class="input-group">
+                <label>Minimum Salary</label>
+                <input type="text" id="prefSalaryMin" placeholder="e.g. $120,000" />
+              </div>
+              <div class="input-group" style="justify-content:flex-end;padding-top:22px">
+                <label class="checkbox-label">
+                  <input type="checkbox" id="prefRemoteOnly" />
+                  Remote positions only
+                </label>
+              </div>
+            </div>
+
+            <div class="input-group">
+              <label>Target Industries <span class="label-hint">— comma separated</span></label>
+              <input type="text" id="prefIndustries" placeholder="e.g. Fintech, Health Tech, SaaS, AI/ML, E-commerce" />
+            </div>
+
+            <div class="input-group">
+              <label>Custom Job Sites <span class="label-hint">— comma separated, the agent will search these too</span></label>
+              <input type="text" id="prefCustomSites" placeholder="e.g. spacecrew.com, wellfound.com, workatastartup.com" />
+            </div>
+
+            <p class="prefs-status" id="prefsStatus"></p>
+            <button type="submit" class="btn btn-gold">Save Job Criteria</button>
+          </form>
         </div>
-        <div class="input-group">
-          <label>Skills <span class="label-hint">— comma separated</span></label>
-          <input type="text" id="kbSkills" placeholder="e.g. Python, React, AWS, Product Strategy" />
+
+        <!-- Search Schedule -->
+        <div class="settings-section">
+          <div class="settings-section-title">Search Schedule</div>
+          <p style="font-size:0.85rem;color:var(--text-muted);margin:0 0 20px">
+            Control when the agent automatically searches for jobs. Searches run on your local time.
+          </p>
+          <div style="display:flex;flex-direction:column;gap:20px;max-width:480px">
+
+            <div class="input-group">
+              <label class="checkbox-label" style="gap:12px">
+                <input type="checkbox" id="settingSearchEnabled" checked />
+                <div>
+                  <div style="font-size:0.875rem;color:var(--text);font-weight:600">Enable automated search</div>
+                  <div style="font-size:0.78rem;color:var(--text-muted);margin-top:2px">When off, the agent will not search automatically — you can still search manually.</div>
+                </div>
+              </label>
+            </div>
+
+            <div class="prefs-two-col">
+              <div class="input-group">
+                <label>Times per day</label>
+                <select id="settingTimesPerDay">
+                  <option value="1">1× per day</option>
+                  <option value="2">2× per day</option>
+                  <option value="3">3× per day</option>
+                  <option value="4">4× per day</option>
+                </select>
+              </div>
+              <div class="input-group">
+                <label>First search at</label>
+                <select id="settingStartHour">
+                  <option value="0">12:00 AM</option>
+                  <option value="1">1:00 AM</option>
+                  <option value="2">2:00 AM</option>
+                  <option value="3">3:00 AM</option>
+                  <option value="4">4:00 AM</option>
+                  <option value="5">5:00 AM</option>
+                  <option value="6">6:00 AM</option>
+                  <option value="7">7:00 AM</option>
+                  <option value="8" selected>8:00 AM</option>
+                  <option value="9">9:00 AM</option>
+                  <option value="10">10:00 AM</option>
+                  <option value="11">11:00 AM</option>
+                  <option value="12">12:00 PM</option>
+                  <option value="13">1:00 PM</option>
+                  <option value="14">2:00 PM</option>
+                  <option value="15">3:00 PM</option>
+                  <option value="16">4:00 PM</option>
+                  <option value="17">5:00 PM</option>
+                  <option value="18">6:00 PM</option>
+                  <option value="19">7:00 PM</option>
+                  <option value="20">8:00 PM</option>
+                  <option value="21">9:00 PM</option>
+                  <option value="22">10:00 PM</option>
+                  <option value="23">11:00 PM</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="input-group">
+              <label>Your Timezone</label>
+              <select id="settingTimezone">
+                <option value="America/Los_Angeles">Pacific Time (PT)</option>
+                <option value="America/Denver">Mountain Time (MT)</option>
+                <option value="America/Chicago">Central Time (CT)</option>
+                <option value="America/New_York">Eastern Time (ET)</option>
+                <option value="America/Anchorage">Alaska Time (AKT)</option>
+                <option value="Pacific/Honolulu">Hawaii Time (HT)</option>
+                <option value="Europe/London">London (GMT/BST)</option>
+                <option value="Europe/Paris">Central Europe (CET)</option>
+                <option value="Asia/Dubai">Dubai (GST)</option>
+                <option value="Asia/Kolkata">India (IST)</option>
+                <option value="Asia/Singapore">Singapore (SGT)</option>
+                <option value="Asia/Tokyo">Japan (JST)</option>
+                <option value="Australia/Sydney">Sydney (AEDT)</option>
+                <option value="UTC">UTC</option>
+              </select>
+            </div>
+
+            <p class="prefs-status" id="scheduleStatus"></p>
+            <button type="button" class="btn btn-gold" id="saveScheduleBtn" style="width:fit-content">Save Schedule</button>
+          </div>
         </div>
-        <div class="input-group">
-          <label>Education</label>
-          <input type="text" id="kbEducation" placeholder="e.g. BS Computer Science, University of Washington (2017)" />
+
+        <!-- Notifications -->
+        <div class="settings-section">
+          <div class="settings-section-title">Notification Contact</div>
+          <p style="font-size:0.85rem;color:var(--text-muted);margin:0 0 20px">
+            Add your email or phone number to receive job alerts and application updates outside the browser.
+          </p>
+          <div style="display:flex;flex-direction:column;gap:16px;max-width:480px">
+
+            <div class="input-group">
+              <label>Email address for alerts</label>
+              <input type="email" id="settingNotifEmail" placeholder="you@example.com" />
+            </div>
+
+            <div class="input-group">
+              <label>Phone number for SMS <span class="label-hint">— optional, include country code</span></label>
+              <input type="tel" id="settingNotifPhone" placeholder="+1 555 000 0000" />
+            </div>
+
+            <p class="prefs-status" id="notifStatus"></p>
+            <button type="button" class="btn btn-gold" id="saveNotifBtn" style="width:fit-content">Save Contact Info</button>
+          </div>
         </div>
-        <div class="input-group">
-          <label>What I'm Looking For</label>
-          <textarea id="kbContext" rows="4" placeholder="e.g. I want a remote-first company with strong eng culture, $150k+, ideally in fintech or health tech…"></textarea>
+
+        <!-- Target Company Watchlist -->
+        <div class="settings-section">
+          <div class="settings-section-title">Target Company Watchlist</div>
+          <p style="font-size:0.85rem;color:var(--text-muted);margin:0 0 20px">
+            Add companies you really want to work at. The agent checks their career pages and surfaces any new openings separately from your daily job search.
+          </p>
+          <div id="targetCompaniesList" style="display:flex;flex-direction:column;gap:10px;max-width:560px"></div>
+          <button type="button" class="btn btn-ghost" id="addTargetCompanyBtn"
+            style="margin-top:14px;font-size:0.85rem;padding:8px 18px">
+            + Add Company
+          </button>
+          <div style="margin-top:20px;display:flex;align-items:center;gap:16px;flex-wrap:wrap">
+            <button type="button" class="btn btn-gold" id="saveWatchlistBtn">Save Watchlist</button>
+            <p class="prefs-status" id="watchlistStatus" style="margin:0"></p>
+          </div>
         </div>
-        <p class="prefs-status" id="kbStatus"></p>
-        <button type="submit" class="btn btn-gold">Save Knowledge Base</button>
-      </form>
+
+      </div>
     </div>
   </div>
 
