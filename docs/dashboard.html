@@ -61,6 +61,9 @@
         </div>
         <button class="sign-out-btn" id="signOutBtn" title="Sign out">↩</button>
       </div>
+      <button class="ob-sidebar-link" id="obRestartTour" title="Reopen setup wizard">
+        ↺ &nbsp;Setup guide
+      </button>
     </div>
   </aside>
 
@@ -631,6 +634,146 @@
   </div>
 
 </div>
+
+<!-- ══════════════════════════════════════════════════════════════
+     ONBOARDING ENGINE  — overlay elements
+     All IDs prefixed ob- to avoid conflicts.
+══════════════════════════════════════════════════════════════ -->
+
+<!-- Confetti layer (above everything) -->
+<div id="obConfetti" aria-hidden="true"></div>
+
+<!-- ── Welcome modal ── -->
+<div id="obWelcome" role="dialog" aria-modal="true" aria-labelledby="obWelcomeHeading">
+  <div class="ob-welcome-card">
+    <div class="ob-welcome-logo" aria-hidden="true">✦</div>
+    <h2 class="ob-welcome-title" id="obWelcomeHeading">Welcome to CareerCopilot</h2>
+    <p class="ob-welcome-subtitle">
+      Your AI-powered career copilot is ready. Let's get you set up in under 10 minutes.
+    </p>
+    <ul class="ob-welcome-list">
+      <li>
+        <span class="ob-wl-icon">📄</span>
+        Upload your resume — we do the rest
+      </li>
+      <li>
+        <span class="ob-wl-icon">🎯</span>
+        Configure your ideal job targets
+      </li>
+      <li>
+        <span class="ob-wl-icon">⚡</span>
+        Activate your automated AI job search
+      </li>
+      <li>
+        <span class="ob-wl-icon">✉️</span>
+        Generate tailored resumes &amp; cover letters
+      </li>
+    </ul>
+    <div class="ob-welcome-actions">
+      <button class="ob-btn ob-btn-primary" id="obWelcomeStart">
+        Let's Set Up My Profile →
+      </button>
+      <button class="ob-welcome-skip" id="obWelcomeSkip">Skip for now</button>
+    </div>
+    <p class="ob-welcome-note">
+      Users who complete setup see 3× more relevant job matches in their first week.
+    </p>
+  </div>
+</div>
+
+<!-- ── Spotlight backdrop + hole ── -->
+<div id="obBackdrop" aria-hidden="true"></div>
+<div id="obHole"     aria-hidden="true"></div>
+
+<!-- ── Tour tooltip ── -->
+<div id="obTourTooltip" role="tooltip" aria-live="polite"></div>
+
+<!-- ── Wizard panel ── -->
+<div id="obWizard" role="complementary" aria-label="Setup wizard" aria-hidden="true">
+  <div class="ob-wizard-header">
+    <div class="ob-wizard-brand">
+      <div class="ob-wizard-brand-dot"></div>
+      Setup Guide
+    </div>
+    <button class="ob-wizard-close" id="obWizardClose" aria-label="Close setup guide">×</button>
+  </div>
+
+  <div class="ob-wizard-prog-track">
+    <div class="ob-wizard-prog-fill" id="obWizardProgress"></div>
+  </div>
+
+  <div class="ob-wizard-step-label" id="obWizardStepLabel">Step 1 of 7</div>
+
+  <div class="ob-wizard-body">
+    <div class="ob-wizard-icon" id="obWizardIcon">📄</div>
+    <div class="ob-wizard-title" id="obWizardTitle">Upload Your Resume</div>
+    <div class="ob-wizard-desc"  id="obWizardBody">Loading…</div>
+    <div class="ob-wizard-hint"  id="obWizardHint"></div>
+  </div>
+
+  <div class="ob-wizard-actions">
+    <button class="ob-btn ob-btn-primary" id="obWizardCta">Continue →</button>
+    <div class="ob-wizard-nav">
+      <button class="ob-wizard-back" id="obWizardBack">← Back</button>
+      <button id="obWizardSkip">Skip this step</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Progress checklist widget ── -->
+<div id="obChecklist" role="complementary" aria-label="Setup progress">
+  <div class="ob-cl-header" id="obChecklistToggle" role="button" tabindex="0" aria-expanded="true">
+    <span id="obChecklistPill">Setup 0% complete</span>
+    <span class="ob-cl-toggle-icon">▲</span>
+  </div>
+  <div class="ob-cl-body">
+    <div class="ob-cl-progress">
+      <svg width="48" height="48" viewBox="0 0 48 48" aria-hidden="true">
+        <circle class="ob-cl-ring-track" cx="24" cy="24" r="20"/>
+        <circle class="ob-cl-ring-fill"  cx="24" cy="24" r="20"/>
+      </svg>
+      <div class="ob-cl-count">
+        <strong id="obChecklistCount">0 / 8</strong><br>
+        steps complete
+      </div>
+    </div>
+    <div id="obChecklistItems"></div>
+    <div class="ob-cl-footer">
+      <button class="ob-cl-reopen" id="obRestartTour">↺ Restart setup guide</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── First Win / Completion modal ── -->
+<div id="obFirstWin" role="dialog" aria-modal="true" aria-labelledby="obFirstWinHeading">
+  <div class="ob-fw-card">
+    <div class="ob-fw-emoji">🎉</div>
+    <h2 class="ob-fw-title" id="obFirstWinHeading">You're All Set!</h2>
+    <p class="ob-fw-subtitle">
+      Your AI job search is now active. We're scanning job boards and career pages around the clock for your perfect match.
+    </p>
+    <div class="ob-fw-stats">
+      <div>
+        <div class="ob-fw-stat-val" id="obFirstWinSteps">6</div>
+        <div class="ob-fw-stat-label">Steps completed</div>
+      </div>
+      <div>
+        <div class="ob-fw-stat-val">24/7</div>
+        <div class="ob-fw-stat-label">AI search active</div>
+      </div>
+      <div>
+        <div class="ob-fw-stat-val" id="obFirstWinTotal">7</div>
+        <div class="ob-fw-stat-label">Total steps</div>
+      </div>
+    </div>
+    <div class="ob-fw-list" id="obFirstWinList"></div>
+    <div class="ob-fw-actions">
+      <button class="ob-btn ob-btn-primary" id="obFirstWinDash">Go to My Dashboard →</button>
+      <button class="ob-btn ob-btn-ghost"   id="obFirstWinClose">Close</button>
+    </div>
+  </div>
+</div>
+
 <!-- jsPDF for generating downloadable ATS-friendly resume PDFs -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <!-- PDF.js for client-side PDF text extraction -->
@@ -648,5 +791,6 @@
   if (!firebase.apps.length) firebase.initializeApp(firebaseConfig);
 </script>
 <script src="app.js"></script>
+<script src="onboarding.js"></script>
 </body>
 </html>

@@ -107,7 +107,11 @@ function init() {
 
   // Load dashboard on start
   showPanel("dashboard");
-  loadUserTier();  // fetch tier early so gates are ready before Settings opens
+  loadUserTier().then(() => {
+    if (typeof OnboardingEngine !== 'undefined') {
+      OnboardingEngine.init(userId, userTier);
+    }
+  });
 }
 
 // ── Panel switching ───────────────────────────────────────────────────────────
@@ -373,6 +377,7 @@ function jobCard(j, source) {
 
 async function openJobDetail(jobId, source) {
   showPanel("jobDetail");
+  if (typeof OnboardingEngine !== 'undefined') OnboardingEngine.markJobViewed();
   const body = document.getElementById("jobDetailBody");
   body.innerHTML = '<div class="panel-loading">Loading…</div>';
 
