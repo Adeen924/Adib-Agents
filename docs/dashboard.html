@@ -41,8 +41,14 @@
       </button>
 
       <div class="nav-label" style="margin-top:10px">Account</div>
-      <button class="nav-item" id="nav-settings">
-        <span class="nav-icon">⚙️</span> Settings
+      <button class="nav-item" id="nav-profile">
+        <span class="nav-icon">👤</span> Profile
+      </button>
+      <button class="nav-item" id="nav-account">
+        <span class="nav-icon">🔒</span> Account
+      </button>
+      <button class="nav-item" id="nav-preferences">
+        <span class="nav-icon">🎯</span> Preferences
       </button>
     </nav>
 
@@ -210,17 +216,109 @@
     </div>
   </div>
 
-  <!-- ── Settings view (merged Preferences + Knowledge Base + Schedule + Notifications) ── -->
-  <div class="main-content panel-view" id="settingsView" style="display:none">
+  <!-- ── Profile view ── -->
+  <div class="main-content panel-view" id="profileView" style="display:none">
     <header class="main-header">
-      <div><h2>Settings</h2><p>Manage your profile, job search preferences, and notifications</p></div>
+      <div><h2>Profile</h2><p>Your resume and personal information used by the agent</p></div>
+    </header>
+    <div style="overflow-y:auto;flex:1">
+      <div class="settings-content">
+
+        <!-- My Profile (Knowledge Base) -->
+        <div class="settings-section">
+          <div class="settings-section-title">My Profile</div>
+          <form class="kb-form" id="kbForm">
+
+            <div class="input-group">
+              <label>Your Resume <span class="label-hint">— PDF, DOCX, or TXT · uploaded once, used in every search and chat</span></label>
+              <label class="file-upload-zone" id="resumeUploadZone">
+                <input type="file" id="resumeFileInput" accept=".pdf,.docx,.txt" style="display:none" />
+                <div class="upload-idle" id="uploadIdle">
+                  <div class="upload-icon-large">📄</div>
+                  <div class="upload-title">Drop your resume here</div>
+                  <div class="upload-sub">or <span class="upload-link">click to browse</span></div>
+                  <div class="upload-hint-small">PDF · DOCX · TXT</div>
+                </div>
+                <div class="upload-loading" id="uploadLoading" style="display:none">
+                  <div class="upload-spinner"></div>
+                  <div>Reading file…</div>
+                </div>
+                <div class="upload-done" id="uploadDone" style="display:none">
+                  <div class="upload-done-icon">✓</div>
+                  <div>
+                    <div class="upload-done-name" id="uploadFileName">resume.pdf</div>
+                    <div class="upload-done-sub" id="uploadWordCount"></div>
+                  </div>
+                  <button type="button" class="upload-remove" id="uploadRemove" title="Remove">✕</button>
+                </div>
+              </label>
+              <textarea id="kbResumeText" style="display:none"></textarea>
+            </div>
+
+            <div class="input-group">
+              <label>Current Position</label>
+              <input type="text" id="kbCurrentPos" placeholder="e.g. Senior Software Engineer at Acme Corp (2022–present)" />
+            </div>
+            <div class="input-group">
+              <label>Previous Positions <span class="label-hint">— one per line</span></label>
+              <textarea id="kbPrevPos" rows="4" placeholder="e.g.&#10;Software Engineer at Startup Inc (2019–2022)&#10;Junior Developer at Agency (2017–2019)"></textarea>
+            </div>
+            <div class="input-group">
+              <label>Target Role</label>
+              <input type="text" id="kbTargetRole" placeholder="e.g. Staff Engineer, Head of Product" />
+            </div>
+            <div class="input-group">
+              <label>Skills <span class="label-hint">— comma separated</span></label>
+              <input type="text" id="kbSkills" placeholder="e.g. Python, React, AWS, Product Strategy" />
+            </div>
+            <div class="input-group">
+              <label>Education</label>
+              <input type="text" id="kbEducation" placeholder="e.g. BS Computer Science, University of Washington (2017)" />
+            </div>
+            <div class="input-group">
+              <label>What I'm Looking For</label>
+              <textarea id="kbContext" rows="4" placeholder="e.g. I want a remote-first company with strong eng culture, $150k+, ideally in fintech or health tech…"></textarea>
+            </div>
+            <p class="prefs-status" id="kbStatus"></p>
+            <button type="submit" class="btn btn-gold">Save Profile</button>
+          </form>
+        </div>
+
+        <!-- Notification Contact -->
+        <div class="settings-section">
+          <div class="settings-section-title">Notification Contact</div>
+          <p style="font-size:0.85rem;color:var(--text-muted);margin:0 0 20px">
+            Add your email or phone number to receive job alerts and application updates outside the browser.
+          </p>
+          <div style="display:flex;flex-direction:column;gap:16px;max-width:480px">
+            <div class="input-group">
+              <label>Email address for alerts</label>
+              <input type="email" id="settingNotifEmail" placeholder="you@example.com" />
+            </div>
+            <div class="input-group">
+              <label>Phone number for SMS <span class="label-hint">— optional, include country code</span></label>
+              <input type="tel" id="settingNotifPhone" placeholder="+1 555 000 0000" />
+            </div>
+            <p class="prefs-status" id="notifStatus"></p>
+            <button type="button" class="btn btn-gold" id="saveNotifBtn" style="width:fit-content">Save Contact Info</button>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Account view ── -->
+  <div class="main-content panel-view" id="accountView" style="display:none">
+    <header class="main-header">
+      <div><h2>Account</h2><p>Manage your subscription and password</p></div>
     </header>
     <div style="overflow-y:auto;flex:1">
       <div class="settings-content">
 
         <!-- Change Password -->
         <div class="settings-section">
-          <div class="settings-section-title">Account</div>
+          <div class="settings-section-title">Change Password</div>
           <div class="prefs-form" style="max-width:480px">
             <div class="input-group">
               <label>Current Password</label>
@@ -282,7 +380,6 @@
                 <li>✓ Up to 20 Find Connections per month</li>
                 <li>✓ Custom job board sites</li>
               </ul>
-              <!-- Billing period toggle (hidden once already subscribed) -->
               <div class="billing-toggle" id="billingToggle">
                 <button class="billing-opt billing-opt-active" id="billingMonthly" onclick="selectBilling('monthly')">Monthly</button>
                 <button class="billing-opt" id="billingAnnual" onclick="selectBilling('annual')">Annual <span class="billing-save-badge">Save $60</span></button>
@@ -301,65 +398,17 @@
           </div>
         </div>
 
-        <!-- My Profile (Knowledge Base) -->
-        <div class="settings-section">
-          <div class="settings-section-title">My Profile</div>
-          <form class="kb-form" id="kbForm">
+      </div>
+    </div>
+  </div>
 
-            <div class="input-group">
-              <label>Your Resume <span class="label-hint">— PDF, DOCX, or TXT · uploaded once, used in every search and chat</span></label>
-              <label class="file-upload-zone" id="resumeUploadZone">
-                <input type="file" id="resumeFileInput" accept=".pdf,.docx,.txt" style="display:none" />
-                <div class="upload-idle" id="uploadIdle">
-                  <div class="upload-icon-large">📄</div>
-                  <div class="upload-title">Drop your resume here</div>
-                  <div class="upload-sub">or <span class="upload-link">click to browse</span></div>
-                  <div class="upload-hint-small">PDF · DOCX · TXT</div>
-                </div>
-                <div class="upload-loading" id="uploadLoading" style="display:none">
-                  <div class="upload-spinner"></div>
-                  <div>Reading file…</div>
-                </div>
-                <div class="upload-done" id="uploadDone" style="display:none">
-                  <div class="upload-done-icon">✓</div>
-                  <div>
-                    <div class="upload-done-name" id="uploadFileName">resume.pdf</div>
-                    <div class="upload-done-sub" id="uploadWordCount"></div>
-                  </div>
-                  <button type="button" class="upload-remove" id="uploadRemove" title="Remove">✕</button>
-                </div>
-              </label>
-              <textarea id="kbResumeText" style="display:none"></textarea>
-            </div>
-
-            <div class="input-group">
-              <label>Current Position</label>
-              <input type="text" id="kbCurrentPos" placeholder="e.g. Senior Software Engineer at Acme Corp (2022–present)" />
-            </div>
-            <div class="input-group">
-              <label>Previous Positions <span class="label-hint">— one per line</span></label>
-              <textarea id="kbPrevPos" rows="4" placeholder="e.g.&#10;Software Engineer at Startup Inc (2019–2022)&#10;Junior Developer at Agency (2017–2019)"></textarea>
-            </div>
-            <div class="input-group">
-              <label>Target Role</label>
-              <input type="text" id="kbTargetRole" placeholder="e.g. Staff Engineer, Head of Product" />
-            </div>
-            <div class="input-group">
-              <label>Skills <span class="label-hint">— comma separated</span></label>
-              <input type="text" id="kbSkills" placeholder="e.g. Python, React, AWS, Product Strategy" />
-            </div>
-            <div class="input-group">
-              <label>Education</label>
-              <input type="text" id="kbEducation" placeholder="e.g. BS Computer Science, University of Washington (2017)" />
-            </div>
-            <div class="input-group">
-              <label>What I'm Looking For</label>
-              <textarea id="kbContext" rows="4" placeholder="e.g. I want a remote-first company with strong eng culture, $150k+, ideally in fintech or health tech…"></textarea>
-            </div>
-            <p class="prefs-status" id="kbStatus"></p>
-            <button type="submit" class="btn btn-gold">Save Profile</button>
-          </form>
-        </div>
+  <!-- ── Preferences view ── -->
+  <div class="main-content panel-view" id="preferencesView" style="display:none">
+    <header class="main-header">
+      <div><h2>Preferences</h2><p>Configure what the agent searches for and where it looks</p></div>
+    </header>
+    <div style="overflow-y:auto;flex:1">
+      <div class="settings-content">
 
         <!-- Job Search Criteria -->
         <div class="settings-section">
@@ -455,14 +504,42 @@
               <input type="text" id="prefIndustries" placeholder="e.g. Fintech, Health Tech, SaaS, AI/ML, E-commerce" />
             </div>
 
-            <div class="input-group">
-              <label>Custom Job Sites <span class="label-hint">— comma separated, the agent will search these too</span></label>
-              <input type="text" id="prefCustomSites" placeholder="e.g. spacecrew.com, wellfound.com, workatastartup.com" />
-            </div>
-
             <p class="prefs-status" id="prefsStatus"></p>
             <button type="submit" class="btn btn-gold">Save Job Criteria</button>
           </form>
+        </div>
+
+        <!-- Target Companies -->
+        <div class="settings-section">
+          <div class="settings-section-title">Target Companies</div>
+          <p style="font-size:0.85rem;color:var(--text-muted);margin:0 0 20px">
+            Add specific companies you want the agent to focus on. The agent will monitor their career pages and surface new openings separately from your daily search.
+          </p>
+          <div id="targetCompaniesList" style="display:flex;flex-direction:column;gap:10px;max-width:560px"></div>
+          <button type="button" class="btn btn-ghost" id="addTargetCompanyBtn"
+            style="margin-top:14px;font-size:0.85rem;padding:8px 18px">
+            + Add Company
+          </button>
+          <div style="margin-top:20px;display:flex;align-items:center;gap:16px;flex-wrap:wrap">
+            <button type="button" class="btn btn-gold" id="saveWatchlistBtn">Save Companies</button>
+            <p class="prefs-status" id="watchlistStatus" style="margin:0"></p>
+          </div>
+        </div>
+
+        <!-- Pages to Search -->
+        <div class="settings-section">
+          <div class="settings-section-title">Pages to Search</div>
+          <p style="font-size:0.85rem;color:var(--text-muted);margin:0 0 20px">
+            Add specific job board URLs or career pages you want the agent to look through in addition to its default sources (LinkedIn, Indeed, Greenhouse, Lever, and more).
+          </p>
+          <div style="max-width:640px">
+            <div class="input-group">
+              <label>Custom Job Sites &amp; Pages <span class="label-hint">— one per line or comma separated</span></label>
+              <textarea id="prefCustomSites" rows="5" placeholder="e.g.&#10;wellfound.com&#10;workatastartup.com&#10;jobs.lever.co/mycompany&#10;mycompany.com/careers"></textarea>
+            </div>
+            <p class="prefs-status" id="customSitesStatus"></p>
+            <button type="button" class="btn btn-gold" id="saveCustomSitesBtn">Save Pages</button>
+          </div>
         </div>
 
         <!-- Search Schedule -->
@@ -546,46 +623,6 @@
 
             <p class="prefs-status" id="scheduleStatus"></p>
             <button type="button" class="btn btn-gold" id="saveScheduleBtn" style="width:fit-content">Save Schedule</button>
-          </div>
-        </div>
-
-        <!-- Notifications -->
-        <div class="settings-section">
-          <div class="settings-section-title">Notification Contact</div>
-          <p style="font-size:0.85rem;color:var(--text-muted);margin:0 0 20px">
-            Add your email or phone number to receive job alerts and application updates outside the browser.
-          </p>
-          <div style="display:flex;flex-direction:column;gap:16px;max-width:480px">
-
-            <div class="input-group">
-              <label>Email address for alerts</label>
-              <input type="email" id="settingNotifEmail" placeholder="you@example.com" />
-            </div>
-
-            <div class="input-group">
-              <label>Phone number for SMS <span class="label-hint">— optional, include country code</span></label>
-              <input type="tel" id="settingNotifPhone" placeholder="+1 555 000 0000" />
-            </div>
-
-            <p class="prefs-status" id="notifStatus"></p>
-            <button type="button" class="btn btn-gold" id="saveNotifBtn" style="width:fit-content">Save Contact Info</button>
-          </div>
-        </div>
-
-        <!-- Target Company Watchlist -->
-        <div class="settings-section">
-          <div class="settings-section-title">Target Company Watchlist</div>
-          <p style="font-size:0.85rem;color:var(--text-muted);margin:0 0 20px">
-            Add companies you really want to work at. The agent checks their career pages and surfaces any new openings separately from your daily job search.
-          </p>
-          <div id="targetCompaniesList" style="display:flex;flex-direction:column;gap:10px;max-width:560px"></div>
-          <button type="button" class="btn btn-ghost" id="addTargetCompanyBtn"
-            style="margin-top:14px;font-size:0.85rem;padding:8px 18px">
-            + Add Company
-          </button>
-          <div style="margin-top:20px;display:flex;align-items:center;gap:16px;flex-wrap:wrap">
-            <button type="button" class="btn btn-gold" id="saveWatchlistBtn">Save Watchlist</button>
-            <p class="prefs-status" id="watchlistStatus" style="margin:0"></p>
           </div>
         </div>
 

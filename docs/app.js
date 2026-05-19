@@ -11,12 +11,14 @@ const userId = email;
 
 // ── Panel registry ────────────────────────────────────────────────────────────
 const PANELS = {
-  dashboard: document.getElementById("dashboardView"),
-  jobs:      document.getElementById("jobsView"),
-  jobDetail: document.getElementById("jobDetailView"),
-  documents: document.getElementById("documentsView"),
-  digest:    document.getElementById("digestView"),
-  settings:  document.getElementById("settingsView"),
+  dashboard:   document.getElementById("dashboardView"),
+  jobs:        document.getElementById("jobsView"),
+  jobDetail:   document.getElementById("jobDetailView"),
+  documents:   document.getElementById("documentsView"),
+  digest:      document.getElementById("digestView"),
+  profile:     document.getElementById("profileView"),
+  account:     document.getElementById("accountView"),
+  preferences: document.getElementById("preferencesView"),
 };
 
 let isLoading      = false;
@@ -35,9 +37,11 @@ function init() {
   // Sidebar navigation
   document.getElementById("nav-dashboard").addEventListener("click", () => showPanel("dashboard"));
   document.getElementById("nav-jobs").addEventListener("click",      () => showPanel("jobs"));
-  document.getElementById("nav-documents").addEventListener("click", () => showPanel("documents"));
-  document.getElementById("nav-digest").addEventListener("click",    () => showPanel("digest"));
-  document.getElementById("nav-settings").addEventListener("click",  () => showPanel("settings"));
+  document.getElementById("nav-documents").addEventListener("click",   () => showPanel("documents"));
+  document.getElementById("nav-digest").addEventListener("click",      () => showPanel("digest"));
+  document.getElementById("nav-profile").addEventListener("click",     () => showPanel("profile"));
+  document.getElementById("nav-account").addEventListener("click",     () => showPanel("account"));
+  document.getElementById("nav-preferences").addEventListener("click", () => showPanel("preferences"));
   document.getElementById("signOutBtn").addEventListener("click",    signOut);
 
   // Applications
@@ -59,9 +63,10 @@ function init() {
   document.getElementById("prefsForm").addEventListener("submit",   savePreferences);
   document.getElementById("kbForm").addEventListener("submit",      saveKnowledge);
 
-  // Settings new sections
-  document.getElementById("saveScheduleBtn").addEventListener("click", saveScheduleSettings);
-  document.getElementById("saveNotifBtn").addEventListener("click",    saveNotificationSettings);
+  // Preferences panel buttons
+  document.getElementById("saveScheduleBtn").addEventListener("click",    saveScheduleSettings);
+  document.getElementById("saveNotifBtn").addEventListener("click",       saveNotificationSettings);
+  document.getElementById("saveCustomSitesBtn").addEventListener("click", saveCustomSites);
 
   // Target company watchlist
   document.getElementById("addTargetCompanyBtn").addEventListener("click", () => addTargetCompanyRow("", ""));
@@ -112,19 +117,23 @@ function showPanel(name) {
 
   document.querySelectorAll(".nav-item").forEach(b => b.classList.remove("active"));
   const navIds = {
-    dashboard: "nav-dashboard",
-    jobs:      "nav-jobs",
-    documents: "nav-documents",
-    digest:    "nav-digest",
-    settings:  "nav-settings",
+    dashboard:   "nav-dashboard",
+    jobs:        "nav-jobs",
+    documents:   "nav-documents",
+    digest:      "nav-digest",
+    profile:     "nav-profile",
+    account:     "nav-account",
+    preferences: "nav-preferences",
   };
   if (navIds[name]) document.getElementById(navIds[name])?.classList.add("active");
 
-  if (name === "dashboard")  { loadStats(); loadRecentJobs(); loadApplications(); }
-  if (name === "jobs")       loadJobs();
-  if (name === "documents")  loadDocuments(currentDocType);
-  if (name === "digest")     loadDigest();
-  if (name === "settings")   loadSettings();
+  if (name === "dashboard")   { loadStats(); loadRecentJobs(); loadApplications(); }
+  if (name === "jobs")        loadJobs();
+  if (name === "documents")   loadDocuments(currentDocType);
+  if (name === "digest")      loadDigest();
+  if (name === "profile")     loadProfilePanel();
+  if (name === "account")     loadAccountPanel();
+  if (name === "preferences") loadPreferencesPanel();
 }
 
 // ── Dashboard recent jobs ─────────────────────────────────────────────────────
@@ -802,17 +811,53 @@ async function deleteDocument(id, type) {
   loadDocuments(type);
 }
 
-// ── Settings ──────────────────────────────────────────────────────────────────
-async function loadSettings() {
-  await Promise.all([
-    loadKnowledge(),
-    loadPreferences(),
-    loadTargetCompanies(),
-    loadUserTier(),
-  ]);
-  // Wire upgrade/manage buttons each time the panel opens (safe to call multiple times)
+// ── Panel loaders ─────────────────────────────────────────────────────────────
+async function loadProfilePanel() {
+  await Promise.all([loadKnowledge(), loadNotificationSettings()]);
+}
+
+async function loadAccountPanel() {
+  await loadUserTier();
   document.getElementById("upgradeBtn")?.addEventListener("click", handleUpgradeClick);
   document.getElementById("manageSubBtn")?.addEventListener("click", openBillingPortal);
+}
+
+async function loadPreferencesPanel() {
+  await Promise.all([loadPreferences(), loadTargetCompanies(), loadScheduleSettings(), loadCustomSites()]);
+}
+
+async function loadNotificationSettings() {
+  try {
+    const res  = await fetch(`${BACKEND_URL}/preferences/${encodeURIComponent(userId)}`);
+    const data = await res.json();
+    const p    = data.preferences || {};
+    if (p.notifEmail) document.getElementById("settingNotifEmail").value = p.notifEmail;
+    if (p.notifPhone) document.getElementById("settingNotifPhone").value = p.notifPhone;
+  } catch { /* non-fatal */ }
+}
+
+async function loadScheduleSettings() {
+  try {
+    const res  = await fetch(`${BACKEND_URL}/preferences/${encodeURIComponent(userId)}`);
+    const data = await res.json();
+    const p    = data.preferences || {};
+    if (p.searchEnabled !== undefined) document.getElementById("settingSearchEnabled").checked = p.searchEnabled;
+    if (p.timesPerDay)  document.getElementById("settingTimesPerDay").value = p.timesPerDay;
+    if (p.startHour !== undefined) document.getElementById("settingStartHour").value = p.startHour;
+    if (p.timezone)     document.getElementById("settingTimezone").value = p.timezone;
+  } catch { /* non-fatal */ }
+}
+
+async function loadCustomSites() {
+  try {
+    const res  = await fetch(`${BACKEND_URL}/preferences/${encodeURIComponent(userId)}`);
+    const data = await res.json();
+    const sites = data.preferences?.customSites || "";
+    // Stored as comma-separated; display one per line for the textarea
+    document.getElementById("prefCustomSites").value = sites
+      ? sites.split(",").map(s => s.trim()).filter(Boolean).join("\n")
+      : "";
+  } catch { /* non-fatal */ }
 }
 
 // Update these to match your Stripe prices exactly
@@ -1008,17 +1053,8 @@ async function loadPreferences() {
     if (data.experienceLevel) document.getElementById("prefExpLevel").value        = data.experienceLevel;
     if (data.companySize)     document.getElementById("prefCompanySize").value     = data.companySize;
     if (data.industries)      document.getElementById("prefIndustries").value      = data.industries;
-    if (data.customSites)     document.getElementById("prefCustomSites").value     = data.customSites;
     if (data.postedWithin !== undefined) document.getElementById("prefPostedWithin").value = data.postedWithin;
     if (data.remoteOnly)      document.getElementById("prefRemoteOnly").checked    = data.remoteOnly;
-    // Schedule settings
-    document.getElementById("settingSearchEnabled").checked = data.searchEnabled !== false;
-    if (data.searchTimesPerDay !== undefined) document.getElementById("settingTimesPerDay").value = data.searchTimesPerDay;
-    if (data.searchStartHour  !== undefined) document.getElementById("settingStartHour").value   = data.searchStartHour;
-    if (data.notifTimezone)   document.getElementById("settingTimezone").value    = data.notifTimezone;
-    // Notification contact
-    if (data.notifEmail)      document.getElementById("settingNotifEmail").value  = data.notifEmail;
-    if (data.notifPhone)      document.getElementById("settingNotifPhone").value  = data.notifPhone;
   } catch { /* non-fatal */ }
 }
 
@@ -1040,7 +1076,6 @@ async function savePreferences(e) {
         experienceLevel: document.getElementById("prefExpLevel").value,
         companySize:     document.getElementById("prefCompanySize").value,
         industries:      document.getElementById("prefIndustries").value,
-        customSites:     document.getElementById("prefCustomSites").value,
         postedWithin:    document.getElementById("prefPostedWithin").value,
         remoteOnly:      document.getElementById("prefRemoteOnly").checked,
       }),
@@ -1092,6 +1127,23 @@ async function saveNotificationSettings() {
   } catch {
     status.textContent = "Failed to save. Please try again.";
   } finally { btn.disabled = false; btn.textContent = "Save Contact Info"; }
+}
+
+async function saveCustomSites() {
+  const btn    = document.getElementById("saveCustomSitesBtn");
+  const status = document.getElementById("customSitesStatus");
+  btn.disabled = true; btn.textContent = "Saving…";
+  try {
+    const raw = document.getElementById("prefCustomSites").value;
+    const customSites = raw.split(/[\n,]/).map(s => s.trim()).filter(Boolean).join(",");
+    await fetch(`${BACKEND_URL}/preferences/save`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ userId, customSites }),
+    });
+    status.textContent = "✓ Pages saved.";
+  } catch {
+    status.textContent = "Failed to save. Please try again.";
+  } finally { btn.disabled = false; btn.textContent = "Save Pages"; }
 }
 
 // ── Knowledge Base ────────────────────────────────────────────────────────────
