@@ -178,67 +178,50 @@ function makeJobFingerprint(job) {
 // Build a specific, criteria-aware search query
 function buildSearchQuery(prefs) {
   const expLabels = {
-    entry:     "entry level 0-2 years experience",
-    mid:       "3-5 years experience",
-    senior:    "senior 5+ years",
-    staff:     "staff principal 10+ years",
-    manager:   "engineering manager director",
-    executive: "VP executive",
+    entry:     "entry level",
+    mid:       "mid level",
+    senior:    "senior",
+    staff:     "staff",
+    manager:   "engineering manager",
+    executive: "executive",
   };
 
-  // Support both old `location` field and new `locationCity`+`locationRadius`
   let locationStr = "";
   if (prefs.remoteOnly) {
     locationStr = "remote";
   } else if (prefs.locationCity) {
     locationStr = prefs.locationRadius
-      ? `near "${prefs.locationCity}" within ${prefs.locationRadius} miles`
-      : `"${prefs.locationCity}"`;
+      ? `near ${prefs.locationCity} within ${prefs.locationRadius} miles`
+      : prefs.locationCity;
   } else if (prefs.location) {
     locationStr = prefs.location;
   }
 
-  const postedStr = prefs.postedWithin ? `posted last ${prefs.postedWithin} days` : "posted this month";
-
-  // Built-in job boards + any custom sites the user added in Preferences
-  const builtInSites = [
-    "site:hiring.cafe",
-    "site:spacecrew.com",
-    "site:linkedin.com/jobs",
-    "site:indeed.com",
-    "site:greenhouse.io",
-    "site:lever.co",
-  ];
-  const customSiteFilters = (prefs.customSites || "")
-    .split(",")
-    .map(s => s.trim().replace(/^https?:\/\//, "").replace(/\/$/, ""))
-    .filter(Boolean)
-    .map(s => `site:${s}`);
-  const allSites = [...customSiteFilters, ...builtInSites].join(" OR ");
-
   const parts = [
-    prefs.jobTitle        ? `"${prefs.jobTitle}"`                  : "software engineer",
+    prefs.jobTitle        ? prefs.jobTitle                         : "software engineer",
     locationStr,
     prefs.experienceLevel ? expLabels[prefs.experienceLevel]       : "",
     prefs.jobType && prefs.jobType !== "any" ? prefs.jobType       : "",
-    prefs.salaryMin       ? `salary ${prefs.salaryMin}`            : "",
     prefs.industries      ? prefs.industries.split(",")[0]?.trim() : "",
-    postedStr,
-    allSites,
+    "jobs",
   ].filter(Boolean).join(" ");
   return parts;
+}
+
+function buildJobBoardsContext(prefs, tierConfig) {
+  const builtIn = ["LinkedIn", "Indeed", "Greenhouse", "Lever", "Wellfound", "Builtin"];
+  const custom  = tierConfig.customSites
+    ? (prefs.customSites || "").split(",").map(s => s.trim()).filter(Boolean)
+    : [];
+  return [...custom, ...builtIn].join(", ");
 }
 
 // Run a job search for one user — limits are tier-based
 async function runJobSearch(userId, prefs, tier = "free") {
   const tierConfig = TIERS[tier] || TIERS.free;
 
-  // Free tier: strip custom sites from the search query
-  const effectivePrefs = tierConfig.customSites
-    ? prefs
-    : { ...prefs, customSites: "" };
-
-  const query = buildSearchQuery(effectivePrefs);
+  const query     = buildSearchQuery(prefs);
+  const jobBoards = buildJobBoardsContext(prefs, tierConfig);
 
   // Fetch resume from knowledge base for better matching
   let resumeSnippet = "";
@@ -280,12 +263,11 @@ async function runJobSearch(userId, prefs, tier = "free") {
     prefs.industries      ? `Industries: ${prefs.industries}`            : "",
     prefs.companySize && prefs.companySize !== "any"
                           ? `Company size: ${prefs.companySize}`         : "",
-    prefs.postedWithin    ? `Posted within last ${prefs.postedWithin} days — REJECT older postings` : "Must be a recent posting",
+    prefs.postedWithin    ? `Prefer jobs posted within last ${prefs.postedWithin} days` : "",
   ].filter(Boolean).join("\n");
 
-  // Tell Claude which jobs were already found this week so it returns different ones
   const seenSection = recentJobs.length > 0
-    ? `\nALREADY FOUND THIS WEEK — do NOT return these again, find DIFFERENT jobs:\n${
+    ? `\nAlready found this week — skip these, find different ones:\n${
         recentJobs.slice(0, 20).map(j => `- ${j.company}: ${j.title}`).join("\n")
       }\n`
     : "";
@@ -294,23 +276,25 @@ async function runJobSearch(userId, prefs, tier = "free") {
 
   const systemPrompt = `You are a job search agent. Search job boards and return ONLY a raw JSON array — no markdown, no explanation, nothing else.
 
-REQUIRED CRITERIA (reject any job that does not match):
-${criteria || "No specific criteria."}
+Search these job boards: ${jobBoards}
+
+USER'S PREFERENCES (match as closely as possible):
+${criteria || "No specific criteria — find any relevant openings."}
 ${seenSection}
-Rules:
-- Skip jobs where the posted experience requirement is significantly higher than the user's level
-- Only include direct job posting URLs (not search pages)
-- Prefer postings from the last 14 days
-${resumeSnippet ? `- Match roles to this candidate background:\n${resumeSnippet}` : ""}
+Guidelines:
+- Prioritise jobs that match the role and location; include close matches if exact matches are scarce
+- Only include direct job posting URLs you found verbatim — use "" if you can't confirm the link
+- Prefer recent postings but do not exclude a good match solely because of posting date
+${resumeSnippet ? `- Favour roles that suit this candidate background:\n${resumeSnippet}` : ""}
 
-Return exactly ${jobCount} jobs as a JSON array. Field rules:
-- url: CRITICAL — only include a URL you found verbatim in your search results. Do NOT construct, guess, or modify any URL. Use "" if you cannot confirm the exact direct link.
-- posted: exact date as "Month DD, YYYY" or relative like "2 days ago". Use "" if unknown.
-- description: 3-4 sentences covering the role, key responsibilities, and required skills.
+Return exactly ${jobCount} jobs. If you cannot find ${jobCount} perfect matches, return the best ${jobCount} you find — never return fewer than ${jobCount} unless the search returns absolutely nothing.
 
-[{"title":"","company":"","location":"","salary":"","experience":"","description":"","url":"","posted":""}]`;
+[{"title":"","company":"","location":"","salary":"","experience":"","description":"","url":"","posted":""}]
 
-  const userQuery = `Find ${jobCount} current job listings. Search: ${query}`;
+posted format: "Month DD, YYYY" or "X days ago". Use "" if unknown.
+description: 3-4 sentences on role, responsibilities, and required skills.`;
+
+  const userQuery = `Find ${jobCount} job listings matching: ${query}`;
 
   const response = await anthropic.messages.create({
     model:      "claude-sonnet-4-6",
@@ -332,8 +316,11 @@ Return exactly ${jobCount} jobs as a JSON array. Field rules:
     const clean = raw.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim();
     const match = clean.match(/\[[\s\S]*\]/);
     if (match) jobs = JSON.parse(match[0]);
-  } catch {
-    console.error("Could not parse job search JSON:", raw.slice(0, 300));
+    if (jobs.length === 0) {
+      console.warn(`[runJobSearch] Parsed 0 jobs for ${userId}. stop_reason=${response.stop_reason} raw_preview=${raw.slice(0, 400)}`);
+    }
+  } catch (e) {
+    console.error(`[runJobSearch] JSON parse failed for ${userId}: ${e.message} | raw_preview=${raw.slice(0, 400)}`);
     jobs = [];
   }
 
