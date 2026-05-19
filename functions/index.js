@@ -1,4 +1,4 @@
-const functions = require("firebase-functions/v1");
+﻿const functions = require("firebase-functions/v1");
 const { onSchedule } = require("firebase-functions/v2/scheduler");
 const express   = require("express");
 const cors      = require("cors");
@@ -8,14 +8,14 @@ const Stripe    = require("stripe");
 
 admin.initializeApp();
 
-// Live site URL — used as the click-through destination in push notifications.
+// Live site URL â€” used as the click-through destination in push notifications.
 // Update this if you move to a custom domain.
 const SITE_URL = "https://adeen924.github.io/Adib-Agents";
 
 const app = express();
 app.use(cors({ origin: true }));
 
-// ── Stripe webhook — must be registered BEFORE express.json() so we get the raw body ──
+// â”€â”€ Stripe webhook â€” must be registered BEFORE express.json() so we get the raw body â”€â”€
 app.post("/webhook", express.raw({ type: "application/json" }), async (req, res) => {
   const stripe        = Stripe(process.env.STRIPE_SECRET_KEY);
   const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
@@ -82,14 +82,20 @@ app.use(express.json({ limit: "2mb" }));
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 const db = admin.firestore();
 
-// Sonnet — used for chat and resume parsing
+// Claude Sonnet 4.6 â€” complex reasoning, writing, web synthesis
 const INPUT_COST_SONNET  = 3    / 1_000_000;
 const OUTPUT_COST_SONNET = 15   / 1_000_000;
-// Legacy alias used by chat/parse routes
+// Claude Haiku 4.5 â€” structured extraction and templated generation (~3.75Ã— cheaper)
+const INPUT_COST_HAIKU   = 0.80 / 1_000_000;
+const OUTPUT_COST_HAIKU  = 4    / 1_000_000;
+// Legacy aliases
 const INPUT_COST  = INPUT_COST_SONNET;
 const OUTPUT_COST = OUTPUT_COST_SONNET;
 
-// ── Subscription tiers ────────────────────────────────────────────────────────
+const MODEL_SONNET = "claude-sonnet-4-6";
+const MODEL_HAIKU  = "claude-haiku-4-5-20251001";
+
+// â”€â”€ Subscription tiers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // Enforce these limits in runJobSearch and the scheduler.
 // When Stripe is wired up, the webhook sets tier in the `users` collection.
 const TIERS = {
@@ -101,7 +107,7 @@ const TIERS = {
     customSites:         false,
     maxTargetCompanies:  3,
     jobsPerSearch:       5,
-    manualSearch:        false, // scheduled only — no Search Now button
+    manualSearch:        false, // scheduled only â€” no Search Now button
   },
   pro: {
     label:               "Pro",
@@ -134,7 +140,7 @@ async function ensureUser(userId) {
   }
 }
 
-// ── Feature usage limits ─────────────────────────────────────────────────────
+// â”€â”€ Feature usage limits â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // Tracks per-day (free) or per-month (pro) usage in featureUsage/{userId}_{window}
 const FEATURE_LIMITS = {
   free: {
@@ -198,15 +204,8 @@ async function enforceFeatureLimit(userId, feature) {
   });
 }
 
-const DEFAULT_SYSTEM = `You are an AI job search agent helping the user land their next role. You help with:
-- Interview preparation and practice questions
-- Salary negotiation advice
-- Career strategy and decision-making
-- Company research
 
-Be specific, practical, and encouraging. Always give concrete next steps.`;
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
+// â”€â”€ Helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // Sort Firestore docs by createdAt descending (in JS, no index needed)
 function sortByDate(docs) {
   return docs.sort((a, b) => {
@@ -280,7 +279,7 @@ function buildJobBoardsContext(prefs, tierConfig) {
   return [...custom, ...builtIn].join(", ");
 }
 
-// Run a job search for one user — limits are tier-based
+// Run a job search for one user â€” limits are tier-based
 async function runJobSearch(userId, prefs, tier = "free") {
   const tierConfig = TIERS[tier] || TIERS.free;
 
@@ -342,7 +341,7 @@ async function runJobSearch(userId, prefs, tier = "free") {
   ].filter(Boolean).join("\n");
 
   const seenSection = recentJobs.length > 0
-    ? `\nAlready found this week — skip these, find different ones:\n${
+    ? `\nAlready found this week â€” skip these, find different ones:\n${
         recentJobs.slice(0, 20).map(j => `- ${j.company}: ${j.title}`).join("\n")
       }\n`
     : "";
@@ -352,10 +351,10 @@ async function runJobSearch(userId, prefs, tier = "free") {
   const systemPrompt = `You are an intelligent job matching agent. Search job boards, find real current postings, and evaluate each one across multiple dimensions to surface the best matches for this specific candidate.
 
 ${candidateProfile ? `CANDIDATE PROFILE:\n${candidateProfile}\n` : ""}
-REQUIRED CRITERIA (hard filters — reject any job that does not match ALL of these):
+REQUIRED CRITERIA (hard filters â€” reject any job that does not match ALL of these):
 ${criteria || "No specific criteria."}
 ${seenSection}
-MATCHING DIMENSIONS — score and reason across all of these for every job you return:
+MATCHING DIMENSIONS â€” score and reason across all of these for every job you return:
 1. Experience Depth: Does the required tenure and seniority match the candidate's actual depth?
 2. Transferable Skills: Which of the candidate's skills apply directly, even if from a different domain?
 3. Project Similarity: Has the candidate done work closely resembling what this role requires?
@@ -372,20 +371,20 @@ Rules:
 - Prefer postings from the last 14 days
 - Skip jobs where the required experience is significantly above the candidate's level
 
-Return exactly ${jobCount} jobs as a raw JSON array — no markdown, no explanation, nothing else.
+Return exactly ${jobCount} jobs as a raw JSON array â€” no markdown, no explanation, nothing else.
 Field rules:
 - fitScore: integer 0-100 reflecting overall match quality across all 10 dimensions (not keyword count)
-- matchReasons: array of 3-5 short strings (1-2 sentences each) explaining WHY this job fits the candidate — reference specific dimensions and the candidate's actual background
-- url: CRITICAL — only include a URL found verbatim in your search results. Do NOT construct or guess URLs. Use "" if you cannot confirm the exact direct link.
+- matchReasons: array of 3-5 short strings (1-2 sentences each) explaining WHY this job fits the candidate â€” reference specific dimensions and the candidate's actual background
+- url: CRITICAL â€” only include a URL found verbatim in your search results. Do NOT construct or guess URLs. Use "" if you cannot confirm the exact direct link.
 - posted: exact date as "Month DD, YYYY" (e.g. "May 10, 2026") or relative like "2 days ago". Never just a year. Use "" if unknown.
-- description: full job details — role responsibilities, required skills, nice-to-haves, team context. Aim for 6-8 sentences minimum.
+- description: full job details â€” role responsibilities, required skills, nice-to-haves, team context. Aim for 6-8 sentences minimum.
 
 [{"title":"","company":"","location":"","salary":"","experience":"","description":"","url":"","posted":"","fitScore":85,"matchReasons":["Experience Depth: ...","Transferable Skills: ...","Project Similarity: ..."]}]`;
 
   const userQuery = `Find ${jobCount} job listings matching: ${query}`;
 
   const response = await anthropic.messages.create({
-    model:      "claude-sonnet-4-6",
+    model:      MODEL_SONNET,
     max_tokens: Math.max(tierConfig.maxOutputTokens, 2500),
     tools:      [{ type: "web_search_20250305", name: "web_search", max_uses: tierConfig.webSearchesPerQuery }],
     system:     systemPrompt,
@@ -398,7 +397,7 @@ Field rules:
     .join("\n\n")
     .trim();
 
-  // Parse JSON — strip code fences if present
+  // Parse JSON â€” strip code fences if present
   let jobs = [];
   try {
     const clean = raw.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim();
@@ -450,7 +449,7 @@ Field rules:
 
   // Send push notification if new jobs were found
   if (uniqueJobs.length > 0) {
-    const preview = uniqueJobs.slice(0, 2).map(j => `${j.title} at ${j.company}`).join(" · ");
+    const preview = uniqueJobs.slice(0, 2).map(j => `${j.title} at ${j.company}`).join(" Â· ");
     const notifTitle = uniqueJobs.length === 1
       ? "1 new job found"
       : `${uniqueJobs.length} new jobs found`;
@@ -472,118 +471,10 @@ Field rules:
   return uniqueJobs;
 }
 
-// ── Health check ──────────────────────────────────────────────────────────────
+// â”€â”€ Health check â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 app.get("/", (req, res) => res.send("Backend is running"));
 
-// ── Chat ──────────────────────────────────────────────────────────────────────
-app.post("/chat", async (req, res) => {
-  const { message, systemPrompt, history, userId, view } = req.body;
-
-  if (!message || typeof message !== "string" || message.trim() === "") {
-    return res.status(400).json({ error: "message is required" });
-  }
-
-  let fullSystem = typeof systemPrompt === "string" && systemPrompt.trim()
-    ? systemPrompt : DEFAULT_SYSTEM;
-
-  if (userId) {
-    try {
-      // Inject knowledge base (background + resume)
-      const kbDoc = await db.collection("knowledge").doc(userId).get();
-      if (kbDoc.exists) {
-        const kb = kbDoc.data();
-        const parts = [];
-        if (kb.currentPosition)    parts.push(`CURRENT POSITION: ${kb.currentPosition}`);
-        if (kb.previousPositions)  parts.push(`PREVIOUS EXPERIENCE:\n${kb.previousPositions}`);
-        if (kb.targetRole)         parts.push(`TARGET ROLE: ${kb.targetRole}`);
-        if (kb.skills)             parts.push(`SKILLS: ${kb.skills}`);
-        if (kb.education)          parts.push(`EDUCATION: ${kb.education}`);
-        if (kb.additionalContext)  parts.push(`ADDITIONAL CONTEXT:\n${kb.additionalContext}`);
-        if (parts.length > 0) {
-          fullSystem += `\n\n--- USER BACKGROUND ---\n${parts.join("\n\n")}`;
-        }
-        // Resume: inject as style reference for document generation
-        if (kb.resume && kb.resume.trim()) {
-          fullSystem += `\n\n--- RESUME STYLE REFERENCE ---\nThe user has uploaded their current resume. When creating or rewriting resumes, match the exact formatting structure, section order, tone, and length of this resume:\n\n${kb.resume.slice(0, 4000)}`;
-        }
-      }
-    } catch { /* non-fatal */ }
-  }
-
-  const priorMessages = Array.isArray(history) ? history.slice(0, -1) : [];
-  const messages = [
-    ...priorMessages.map((m) => ({ role: m.role, content: m.content })),
-    { role: "user", content: message.trim() },
-  ];
-
-  try {
-    const response = await anthropic.messages.create({
-      model:      "claude-sonnet-4-6",
-      max_tokens: 2048,
-      system:     fullSystem,
-      tools:      [{ type: "web_search_20250305", name: "web_search" }],
-      messages,
-    });
-
-    const reply = response.content
-      .filter((b) => b.type === "text")
-      .map((b) => b.text)
-      .join("\n\n") || "I couldn't generate a response. Please try again.";
-
-    if (userId && response.usage) {
-      const { input_tokens, output_tokens } = response.usage;
-      db.collection("activity").add({
-        userId, view: view || "chat",
-        inputTokens: input_tokens, outputTokens: output_tokens,
-        cost: (input_tokens * INPUT_COST) + (output_tokens * OUTPUT_COST),
-        createdAt: admin.firestore.FieldValue.serverTimestamp(),
-      }).catch(() => {});
-    }
-
-    res.json({ reply });
-  } catch (error) {
-    console.error("Anthropic API error:", error.message);
-    res.status(500).json({ error: "Failed to get a response. Please try again." });
-  }
-});
-
-// ── Chat history ──────────────────────────────────────────────────────────────
-app.post("/history/save", async (req, res) => {
-  const { userId, view, userMessage, assistantReply } = req.body;
-  if (!userId || !userMessage || !assistantReply)
-    return res.status(400).json({ error: "userId, userMessage, and assistantReply are required" });
-  try {
-    await db.collection("chats").add({
-      userId, view: view || "interview", userMessage, assistantReply,
-      createdAt: admin.firestore.FieldValue.serverTimestamp(),
-    });
-    res.json({ ok: true });
-  } catch (err) {
-    res.status(500).json({ error: "Failed to save message" });
-  }
-});
-
-app.get("/history/:userId/:view", async (req, res) => {
-  const { userId, view } = req.params;
-  try {
-    // No composite index needed — filter by view in JS
-    const snap = await db.collection("chats").where("userId", "==", userId).get();
-    const filtered = sortByDate(snap.docs.filter(d => d.data().view === view)).slice(0, 20).reverse();
-    const messages = filtered.flatMap((doc) => {
-      const d = doc.data();
-      return [
-        { role: "user",      content: d.userMessage },
-        { role: "assistant", content: d.assistantReply },
-      ];
-    });
-    res.json({ messages });
-  } catch (err) {
-    console.error("History error:", err.message);
-    res.status(500).json({ error: "Failed to load history" });
-  }
-});
-
-// ── Stats ─────────────────────────────────────────────────────────────────────
+// â”€â”€ Stats â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 app.get("/stats/:userId", async (req, res) => {
   try {
     const snap   = await db.collection("activity").where("userId", "==", req.params.userId).get();
@@ -613,7 +504,7 @@ app.get("/stats/:userId", async (req, res) => {
   }
 });
 
-// ── Documents ─────────────────────────────────────────────────────────────────
+// â”€â”€ Documents â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 app.get("/documents/:userId/:type", async (req, res) => {
   const { userId, type } = req.params;
   try {
@@ -653,7 +544,7 @@ app.delete("/documents/:docId", async (req, res) => {
   }
 });
 
-// ── Applications ──────────────────────────────────────────────────────────────
+// â”€â”€ Applications â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 app.get("/applications/:userId", async (req, res) => {
   try {
     const snap = await db.collection("applications").where("userId", "==", req.params.userId).get();
@@ -699,7 +590,7 @@ app.delete("/applications/:appId", async (req, res) => {
   }
 });
 
-// ── Knowledge Base ────────────────────────────────────────────────────────────
+// â”€â”€ Knowledge Base â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 app.get("/knowledge/:userId", async (req, res) => {
   try {
     const doc = await db.collection("knowledge").doc(req.params.userId).get();
@@ -730,7 +621,7 @@ app.post("/knowledge/save", async (req, res) => {
   }
 });
 
-// ── Preferences ───────────────────────────────────────────────────────────────
+// â”€â”€ Preferences â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 app.get("/preferences/:userId", async (req, res) => {
   try {
     const doc = await db.collection("preferences").doc(req.params.userId).get();
@@ -777,7 +668,7 @@ app.post("/preferences/save", async (req, res) => {
   }
 });
 
-// ── Parse resume → structured fields ─────────────────────────────────────────
+// â”€â”€ Parse resume â†’ structured fields â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 app.post("/knowledge/parse-resume", async (req, res) => {
   const { resumeText } = req.body;
   if (!resumeText || !resumeText.trim())
@@ -785,16 +676,16 @@ app.post("/knowledge/parse-resume", async (req, res) => {
 
   try {
     const response = await anthropic.messages.create({
-      model:      "claude-sonnet-4-6",
+      model:      MODEL_HAIKU,
       max_tokens: 1024,
       messages: [{
         role:    "user",
-        content: `You are a resume parser. Extract structured information from the resume below and return ONLY a valid JSON object — no explanation, no markdown, no code fences, just the raw JSON.
+        content: `You are a resume parser. Extract structured information from the resume below and return ONLY a valid JSON object â€” no explanation, no markdown, no code fences, just the raw JSON.
 
 Use these exact fields (use empty string "" for anything not found):
 {
-  "currentPosition": "Most recent job title and company with dates, e.g. Senior Engineer at Acme Corp (2022–present)",
-  "previousPositions": "All previous roles, one per line, e.g.\\nSoftware Engineer at Startup Inc (2019–2022)\\nJunior Developer at Agency (2017–2019)",
+  "currentPosition": "Most recent job title and company with dates, e.g. Senior Engineer at Acme Corp (2022â€“present)",
+  "previousPositions": "All previous roles, one per line, e.g.\\nSoftware Engineer at Startup Inc (2019â€“2022)\\nJunior Developer at Agency (2017â€“2019)",
   "targetRole": "The next logical role for this candidate based on their trajectory, e.g. Staff Engineer or Head of Product",
   "skills": "Comma-separated list of all technical skills, tools, languages, and frameworks found",
   "education": "Degree, institution, and graduation year, e.g. BS Computer Science, University of Washington (2017)",
@@ -819,7 +710,7 @@ ${resumeText.slice(0, 8000)}`,
   }
 });
 
-// ── Digest ────────────────────────────────────────────────────────────────────
+// â”€â”€ Digest â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 app.get("/digest/:userId", async (req, res) => {
   try {
     const snap = await db.collection("digests").where("userId", "==", req.params.userId).get();
@@ -830,7 +721,7 @@ app.get("/digest/:userId", async (req, res) => {
   }
 });
 
-// ── Jobs Found ────────────────────────────────────────────────────────────────
+// â”€â”€ Jobs Found â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // IMPORTANT: /jobs/detail/:jobId must come before /jobs/:userId
 app.get("/jobs/detail/:jobId", async (req, res) => {
   try {
@@ -842,7 +733,7 @@ app.get("/jobs/detail/:jobId", async (req, res) => {
   }
 });
 
-// ── Per-job AI document generation ───────────────────────────────────────────
+// â”€â”€ Per-job AI document generation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 async function getJobAndResume(jobId, userId) {
   const [jobDoc, kbDoc] = await Promise.all([
@@ -863,16 +754,16 @@ app.post("/jobs/:jobId/tailored-resume", async (req, res) => {
     const { jobDoc, job, resume } = await getJobAndResume(req.params.jobId, userId);
 
     const response = await anthropic.messages.create({
-      model:      "claude-sonnet-4-6",
+      model:      MODEL_SONNET,
       max_tokens: 3000,
-      system: `You are an expert resume writer. Output plain text only — no markdown, no ** bold **, no _ italic _, no special symbols, no HTML.
+      system: `You are an expert resume writer. Output plain text only â€” no markdown, no ** bold **, no _ italic _, no special symbols, no HTML.
 
-Formatting rules (follow exactly — every rule matters for parsing):
-- LINE 1: candidate's full name ONLY — nothing else on this line
-- LINE 2: email | phone | location (LinkedIn URL if available) — contact info ONLY, nothing else
+Formatting rules (follow exactly â€” every rule matters for parsing):
+- LINE 1: candidate's full name ONLY â€” nothing else on this line
+- LINE 2: email | phone | location (LinkedIn URL if available) â€” contact info ONLY, nothing else
 - LINE 3: blank line
 - Section headers in ALL CAPS on their own line: PROFESSIONAL SUMMARY, EXPERIENCE, EDUCATION, SKILLS
-- Each role on its own line: Job Title | Company Name | Month Year – Month Year
+- Each role on its own line: Job Title | Company Name | Month Year â€“ Month Year
 - Bullet points start with a hyphen and space: - like this
 - Blank line between sections
 - Single column, no tables, no columns`,
@@ -886,7 +777,7 @@ CONTENT RULES:
 - Naturally incorporate keywords from the job description where they honestly apply.
 
 CANDIDATE'S RESUME:
-${resume || "No resume on file — write a clean template with [PLACEHOLDER] for the candidate to fill in."}
+${resume || "No resume on file â€” write a clean template with [PLACEHOLDER] for the candidate to fill in."}
 
 JOB POSTING:
 Role: ${job.title || ""}
@@ -916,26 +807,26 @@ app.post("/jobs/:jobId/cover-letter", async (req, res) => {
     const tailoredResume = job.tailoredResume || resume;
 
     const response = await anthropic.messages.create({
-      model:      "claude-sonnet-4-6",
+      model:      MODEL_SONNET,
       max_tokens: 1500,
       tools:      [{ type: "web_search_20250305", name: "web_search", max_uses: 1 }],
       messages: [{
         role: "user",
         content: `Write a professional cover letter for this job application.
 
-Search the web for "${job.company || ""} mission values culture" to find genuine details about the company — reference them specifically in the letter.
+Search the web for "${job.company || ""} mission values culture" to find genuine details about the company â€” reference them specifically in the letter.
 
 Guidelines:
-- 3–4 paragraphs, professional but warm tone
+- 3â€“4 paragraphs, professional but warm tone
 - Opening: name the specific role and a genuine reason for interest
-- Body: connect 2–3 specific experiences from the candidate's resume to the role's requirements
+- Body: connect 2â€“3 specific experiences from the candidate's resume to the role's requirements
 - Company paragraph: reference real mission/values/products from your search
-- Closing: clear call to action, no clichés
+- Closing: clear call to action, no clichÃ©s
 
-Output the letter only — no subject line, no "Here is your cover letter" preamble.
+Output the letter only â€” no subject line, no "Here is your cover letter" preamble.
 
 CANDIDATE'S RESUME:
-${tailoredResume || "No resume on file — write a strong template the candidate can personalise."}
+${tailoredResume || "No resume on file â€” write a strong template the candidate can personalise."}
 
 JOB POSTING:
 Role: ${job.title || ""}
@@ -964,17 +855,17 @@ app.post("/jobs/:jobId/interview-prep", async (req, res) => {
     const { jobDoc, job, resume } = await getJobAndResume(req.params.jobId, userId);
 
     const response = await anthropic.messages.create({
-      model:      "claude-sonnet-4-6",
+      model:      MODEL_HAIKU,
       max_tokens: 2500,
       messages: [{
         role: "user",
         content: `Prepare me for my interview at ${job.company || "this company"} for the ${job.title || "role"} position.
 
-1. TECHNICAL QUESTIONS (6–8) — specific to the tech stack and skills in the job description. For each, include a short note on how to approach the answer.
+1. TECHNICAL QUESTIONS (6â€“8) â€” specific to the tech stack and skills in the job description. For each, include a short note on how to approach the answer.
 
-2. BEHAVIORAL / SITUATIONAL QUESTIONS (5) — STAR method, tailored to what this role values.
+2. BEHAVIORAL / SITUATIONAL QUESTIONS (5) â€” STAR method, tailored to what this role values.
 
-3. QUESTIONS TO ASK THE INTERVIEWER (4) — thoughtful questions showing genuine interest.
+3. QUESTIONS TO ASK THE INTERVIEWER (4) â€” thoughtful questions showing genuine interest.
 
 ${resume ? `CANDIDATE BACKGROUND:\n${resume.slice(0, 1500)}` : ""}
 
@@ -1017,9 +908,9 @@ app.post("/jobs/:jobId/network", async (req, res) => {
     const background = backgroundParts.join(" | ") || (kb.resume ? kb.resume.slice(0, 600) : "");
 
     const response = await anthropic.messages.create({
-      model:      "claude-sonnet-4-6",
+      model:      MODEL_SONNET,
       max_tokens: 3000,
-      tools:      [{ type: "web_search_20250305", name: "web_search", max_uses: 3 }],
+      tools:      [{ type: "web_search_20250305", name: "web_search", max_uses: 2 }],
       messages: [{
         role:    "user",
         content: `You are a networking strategist helping a job seeker strategically contact the right people at ${job.company || "the target company"} for a ${job.title || "role"} position.
@@ -1039,7 +930,7 @@ ${job.description ? `Description:\n${job.description.slice(0, 600)}` : ""}
 
 Based on your research, identify the 5 most strategic people for this candidate to contact. For each, write a personalized LinkedIn message (under 120 words) that:
 - Opens with a specific genuine hook (shared background, their work, or role context)
-- Does NOT say "I'm applying" — frames the outreach as seeking advice or insight
+- Does NOT say "I'm applying" â€” frames the outreach as seeking advice or insight
 - Ends with a single soft ask (brief call, insight, or introduction)
 - Feels human and specific, NOT like a template
 
@@ -1068,7 +959,7 @@ Respond with ONLY a valid JSON object, no text before or after:
       const jsonMatch = rawText.match(/\{[\s\S]*\}/);
       networking = JSON.parse(jsonMatch ? jsonMatch[0] : rawText);
     } catch {
-      throw new Error("Could not parse networking results — please try again.");
+      throw new Error("Could not parse networking results â€” please try again.");
     }
 
     await jobDoc.ref.update({
@@ -1093,7 +984,7 @@ app.get("/jobs/:userId", async (req, res) => {
   }
 });
 
-// ── Manual search now ─────────────────────────────────────────────────────────
+// â”€â”€ Manual search now â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 app.post("/search/now/:userId", async (req, res) => {
   const { userId } = req.params;
   try {
@@ -1115,7 +1006,7 @@ app.post("/search/now/:userId", async (req, res) => {
   }
 });
 
-// ── User / tier management ────────────────────────────────────────────────────
+// â”€â”€ User / tier management â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 app.get("/user/:userId", async (req, res) => {
   const { userId } = req.params;
   try {
@@ -1128,7 +1019,7 @@ app.get("/user/:userId", async (req, res) => {
   }
 });
 
-// Admin / Stripe-webhook endpoint — sets a user's tier.
+// Admin / Stripe-webhook endpoint â€” sets a user's tier.
 // Protect this with a shared secret before exposing to the internet.
 // When integrating Stripe: call this from your webhook handler after
 // a checkout.session.completed or customer.subscription.updated event.
@@ -1136,7 +1027,7 @@ app.post("/user/tier", async (req, res) => {
   const { userId, tier, secret } = req.body;
   if (!userId || !tier) return res.status(400).json({ error: "userId and tier required" });
   if (!["free", "pro"].includes(tier)) return res.status(400).json({ error: "Invalid tier" });
-  // Simple shared-secret guard — set ADMIN_SECRET in your Cloud Functions env vars
+  // Simple shared-secret guard â€” set ADMIN_SECRET in your Cloud Functions env vars
   // to protect this endpoint until you have real Stripe auth in place.
   if (process.env.ADMIN_SECRET && secret !== process.env.ADMIN_SECRET) {
     return res.status(403).json({ error: "Forbidden" });
@@ -1152,7 +1043,7 @@ app.post("/user/tier", async (req, res) => {
   }
 });
 
-// ── Stripe Checkout ───────────────────────────────────────────────────────────
+// â”€â”€ Stripe Checkout â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 app.post("/create-checkout-session", async (req, res) => {
   const { userId, userEmail, billingPeriod } = req.body;
   if (!userId) return res.status(400).json({ error: "userId required" });
@@ -1205,7 +1096,7 @@ app.post("/create-portal-session", async (req, res) => {
   }
 });
 
-// ── Push Notification token management ───────────────────────────────────────
+// â”€â”€ Push Notification token management â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 app.post("/notifications/token", async (req, res) => {
   const { userId, token } = req.body;
   if (!userId || !token) return res.status(400).json({ error: "userId and token required" });
@@ -1221,7 +1112,7 @@ app.post("/notifications/token", async (req, res) => {
   }
 });
 
-// ── Target Companies (Watchlist) ─────────────────────────────────────────────
+// â”€â”€ Target Companies (Watchlist) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 app.get("/target-companies/:userId", async (req, res) => {
   try {
     const doc = await db.collection("targetCompanies").doc(req.params.userId).get();
@@ -1274,7 +1165,7 @@ exports.api = functions
   .runWith({ secrets: ["ANTHROPIC_API_KEY", "STRIPE_SECRET_KEY", "STRIPE_WEBHOOK_SECRET", "STRIPE_PRO_PRICE_ID", "STRIPE_PRO_ANNUAL_PRICE_ID"] })
   .https.onRequest(app);
 
-// ── Push notification sender ──────────────────────────────────────────────────
+// â”€â”€ Push notification sender â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 async function sendPushNotification(userId, title, body) {
   try {
     const doc = await db.collection("fcmTokens").doc(userId).get();
@@ -1312,7 +1203,7 @@ async function sendPushNotification(userId, title, body) {
   }
 }
 
-// ── Watchlist helpers ─────────────────────────────────────────────────────────
+// â”€â”€ Watchlist helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 function makeWatchlistFingerprint(company, title, url) {
   const jobId = extractJobId(url);
   if (jobId) return jobId;
@@ -1333,7 +1224,7 @@ async function checkTargetCompany(userId, company) {
 
   const systemPrompt = `You are a job search agent monitoring a specific company's career page. Visit the URL provided and list all currently open positions.
 
-Return ONLY a raw JSON array — no markdown, no explanation:
+Return ONLY a raw JSON array â€” no markdown, no explanation:
 [{"title":"","location":"","url":"","salary":"","description":"","posted":""}]
 
 Rules:
@@ -1345,9 +1236,9 @@ Rules:
   let jobs = [];
   try {
     const response = await anthropic.messages.create({
-      model:      "claude-sonnet-4-6",
+      model:      MODEL_SONNET,
       max_tokens: 3000,
-      tools:      [{ type: "web_search_20250305", name: "web_search", max_uses: 3 }],
+      tools:      [{ type: "web_search_20250305", name: "web_search", max_uses: 2 }],
       system:     systemPrompt,
       messages:   [{ role: "user", content: `Find all open jobs at ${company.name}. Career page: ${company.url}` }],
     });
@@ -1396,14 +1287,14 @@ Rules:
     const notifTitle = newJobs.length === 1
       ? `New job at ${company.name}`
       : `${newJobs.length} new jobs at ${company.name}`;
-    const notifBody = newJobs.slice(0, 2).map(j => j.title).join(" · ");
+    const notifBody = newJobs.slice(0, 2).map(j => j.title).join(" Â· ");
     sendPushNotification(userId, notifTitle, notifBody).catch(() => {});
   }
 
   return newJobs.length;
 }
 
-// ── Schedule helpers ──────────────────────────────────────────────────────────
+// â”€â”€ Schedule helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 function getLocalHour(date, timezone) {
   try {
     const parts = new Intl.DateTimeFormat("en-US", {
@@ -1428,7 +1319,7 @@ function computeSearchHours(prefs) {
   return hours;
 }
 
-// ── Job search — runs every hour, fires per each user's schedule ──────────────
+// â”€â”€ Job search â€” runs every hour, fires per each user's schedule â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 exports.dailyJobSearch = onSchedule(
   { schedule: "0 * * * *", timeZone: "UTC" },
   async () => {
@@ -1474,7 +1365,7 @@ exports.dailyJobSearch = onSchedule(
   }
 );
 
-// ── Daily watchlist check — 9am Pacific ──────────────────────────────────────
+// â”€â”€ Daily watchlist check â€” 9am Pacific â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 exports.dailyWatchlistCheck = onSchedule(
   { schedule: "0 9 * * *", timeZone: "America/Los_Angeles" },
   async () => {

@@ -12,7 +12,6 @@ const userId = email;
 // ── Panel registry ────────────────────────────────────────────────────────────
 const PANELS = {
   dashboard: document.getElementById("dashboardView"),
-  chat:      document.getElementById("chatView"),
   jobs:      document.getElementById("jobsView"),
   jobDetail: document.getElementById("jobDetailView"),
   documents: document.getElementById("documentsView"),
@@ -20,26 +19,10 @@ const PANELS = {
   settings:  document.getElementById("settingsView"),
 };
 
-// ── Interview Prep chat config ────────────────────────────────────────────────
-const INTERVIEW_VIEW = {
-  title:    "Interview Prep",
-  subtitle: "Practice questions, company research, and offer negotiation",
-  chips:    [
-    "Give me common interview questions for my role",
-    "Help me answer 'tell me about yourself'",
-    "How do I negotiate salary?",
-    "What questions should I ask the interviewer?",
-  ],
-  prompt: "You are an expert interview coach. Help the user prepare for job interviews with practice questions, STAR-method answer frameworks, salary negotiation tactics, and company research. Be encouraging and specific.",
-};
-
-let isLoading              = false;
-let conversationHistory    = [];
-let currentDocType         = "resume";
-let currentJob             = null;
-let pendingResumeDownload  = false;
-let latestResumeText       = "";
-let userTier               = "free";  // loaded on init, used for feature gating
+let isLoading      = false;
+let currentDocType = "resume";
+let currentJob     = null;
+let userTier       = "free";  // loaded on init, used for feature gating
 
 // ── Init ──────────────────────────────────────────────────────────────────────
 function init() {
@@ -52,18 +35,7 @@ function init() {
   document.getElementById("nav-documents").addEventListener("click", () => showPanel("documents"));
   document.getElementById("nav-digest").addEventListener("click",    () => showPanel("digest"));
   document.getElementById("nav-settings").addEventListener("click",  () => showPanel("settings"));
-  document.getElementById("newChatBtn").addEventListener("click",    () => showPanel("chat"));
   document.getElementById("signOutBtn").addEventListener("click",    signOut);
-
-  // Interview Prep nav
-  document.querySelector("[data-view='interview']").addEventListener("click", () => showPanel("chat"));
-
-  // Chat
-  document.getElementById("sendBtn").addEventListener("click", sendMessage);
-  document.getElementById("messageInput").addEventListener("keydown", (e) => {
-    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendMessage(); }
-  });
-  document.getElementById("messageInput").addEventListener("input", autoResize);
 
   // Applications
   document.getElementById("addAppBtn").addEventListener("click",    showAppForm);
@@ -100,7 +72,7 @@ function init() {
   const navBackdrop = document.getElementById("navBackdrop");
   document.getElementById("menuToggle").addEventListener("click",  () => appLayout.classList.add("nav-open"));
   navBackdrop.addEventListener("click", () => appLayout.classList.remove("nav-open"));
-  document.querySelectorAll(".nav-item, [data-view], #newChatBtn, #signOutBtn").forEach(btn =>
+  document.querySelectorAll(".nav-item, #signOutBtn").forEach(btn =>
     btn.addEventListener("click", () => appLayout.classList.remove("nav-open"))
   );
 
@@ -127,8 +99,6 @@ function init() {
 
   // Load dashboard on start
   showPanel("dashboard");
-  renderChips(INTERVIEW_VIEW.chips);
-  loadHistory();
   loadUserTier();  // fetch tier early so gates are ready before Settings opens
 }
 
@@ -146,143 +116,12 @@ function showPanel(name) {
     settings:  "nav-settings",
   };
   if (navIds[name]) document.getElementById(navIds[name])?.classList.add("active");
-  if (name === "chat") document.querySelector("[data-view='interview']")?.classList.add("active");
 
   if (name === "dashboard")  { loadStats(); loadRecentJobs(); loadApplications(); }
   if (name === "jobs")       loadJobs();
   if (name === "documents")  loadDocuments(currentDocType);
   if (name === "digest")     loadDigest();
   if (name === "settings")   loadSettings();
-}
-
-// ── Chat ──────────────────────────────────────────────────────────────────────
-function renderChips(chips) {
-  const el = document.getElementById("chips");
-  if (!el) return;
-  el.innerHTML = "";
-  chips.forEach((text) => {
-    const chip = document.createElement("button");
-    chip.className   = "chip";
-    chip.textContent = text;
-    chip.addEventListener("click", () => {
-      document.getElementById("messageInput").value = text;
-      sendMessage();
-    });
-    el.appendChild(chip);
-  });
-}
-
-function removeEmptyState() {
-  document.getElementById("emptyState")?.remove();
-}
-
-function appendMessage(role, text) {
-  removeEmptyState();
-  const chatArea = document.getElementById("chatArea");
-
-  const wrapper = document.createElement("div");
-  wrapper.className = `message ${role}`;
-
-  const avatar       = document.createElement("div");
-  avatar.className   = "msg-avatar";
-  avatar.textContent = role === "user" ? email.charAt(0).toUpperCase() : "✦";
-
-  const bubble      = document.createElement("div");
-  bubble.className  = "msg-bubble";
-  bubble.innerHTML  = role === "assistant" ? formatMarkdown(text) : escapeHtml(text);
-
-  wrapper.appendChild(avatar);
-  wrapper.appendChild(bubble);
-  chatArea.appendChild(wrapper);
-  chatArea.scrollTop = chatArea.scrollHeight;
-}
-
-function appendTypingIndicator() {
-  removeEmptyState();
-  const chatArea = document.getElementById("chatArea");
-  const wrapper  = document.createElement("div");
-  wrapper.className = "message assistant typing-indicator";
-  wrapper.id        = "typingIndicator";
-  const avatar = document.createElement("div");
-  avatar.className = "msg-avatar"; avatar.textContent = "✦";
-  const bubble = document.createElement("div");
-  bubble.className = "msg-bubble";
-  bubble.innerHTML = '<div class="typing-dot"></div><div class="typing-dot"></div><div class="typing-dot"></div>';
-  wrapper.appendChild(avatar);
-  wrapper.appendChild(bubble);
-  chatArea.appendChild(wrapper);
-  chatArea.scrollTop = chatArea.scrollHeight;
-}
-
-async function sendMessage() {
-  const input = document.getElementById("messageInput");
-  const text  = input.value.trim();
-  if (!text || isLoading) return;
-
-  isLoading = true;
-  document.getElementById("sendBtn").disabled = true;
-  input.value = "";
-  input.style.height = "auto";
-
-  appendMessage("user", text);
-  conversationHistory.push({ role: "user", content: text });
-  appendTypingIndicator();
-
-  try {
-    const res = await fetch(`${BACKEND_URL}/chat`, {
-      method:  "POST",
-      headers: { "Content-Type": "application/json" },
-      body:    JSON.stringify({
-        message:      text,
-        systemPrompt: INTERVIEW_VIEW.prompt,
-        history:      conversationHistory.slice(-10),
-        userId,
-        view:         "interview",
-      }),
-    });
-    const data = await res.json();
-    document.getElementById("typingIndicator")?.remove();
-    if (!res.ok) throw new Error(data.error || "Request failed");
-
-    appendMessage("assistant", data.reply);
-    conversationHistory.push({ role: "assistant", content: data.reply });
-
-    if (pendingResumeDownload) {
-      pendingResumeDownload = false;
-      latestResumeText = data.reply;
-      appendResumeDownloadButton();
-    }
-
-    fetch(`${BACKEND_URL}/history/save`, {
-      method:  "POST",
-      headers: { "Content-Type": "application/json" },
-      body:    JSON.stringify({ userId, view: "interview", userMessage: text, assistantReply: data.reply }),
-    }).catch(() => {});
-  } catch (err) {
-    document.getElementById("typingIndicator")?.remove();
-    appendMessage("assistant", "Sorry, something went wrong. Please try again.");
-    console.error(err);
-  } finally {
-    isLoading = false;
-    document.getElementById("sendBtn").disabled = false;
-    input.focus();
-  }
-}
-
-function autoResize() {
-  const el = document.getElementById("messageInput");
-  el.style.height = "auto";
-  el.style.height = Math.min(el.scrollHeight, 160) + "px";
-}
-
-async function loadHistory() {
-  try {
-    const res  = await fetch(`${BACKEND_URL}/history/${encodeURIComponent(userId)}/interview`);
-    const data = await res.json();
-    if (!data.messages || data.messages.length === 0) return;
-    conversationHistory = data.messages;
-    data.messages.forEach((m) => appendMessage(m.role, m.content));
-  } catch { /* non-fatal */ }
 }
 
 // ── Dashboard recent jobs ─────────────────────────────────────────────────────
@@ -1198,7 +1037,7 @@ async function saveKnowledge(e) {
         additionalContext: document.getElementById("kbContext").value,
       }),
     });
-    status.textContent = "✓ Saved! Your resume and background will be used in every search and chat.";
+    status.textContent = "✓ Saved! Your resume and background will be used in every search.";
   } catch {
     status.textContent = "Failed to save. Please try again.";
   } finally { btn.disabled = false; btn.textContent = "Save Profile"; }
@@ -1338,24 +1177,6 @@ async function extractDocxText(file) {
   return result.value;
 }
 
-// ── Resume PDF export ─────────────────────────────────────────────────────────
-function appendResumeDownloadButton() {
-  const chatArea = document.getElementById("chatArea");
-  const wrap = document.createElement("div");
-  wrap.className = "resume-dl-bar";
-  wrap.innerHTML = `
-    <span style="font-size:0.8rem;color:var(--text-muted)">Resume generated ·</span>
-    <button class="btn btn-gold" style="padding:7px 16px;font-size:0.82rem" onclick="downloadResumeAsPDF()">
-      📄 Download as PDF
-    </button>`;
-  chatArea.appendChild(wrap);
-  chatArea.scrollTop = chatArea.scrollHeight;
-}
-
-function downloadResumeAsPDF() {
-  if (!latestResumeText) return;
-  generatePDF(latestResumeText, "tailored-resume.pdf");
-}
 
 function generatePDF(text, filename) {
   const { jsPDF } = window.jspdf;

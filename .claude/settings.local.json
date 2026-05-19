@@ -24,7 +24,8 @@
       "Bash(Get-ChildItem -Path \"C:\\\\Users\\\\amazl\\\\Documents\\\\GitHub\\\\Adib-Agents\" -Recurse -Directory)",
       "Bash(Select-Object -ExpandProperty FullName)",
       "Bash(firebase functions:secrets:set STRIPE_PRO_PRICE_ID)",
-      "Bash(firebase functions:secrets:set STRIPE_PRO_ANNUAL_PRICE_ID)"
+      "Bash(firebase functions:secrets:set STRIPE_PRO_ANNUAL_PRICE_ID)",
+      "Bash(powershell -Command \"\\(Get-Content index.js\\) -replace '\\\\\"claude-sonnet-4-6\\\\\"', 'MODEL_SONNET' | Set-Content index.js -Encoding utf8\")"
     ]
   }
 }

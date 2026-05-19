@@ -29,11 +29,6 @@
         <span class="nav-icon">📊</span> Dashboard
       </button>
 
-      <div class="nav-label" style="margin-top:10px">Tools</div>
-      <button class="nav-item" data-view="interview">
-        <span class="nav-icon">🎯</span> Interview Prep
-      </button>
-
       <div class="nav-label" style="margin-top:10px">Saved</div>
       <button class="nav-item" id="nav-jobs">
         <span class="nav-icon">💼</span> Jobs Found
@@ -50,11 +45,6 @@
       <div class="nav-label" style="margin-top:10px">Account</div>
       <button class="nav-item" id="nav-settings">
         <span class="nav-icon">⚙️</span> Settings
-      </button>
-
-      <div class="nav-label" style="margin-top:10px">Actions</div>
-      <button class="nav-item" id="newChatBtn">
-        <span class="nav-icon">＋</span> New Chat
       </button>
     </nav>
 
@@ -155,30 +145,6 @@
       </div>
 
     </div>
-  </div>
-
-  <!-- ── Chat view (Interview Prep) ── -->
-  <div class="main-content" id="chatView" style="display:none">
-    <header class="main-header">
-      <div>
-        <h2 id="viewTitle">Interview Prep</h2>
-        <p id="viewSubtitle">Practice questions, company research, and offer negotiation</p>
-      </div>
-      <div class="header-status"><span class="status-dot"></span> Connected</div>
-    </header>
-    <div class="chat-area" id="chatArea">
-      <div class="chat-empty" id="emptyState">
-        <div class="empty-icon">🎯</div>
-        <h3>Interview Prep</h3>
-        <p>Practice questions, company research, and salary negotiation coaching.</p>
-        <div class="suggestion-chips" id="chips"></div>
-      </div>
-    </div>
-    <div class="input-bar">
-      <textarea id="messageInput" placeholder="Ask anything about interview prep…" rows="1"></textarea>
-      <button class="send-btn" id="sendBtn" title="Send">➤</button>
-    </div>
-    <div class="input-hint" style="padding:0 24px 10px">Press Enter to send · Shift+Enter for new line</div>
   </div>
 
   <!-- ── Jobs Found view ── -->
