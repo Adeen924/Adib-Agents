@@ -918,8 +918,8 @@ async function loadSettings() {
 
 // Update these to match your Stripe prices exactly
 const PLAN_PRICES = {
-  monthly: { display: "$29 / month",  period: "monthly" },
-  annual:  { display: "$290 / year",  period: "annual"  },
+  monthly: { display: "$25 / month", period: "monthly" },
+  annual:  { display: "$240 / year", period: "annual"  },
 };
 
 let selectedBillingPeriod = "monthly";
