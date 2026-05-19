@@ -808,7 +808,6 @@ async function loadSettings() {
     loadKnowledge(),
     loadPreferences(),
     loadTargetCompanies(),
-    loadSettingsStats(),
     loadUserTier(),
   ]);
   // Wire upgrade/manage buttons each time the panel opens (safe to call multiple times)
@@ -952,15 +951,48 @@ function applyTierGates() {
   }
 }
 
-async function loadSettingsStats() {
+async function changePassword() {
+  const msgEl   = document.getElementById("pwMsg");
+  const current = document.getElementById("pwCurrent").value;
+  const next    = document.getElementById("pwNew").value;
+  const confirm = document.getElementById("pwConfirm").value;
+
+  msgEl.style.color = "var(--danger)";
+  if (!current || !next || !confirm) { msgEl.textContent = "Please fill in all fields."; return; }
+  if (next.length < 6)               { msgEl.textContent = "New password must be at least 6 characters."; return; }
+  if (next !== confirm)              { msgEl.textContent = "New passwords do not match."; return; }
+
+  // Wait for Firebase Auth to restore the session (currentUser is null until it loads)
+  const user = await new Promise(resolve => {
+    const unsub = firebase.auth().onAuthStateChanged(u => { unsub(); resolve(u); });
+  });
+  if (!user) { msgEl.textContent = "Not signed in. Please refresh and try again."; return; }
+
+  const isEmailUser = user.providerData.some(p => p.providerId === "password");
+  if (!isEmailUser) {
+    msgEl.textContent = "Password changes are not available for Google sign-in accounts.";
+    return;
+  }
+
   try {
-    const res  = await fetch(`${BACKEND_URL}/stats/${encodeURIComponent(userId)}`);
-    const data = await res.json();
-    document.getElementById("settings-stat-runs").textContent   = data.runs          ?? 0;
-    document.getElementById("settings-stat-tokens").textContent = (data.totalTokens  ?? 0).toLocaleString();
-    document.getElementById("settings-stat-cost").textContent   = data.costFormatted ?? "$0.0000";
-    document.getElementById("settings-stat-items").textContent  = data.runs          ?? 0;
-  } catch { /* non-fatal */ }
+    const credential = firebase.auth.EmailAuthProvider.credential(user.email, current);
+    await user.reauthenticateWithCredential(credential);
+    await user.updatePassword(next);
+    document.getElementById("pwCurrent").value = "";
+    document.getElementById("pwNew").value     = "";
+    document.getElementById("pwConfirm").value = "";
+    msgEl.style.color = "var(--success, #4caf50)";
+    msgEl.textContent = "Password updated successfully.";
+    setTimeout(() => { msgEl.textContent = ""; }, 4000);
+  } catch (err) {
+    const map = {
+      "auth/wrong-password":       "Current password is incorrect.",
+      "auth/too-many-requests":    "Too many attempts. Try again later.",
+      "auth/requires-recent-login":"Session expired. Please sign out and back in, then try again.",
+      "auth/weak-password":        "New password is too weak. Use at least 6 characters.",
+    };
+    msgEl.textContent = map[err.code] ?? `Update failed (${err.code}).`;
+  }
 }
 
 // ── Preferences ───────────────────────────────────────────────────────────────

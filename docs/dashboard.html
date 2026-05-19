@@ -218,6 +218,27 @@
     <div style="overflow-y:auto;flex:1">
       <div class="settings-content">
 
+        <!-- Change Password -->
+        <div class="settings-section">
+          <div class="settings-section-title">Account</div>
+          <div class="prefs-form" style="max-width:480px">
+            <div class="input-group">
+              <label>Current Password</label>
+              <input type="password" id="pwCurrent" placeholder="••••••••" autocomplete="current-password" />
+            </div>
+            <div class="input-group">
+              <label>New Password</label>
+              <input type="password" id="pwNew" placeholder="At least 6 characters" autocomplete="new-password" />
+            </div>
+            <div class="input-group">
+              <label>Confirm New Password</label>
+              <input type="password" id="pwConfirm" placeholder="••••••••" autocomplete="new-password" />
+            </div>
+            <p id="pwMsg" style="font-size:0.85rem;min-height:1.2em;margin:0"></p>
+            <button class="btn btn-gold" style="padding:10px 24px" onclick="changePassword()">Update Password</button>
+          </div>
+        </div>
+
         <!-- Subscription -->
         <div class="settings-section">
           <div class="settings-section-title">Subscription</div>
@@ -277,29 +298,6 @@
               </p>
             </div>
 
-          </div>
-        </div>
-
-        <!-- Activity Stats -->
-        <div class="settings-section">
-          <div class="settings-section-title">Activity (Last 24 Hours)</div>
-          <div class="stats-grid">
-            <div class="stat-card">
-              <div class="stat-value" id="settings-stat-runs">—</div>
-              <div class="stat-label">Agent Runs</div>
-            </div>
-            <div class="stat-card">
-              <div class="stat-value" id="settings-stat-tokens">—</div>
-              <div class="stat-label">Tokens Used</div>
-            </div>
-            <div class="stat-card">
-              <div class="stat-value" id="settings-stat-cost">—</div>
-              <div class="stat-label">Cost</div>
-            </div>
-            <div class="stat-card">
-              <div class="stat-value" id="settings-stat-items">—</div>
-              <div class="stat-label">Items Processed</div>
-            </div>
           </div>
         </div>
 
@@ -603,8 +601,9 @@
 <script>pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";</script>
 <!-- Mammoth.js for DOCX text extraction -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
-<!-- Firebase compat SDKs (auth already initialized in session; messaging added here) -->
+<!-- Firebase compat SDKs -->
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-messaging-compat.js"></script>
 <script src="firebase-config.js"></script>
 <script>
