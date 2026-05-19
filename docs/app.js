@@ -92,6 +92,8 @@ function init() {
 
   // Resume file upload
   initResumeUpload();
+  // Phone number formatter
+  initPhoneFormatter();
 
   // Check for post-Stripe-checkout redirect params
   const urlParams = new URLSearchParams(window.location.search);
@@ -108,9 +110,8 @@ function init() {
   // Load dashboard on start
   showPanel("dashboard");
   loadUserTier().then(() => {
-    if (typeof OnboardingEngine !== 'undefined') {
-      OnboardingEngine.init(userId, userTier);
-    }
+    // Let the onboarding engine know the real tier once the fetch resolves
+    if (typeof OnboardingEngine !== 'undefined') OnboardingEngine.setTier(userTier);
   });
 }
 
@@ -837,7 +838,7 @@ async function loadNotificationSettings() {
     const data = await res.json();
     const p    = data.preferences || {};
     if (p.notifEmail) document.getElementById("settingNotifEmail").value = p.notifEmail;
-    if (p.notifPhone) document.getElementById("settingNotifPhone").value = p.notifPhone;
+    if (p.notifPhone) document.getElementById("settingNotifPhone").value = formatPhoneDisplay(p.notifPhone);
   } catch { /* non-fatal */ }
 }
 
@@ -1118,6 +1119,14 @@ async function saveScheduleSettings() {
 async function saveNotificationSettings() {
   const btn    = document.getElementById("saveNotifBtn");
   const status = document.getElementById("notifStatus");
+
+  const rawPhone = document.getElementById("settingNotifPhone").value;
+  const digits   = rawPhone.replace(/\D/g, "");
+  if (rawPhone && digits.length !== 10) {
+    document.getElementById("notifStatus").textContent = "Please enter a valid 10-digit phone number.";
+    return;
+  }
+
   btn.disabled = true; btn.textContent = "Saving…";
   try {
     await fetch(`${BACKEND_URL}/preferences/save`, {
@@ -1125,7 +1134,7 @@ async function saveNotificationSettings() {
       body: JSON.stringify({
         userId,
         notifEmail: document.getElementById("settingNotifEmail").value.trim(),
-        notifPhone: document.getElementById("settingNotifPhone").value.trim(),
+        notifPhone: cleanPhone(document.getElementById("settingNotifPhone").value),
       }),
     });
     status.textContent = "✓ Contact info saved.";
@@ -1191,6 +1200,40 @@ async function saveKnowledge(e) {
   } catch {
     status.textContent = "Failed to save. Please try again.";
   } finally { btn.disabled = false; btn.textContent = "Save Profile"; }
+}
+
+// ── Phone number formatting ───────────────────────────────────────────────────
+function initPhoneFormatter() {
+  const input = document.getElementById("settingNotifPhone");
+  if (!input) return;
+  input.addEventListener("input", () => {
+    const digits = input.value.replace(/\D/g, "").slice(0, 10);
+    if (digits.length === 0) { input.value = ""; return; }
+    if (digits.length <= 3)  { input.value = `(${digits}`; return; }
+    if (digits.length <= 6)  { input.value = `(${digits.slice(0,3)}) ${digits.slice(3)}`; return; }
+    input.value = `(${digits.slice(0,3)}) ${digits.slice(3,6)}-${digits.slice(6)}`;
+  });
+  // Allow backspace to feel natural by stripping formatting before delete
+  input.addEventListener("keydown", e => {
+    if (e.key === "Backspace" && /\D$/.test(input.value)) {
+      e.preventDefault();
+      input.value = input.value.replace(/\D+$/, "").slice(0, -1);
+      input.dispatchEvent(new Event("input"));
+    }
+  });
+}
+
+function formatPhoneDisplay(raw) {
+  if (!raw) return "";
+  const digits = String(raw).replace(/\D/g, "").slice(0, 10);
+  if (digits.length === 10)
+    return `(${digits.slice(0,3)}) ${digits.slice(3,6)}-${digits.slice(6)}`;
+  return raw;
+}
+
+function cleanPhone(raw) {
+  // Store as digits only; backend can format as needed
+  return String(raw || "").replace(/\D/g, "").slice(0, 10);
 }
 
 // ── Resume file upload ────────────────────────────────────────────────────────

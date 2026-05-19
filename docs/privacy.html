@@ -1,0 +1,517 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Privacy Policy — CareerCopilot</title>
+  <link rel="stylesheet" href="style.css" />
+  <style>
+    /* ── Privacy page layout ── */
+    body { background: var(--bg); color: var(--text); }
+
+    .privacy-page {
+      min-height: 100vh;
+      padding: 48px 24px 80px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+
+    .privacy-topbar {
+      width: 100%;
+      max-width: 760px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 48px;
+    }
+
+    .privacy-logo {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      text-decoration: none;
+    }
+    .privacy-logo .logo-icon {
+      width: 34px;
+      height: 34px;
+      background: var(--gold-glow);
+      border: 1.5px solid var(--gold);
+      border-radius: 9px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1rem;
+    }
+    .privacy-logo .logo-text {
+      font-size: 0.95rem;
+      font-weight: 700;
+      color: var(--text);
+    }
+    .privacy-back {
+      font-size: 0.82rem;
+      color: var(--text-muted);
+      text-decoration: none;
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      padding: 6px 14px;
+      transition: border-color 0.2s, color 0.2s;
+    }
+    .privacy-back:hover { border-color: var(--gold); color: var(--gold); }
+
+    .privacy-doc {
+      width: 100%;
+      max-width: 760px;
+    }
+
+    .privacy-title {
+      font-size: 2rem;
+      font-weight: 800;
+      color: var(--text);
+      margin-bottom: 6px;
+      line-height: 1.2;
+    }
+
+    .privacy-meta {
+      font-size: 0.82rem;
+      color: var(--text-muted);
+      margin-bottom: 40px;
+      padding-bottom: 28px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .privacy-toc {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 22px 26px;
+      margin-bottom: 40px;
+    }
+    .privacy-toc-title {
+      font-size: 0.75rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.07em;
+      color: var(--text-muted);
+      margin-bottom: 14px;
+    }
+    .privacy-toc ol {
+      list-style: decimal;
+      padding-left: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .privacy-toc a {
+      font-size: 0.875rem;
+      color: var(--gold);
+      text-decoration: none;
+    }
+    .privacy-toc a:hover { text-decoration: underline; }
+
+    .privacy-section {
+      margin-bottom: 44px;
+      scroll-margin-top: 24px;
+    }
+    .privacy-section h2 {
+      font-size: 1.15rem;
+      font-weight: 700;
+      color: var(--text);
+      margin-bottom: 16px;
+      padding-bottom: 10px;
+      border-bottom: 1px solid var(--border);
+    }
+    .privacy-section p {
+      font-size: 0.9rem;
+      color: var(--text-muted);
+      line-height: 1.75;
+      margin-bottom: 14px;
+    }
+    .privacy-section p:last-child { margin-bottom: 0; }
+    .privacy-section ul, .privacy-section ol {
+      padding-left: 22px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      margin-bottom: 14px;
+    }
+    .privacy-section li {
+      font-size: 0.9rem;
+      color: var(--text-muted);
+      line-height: 1.65;
+    }
+    .privacy-section strong { color: var(--text); font-weight: 600; }
+
+    .privacy-highlight {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-left: 3px solid var(--gold);
+      border-radius: 8px;
+      padding: 16px 18px;
+      margin-bottom: 16px;
+      font-size: 0.88rem;
+      color: var(--text-muted);
+      line-height: 1.65;
+    }
+
+    .privacy-contact-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 24px 28px;
+      margin-top: 8px;
+    }
+    .privacy-contact-card p { margin-bottom: 6px; }
+    .privacy-contact-card a { color: var(--gold); text-decoration: none; }
+    .privacy-contact-card a:hover { text-decoration: underline; }
+
+    .privacy-footer {
+      width: 100%;
+      max-width: 760px;
+      margin-top: 48px;
+      padding-top: 24px;
+      border-top: 1px solid var(--border);
+      font-size: 0.8rem;
+      color: var(--text-muted);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+    .privacy-footer a { color: var(--text-muted); text-decoration: none; }
+    .privacy-footer a:hover { color: var(--gold); }
+
+    @media (max-width: 600px) {
+      .privacy-title { font-size: 1.5rem; }
+      .privacy-topbar { margin-bottom: 32px; }
+    }
+  </style>
+</head>
+<body class="privacy-page">
+
+  <div class="privacy-topbar">
+    <a class="privacy-logo" href="index.html">
+      <div class="logo-icon">✦</div>
+      <span class="logo-text">CareerCopilot</span>
+    </a>
+    <a class="privacy-back" href="index.html">← Back to Sign In</a>
+  </div>
+
+  <div class="privacy-doc">
+
+    <h1 class="privacy-title">Privacy Policy</h1>
+    <p class="privacy-meta">
+      Effective date: May 19, 2026 &nbsp;·&nbsp; Last updated: May 19, 2026
+    </p>
+
+    <div class="privacy-highlight">
+      <strong>Summary:</strong> CareerCopilot uses the information you provide — including your resume, job preferences, and contact details — solely to power your personalized job search experience. We do not sell your personal data. We use trusted third-party services (Google Firebase, Stripe, and Anthropic) to operate the platform. You can request deletion of your data at any time.
+    </div>
+
+    <!-- Table of Contents -->
+    <div class="privacy-toc">
+      <div class="privacy-toc-title">Contents</div>
+      <ol>
+        <li><a href="#s1">Who We Are</a></li>
+        <li><a href="#s2">Information We Collect</a></li>
+        <li><a href="#s3">How We Use Your Information</a></li>
+        <li><a href="#s4">AI Processing and Your Data</a></li>
+        <li><a href="#s5">Third-Party Services</a></li>
+        <li><a href="#s6">Data Sharing and Disclosure</a></li>
+        <li><a href="#s7">Data Retention</a></li>
+        <li><a href="#s8">Security</a></li>
+        <li><a href="#s9">Your Rights and Choices</a></li>
+        <li><a href="#s10">Cookies and Local Storage</a></li>
+        <li><a href="#s11">Children's Privacy</a></li>
+        <li><a href="#s12">Changes to This Policy</a></li>
+        <li><a href="#s13">Contact Us</a></li>
+      </ol>
+    </div>
+
+    <!-- 1 -->
+    <div class="privacy-section" id="s1">
+      <h2>1. Who We Are</h2>
+      <p>
+        CareerCopilot ("we," "us," or "our") is an AI-powered job search platform that automates job discovery, resume tailoring, cover letter generation, interview preparation, and professional networking assistance on your behalf.
+      </p>
+      <p>
+        This Privacy Policy explains how we collect, use, store, and share information when you use our website and services. By creating an account or using CareerCopilot, you agree to the practices described in this policy.
+      </p>
+    </div>
+
+    <!-- 2 -->
+    <div class="privacy-section" id="s2">
+      <h2>2. Information We Collect</h2>
+      <p>We collect the following categories of information:</p>
+
+      <p><strong>Account Information</strong></p>
+      <ul>
+        <li>Email address (used as your account identifier)</li>
+        <li>Password (stored as a secure hash via Firebase Authentication — we never see your plaintext password)</li>
+        <li>Authentication method (email/password or Google OAuth)</li>
+      </ul>
+
+      <p><strong>Profile and Resume Data</strong></p>
+      <ul>
+        <li>Resume text (uploaded by you — PDF, DOCX, or TXT)</li>
+        <li>Current and previous job positions</li>
+        <li>Skills, education, and certifications</li>
+        <li>Target role and career preferences</li>
+        <li>"What I'm Looking For" notes you provide</li>
+      </ul>
+
+      <p><strong>Job Search Preferences</strong></p>
+      <ul>
+        <li>Target job titles and keywords</li>
+        <li>Preferred location, work mode (remote/hybrid/on-site), and salary range</li>
+        <li>Experience level, company size, and industry preferences</li>
+        <li>Target companies and blacklisted companies</li>
+        <li>Custom job board URLs you provide</li>
+        <li>Search schedule and timezone settings</li>
+      </ul>
+
+      <p><strong>Contact and Notification Information</strong></p>
+      <ul>
+        <li>Notification email address (may differ from your account email)</li>
+        <li>Phone number for SMS alerts (optional, stored as digits only)</li>
+        <li>Push notification tokens for browser-based alerts</li>
+      </ul>
+
+      <p><strong>Generated Content</strong></p>
+      <ul>
+        <li>AI-tailored resumes generated for specific job postings</li>
+        <li>AI-generated cover letters</li>
+        <li>Interview preparation questions and answers</li>
+        <li>Networking suggestions and outreach drafts</li>
+      </ul>
+
+      <p><strong>Activity and Usage Data</strong></p>
+      <ul>
+        <li>Jobs discovered on your behalf and whether you viewed or saved them</li>
+        <li>Applications you manually log in the tracker</li>
+        <li>Feature usage (e.g., documents generated, searches run)</li>
+        <li>AI token consumption and estimated cost per operation (for your transparency dashboard)</li>
+        <li>Onboarding progress and setup completion state</li>
+      </ul>
+
+      <p><strong>Payment Information</strong></p>
+      <p>
+        We do not store credit card numbers or payment details on our servers. All billing is handled securely by Stripe. We receive only a subscription status indicator (free or pro) and a Stripe customer ID.
+      </p>
+    </div>
+
+    <!-- 3 -->
+    <div class="privacy-section" id="s3">
+      <h2>3. How We Use Your Information</h2>
+      <p>We use the information we collect to:</p>
+      <ul>
+        <li><strong>Run your AI job search</strong> — your preferences and resume content are used to craft search queries sent to job boards and career pages</li>
+        <li><strong>Generate documents</strong> — your resume and job posting content are sent to our AI provider to create tailored resumes, cover letters, and interview prep materials</li>
+        <li><strong>Find networking opportunities</strong> — for Pro users, job details are used to generate LinkedIn connection and recruiter suggestions</li>
+        <li><strong>Send notifications</strong> — your contact details are used to alert you of new job matches via email, SMS, or push notification, based on your preferences</li>
+        <li><strong>Maintain your dashboard</strong> — job history, documents, and application tracking are stored so you can review them at any time</li>
+        <li><strong>Manage your subscription</strong> — your account tier determines which features are available and how many AI operations you can perform</li>
+        <li><strong>Improve the platform</strong> — aggregated, anonymized usage data may be used to improve search quality and feature design</li>
+      </ul>
+      <p>
+        We do not use your data for advertising, and we do not sell your personal information to any third party.
+      </p>
+    </div>
+
+    <!-- 4 -->
+    <div class="privacy-section" id="s4">
+      <h2>4. AI Processing and Your Data</h2>
+      <div class="privacy-highlight">
+        Your resume and job-related content are sent to Anthropic's Claude AI to generate tailored documents and search queries. Anthropic's API terms prohibit using API inputs to train their models without consent.
+      </div>
+      <p>
+        CareerCopilot uses the <strong>Anthropic Claude API</strong> (claude-sonnet and claude-haiku models) to perform the following operations:
+      </p>
+      <ul>
+        <li>Searching job boards and career pages using your preferences</li>
+        <li>Tailoring your resume to match a specific job description</li>
+        <li>Generating cover letters personalized to a role and company</li>
+        <li>Creating interview preparation questions and suggested answers</li>
+        <li>Drafting recruiter and connection outreach messages</li>
+        <li>Parsing your uploaded resume to extract structured profile data</li>
+      </ul>
+      <p>
+        When you trigger any of these features, the relevant portions of your data (resume text, job description, preferences) are transmitted to the Anthropic API over an encrypted connection. Anthropic processes this data to generate a response, which is returned to us and stored in your account.
+      </p>
+      <p>
+        <strong>Web Search:</strong> Automated job searches use Anthropic's built-in web search capability to retrieve live job postings from public job boards and company career pages. No personal information beyond your search query is included in these web requests.
+      </p>
+      <p>
+        We recommend that you do not include sensitive personal information in your resume or profile beyond what is necessary for job applications (e.g., avoid including passport numbers, full financial details, or government ID numbers).
+      </p>
+    </div>
+
+    <!-- 5 -->
+    <div class="privacy-section" id="s5">
+      <h2>5. Third-Party Services</h2>
+      <p>We rely on the following third-party services to operate CareerCopilot. Each has its own privacy policy governing how they handle data:</p>
+
+      <p><strong>Google Firebase</strong> (Google LLC)</p>
+      <ul>
+        <li><em>Firebase Authentication</em> — manages account creation and sign-in</li>
+        <li><em>Cloud Firestore</em> — stores your profile, preferences, job history, and documents</li>
+        <li><em>Firebase Hosting</em> — serves the CareerCopilot web application</li>
+        <li><em>Firebase Cloud Functions</em> — runs our backend API and scheduled job searches</li>
+        <li><em>Firebase Cloud Messaging</em> — delivers push notifications to your browser</li>
+        <li>Privacy policy: <strong>policies.google.com/privacy</strong></li>
+      </ul>
+
+      <p><strong>Anthropic</strong></p>
+      <ul>
+        <li>Provides the Claude AI models used for all AI-powered features</li>
+        <li>Receives resume content, job descriptions, and preference data when AI features are used</li>
+        <li>Privacy policy: <strong>anthropic.com/privacy</strong></li>
+      </ul>
+
+      <p><strong>Stripe</strong></p>
+      <ul>
+        <li>Handles all payment processing for Pro subscriptions</li>
+        <li>We share your email address with Stripe to create a billing customer record</li>
+        <li>Stripe stores your payment card details — we do not</li>
+        <li>Privacy policy: <strong>stripe.com/privacy</strong></li>
+      </ul>
+    </div>
+
+    <!-- 6 -->
+    <div class="privacy-section" id="s6">
+      <h2>6. Data Sharing and Disclosure</h2>
+      <p>We do not sell, rent, or trade your personal information. We share data only in the following circumstances:</p>
+      <ul>
+        <li><strong>Service providers</strong> — with Firebase, Anthropic, and Stripe as described in Section 5, solely to operate the platform</li>
+        <li><strong>Legal requirements</strong> — if required by law, court order, or to protect the rights and safety of users or the public</li>
+        <li><strong>Business transfer</strong> — in the event of a merger, acquisition, or sale of assets, your data may transfer to the new entity, which will be bound by this policy or will notify you of any changes</li>
+        <li><strong>With your consent</strong> — for any other purpose, only with your explicit agreement</li>
+      </ul>
+    </div>
+
+    <!-- 7 -->
+    <div class="privacy-section" id="s7">
+      <h2>7. Data Retention</h2>
+      <p>
+        We retain your data for as long as your account is active. Specifically:
+      </p>
+      <ul>
+        <li><strong>Account data</strong> — retained until you delete your account</li>
+        <li><strong>Resume and profile data</strong> — retained until you remove it or delete your account</li>
+        <li><strong>Job history and documents</strong> — retained until you delete individual records or your account</li>
+        <li><strong>Usage and activity logs</strong> — retained for up to 90 days for operational purposes</li>
+        <li><strong>Billing records</strong> — retained as required by Stripe and applicable financial regulations (typically 7 years)</li>
+      </ul>
+      <p>
+        When you request account deletion, we will permanently delete your profile, preferences, job history, and generated documents from our systems within 30 days. Anonymized aggregate statistics may be retained indefinitely.
+      </p>
+    </div>
+
+    <!-- 8 -->
+    <div class="privacy-section" id="s8">
+      <h2>8. Security</h2>
+      <p>
+        We take the security of your data seriously and implement the following measures:
+      </p>
+      <ul>
+        <li>All data transmitted between your browser and our servers is encrypted using HTTPS/TLS</li>
+        <li>All data transmitted to Anthropic and Firebase is encrypted in transit</li>
+        <li>Passwords are hashed and never stored in plaintext (managed by Firebase Authentication)</li>
+        <li>Access to production databases is restricted to authorized systems only</li>
+        <li>Firebase Security Rules restrict data access to authenticated users viewing only their own records</li>
+      </ul>
+      <p>
+        No method of transmission or storage is 100% secure. While we strive to protect your information, we cannot guarantee absolute security. If you become aware of a security concern, please contact us immediately.
+      </p>
+    </div>
+
+    <!-- 9 -->
+    <div class="privacy-section" id="s9">
+      <h2>9. Your Rights and Choices</h2>
+      <p>Depending on your location, you may have the following rights regarding your personal data:</p>
+      <ul>
+        <li><strong>Access</strong> — request a copy of the personal data we hold about you</li>
+        <li><strong>Correction</strong> — update or correct inaccurate information in your profile at any time via the Profile and Preferences panels</li>
+        <li><strong>Deletion</strong> — request permanent deletion of your account and all associated data</li>
+        <li><strong>Portability</strong> — request your data in a structured, machine-readable format</li>
+        <li><strong>Opt-out of notifications</strong> — turn off email, SMS, and push notifications at any time in your Profile settings</li>
+        <li><strong>Cancel your subscription</strong> — downgrade or cancel your Pro subscription at any time through the Account panel or Stripe's billing portal</li>
+      </ul>
+      <p>
+        To exercise any of these rights, contact us at the address in Section 13. We will respond within 30 days.
+      </p>
+      <p>
+        <strong>California residents (CCPA):</strong> You have the right to know what personal information we collect, to request deletion, and to opt out of any sale of your data. We do not sell personal information.
+      </p>
+      <p>
+        <strong>EEA/UK residents (GDPR/UK GDPR):</strong> Our legal basis for processing your data is the performance of a contract (providing the service you signed up for) and, where applicable, your consent. You have the right to lodge a complaint with your local supervisory authority.
+      </p>
+    </div>
+
+    <!-- 10 -->
+    <div class="privacy-section" id="s10">
+      <h2>10. Cookies and Local Storage</h2>
+      <p>
+        CareerCopilot does not use advertising or tracking cookies. We use the following minimal browser storage to operate the application:
+      </p>
+      <ul>
+        <li><strong>sessionStorage</strong> — stores your authentication token and email for the duration of your browser session. This is cleared automatically when you close the browser tab or sign out.</li>
+        <li><strong>localStorage</strong> — stores onboarding progress state so we can remember where you left off during setup. This data remains on your device and is not transmitted to our servers (it is mirrored to Firestore as a backup).</li>
+        <li><strong>Firebase SDKs</strong> — Firebase Authentication may use IndexedDB or localStorage to persist your sign-in session. This is required for the sign-in experience to function correctly.</li>
+      </ul>
+      <p>
+        You can clear all locally stored data at any time by clearing your browser's site data for careercop ilot.app. Note that this will sign you out of your account.
+      </p>
+    </div>
+
+    <!-- 11 -->
+    <div class="privacy-section" id="s11">
+      <h2>11. Children's Privacy</h2>
+      <p>
+        CareerCopilot is intended for use by individuals who are 16 years of age or older. We do not knowingly collect personal information from children under 16. If you believe a child under 16 has created an account, please contact us and we will delete the account and associated data promptly.
+      </p>
+    </div>
+
+    <!-- 12 -->
+    <div class="privacy-section" id="s12">
+      <h2>12. Changes to This Policy</h2>
+      <p>
+        We may update this Privacy Policy from time to time to reflect changes in our practices or legal requirements. When we make material changes, we will:
+      </p>
+      <ul>
+        <li>Update the "Last updated" date at the top of this page</li>
+        <li>Display a notice in the CareerCopilot dashboard on your next login</li>
+      </ul>
+      <p>
+        Your continued use of CareerCopilot after a policy update constitutes acceptance of the revised terms. If you disagree with any changes, you may delete your account at any time.
+      </p>
+    </div>
+
+    <!-- 13 -->
+    <div class="privacy-section" id="s13">
+      <h2>13. Contact Us</h2>
+      <p>
+        If you have any questions, concerns, or requests regarding this Privacy Policy or your personal data, please contact us:
+      </p>
+      <div class="privacy-contact-card">
+        <p><strong>CareerCopilot</strong></p>
+        <p>Email: <a href="mailto:privacy@careercop ilot.app">privacy@careercop ilot.app</a></p>
+        <p style="margin-top:12px;font-size:0.82rem;color:var(--text-muted)">
+          We aim to respond to all privacy-related inquiries within 5 business days.
+        </p>
+      </div>
+    </div>
+
+  </div>
+
+  <div class="privacy-footer">
+    <span>© 2026 CareerCopilot. All rights reserved.</span>
+    <div style="display:flex;gap:16px">
+      <a href="index.html">Sign In</a>
+      <a href="privacy.html">Privacy Policy</a>
+    </div>
+  </div>
+
+</body>
+</html>

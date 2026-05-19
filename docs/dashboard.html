@@ -64,6 +64,9 @@
       <button class="ob-sidebar-link" id="obRestartTour" title="Reopen setup wizard">
         ↺ &nbsp;Setup guide
       </button>
+      <a href="privacy.html" target="_blank" class="ob-sidebar-link" style="text-decoration:none">
+        🔒 &nbsp;Privacy Policy
+      </a>
     </div>
   </aside>
 
@@ -299,8 +302,8 @@
               <input type="email" id="settingNotifEmail" placeholder="you@example.com" />
             </div>
             <div class="input-group">
-              <label>Phone number for SMS <span class="label-hint">— optional, include country code</span></label>
-              <input type="tel" id="settingNotifPhone" placeholder="+1 555 000 0000" />
+              <label>Phone number for SMS <span class="label-hint">— optional, 10-digit US number</span></label>
+              <input type="tel" id="settingNotifPhone" placeholder="(555) 000-0000" maxlength="14" inputmode="numeric" />
             </div>
             <p class="prefs-status" id="notifStatus"></p>
             <button type="button" class="btn btn-gold" id="saveNotifBtn" style="width:fit-content">Save Contact Info</button>
@@ -739,7 +742,7 @@
     </div>
     <div id="obChecklistItems"></div>
     <div class="ob-cl-footer">
-      <button class="ob-cl-reopen" id="obRestartTour">↺ Restart setup guide</button>
+      <button class="ob-cl-reopen" id="obChecklistReopen">↺ Restart setup guide</button>
     </div>
   </div>
 </div>

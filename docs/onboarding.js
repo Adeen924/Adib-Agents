@@ -13,9 +13,10 @@ const OnboardingEngine = (() => {
   // ── State ────────────────────────────────────────────────────────
   let _userId  = null;
   let _tier    = 'free';
-  let _state   = null;
+  let _state   = null;   // populated by init(); never null after that
   let _tourIdx = 0;
   let _spotRAF = null;
+  let _inited  = false;  // guard against double-init
 
   function defaultState() {
     return {
@@ -176,8 +177,15 @@ const OnboardingEngine = (() => {
   //  PUBLIC: init
   // ════════════════════════════════════════════════════════════════
   async function init(userId, tier) {
+    if (_inited) return;   // only run once
+    _inited = true;
+
     _userId = userId;
     _tier   = tier || 'free';
+
+    // Give _state a safe default immediately so any early click
+    // on the restart button doesn't throw before _loadState resolves
+    _state = defaultState();
 
     _cacheDom();
     _bindEvents();
@@ -202,6 +210,7 @@ const OnboardingEngine = (() => {
   //  WELCOME MODAL
   // ════════════════════════════════════════════════════════════════
   function showWelcomeModal() {
+    if (!$welcome) { console.warn('[Onboarding] #obWelcome not found'); return; }
     $welcome.classList.add('ob-visible');
     document.body.style.overflow = 'hidden';
   }
@@ -781,9 +790,10 @@ const OnboardingEngine = (() => {
     $checklistPill?.addEventListener('click', _toggleChecklist);
     document.getElementById('obChecklistToggle')?.addEventListener('click', _toggleChecklist);
 
-    // Sidebar "Start Tour" link
-    document.getElementById('obRestartTour')?.addEventListener('click', () => {
-      reopenWizard();
+    // Sidebar "Setup guide" link + checklist reopen button
+    // Use event delegation so both buttons work regardless of DOM order/duplicates
+    document.addEventListener('click', e => {
+      if (e.target.closest('#obRestartTour, #obChecklistReopen')) reopenWizard();
     });
   }
 
@@ -809,6 +819,21 @@ const OnboardingEngine = (() => {
     reopenWizard,
     markJobViewed,
     markStepComplete: _markChecklistItem,
+    setTier: (t) => { _tier = t || 'free'; },
   };
 
 })();
+
+/* ── Self-initialize ────────────────────────────────────────────────
+   app.js runs before this file and sets `userId` / `userTier` as
+   globals synchronously from sessionStorage at its very top.
+   We can therefore read them directly here — no async needed.
+   If loadUserTier() later resolves a Pro tier, app.js calls setTier.
+─────────────────────────────────────────────────────────────────── */
+(function () {
+  const uid  = (typeof userId   !== 'undefined') ? userId   : sessionStorage.getItem('fbEmail');
+  const tier = (typeof userTier !== 'undefined') ? userTier : 'free';
+  if (uid) {
+    OnboardingEngine.init(uid, tier);
+  }
+}());

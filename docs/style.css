@@ -184,6 +184,21 @@ input::placeholder, textarea::placeholder { color: var(--text-muted); }
 }
 .auth-switch a:hover { text-decoration: underline; }
 
+.login-privacy-note {
+  text-align: center;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+.login-privacy-note a {
+  color: var(--text-muted);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.login-privacy-note a:hover { color: var(--gold); }
+
 /* ══════════════════════════════════════
    DASHBOARD LAYOUT
 ══════════════════════════════════════ */
