@@ -454,6 +454,13 @@ async function loadJobs() {
   }
 }
 
+function fitScoreBadge(score) {
+  if (score === null || score === undefined) return "";
+  const n = Math.round(score);
+  const cls = n >= 75 ? "fit-score-high" : n >= 50 ? "fit-score-mid" : "fit-score-low";
+  return `<span class="fit-score ${cls}">${n}% fit</span>`;
+}
+
 function jobCard(j, source) {
   const safeId     = escapeAttr(j.id);
   const safeSource = source === "watchlist" ? "watchlist" : "";
@@ -463,8 +470,13 @@ function jobCard(j, source) {
   return `
   <div class="job-card" onclick="openJobDetail('${safeId}', '${safeSource}')">
     <div class="job-card-top">
-      <div class="job-title">${escapeHtml(j.title || "Untitled Role")}</div>
-      <div class="job-company">${escapeHtml(j.company || "")}</div>
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px">
+        <div>
+          <div class="job-title">${escapeHtml(j.title || "Untitled Role")}</div>
+          <div class="job-company">${escapeHtml(j.company || "")}</div>
+        </div>
+        ${fitScoreBadge(j.fitScore)}
+      </div>
     </div>
     <div class="job-tags">
       ${watchBadge}
@@ -514,10 +526,34 @@ async function openJobDetail(jobId, source) {
 
     const googleQuery = encodeURIComponent(`${j.title || ""} ${j.company || ""} job posting`);
 
+    const fitScore = typeof j.fitScore === "number" ? Math.round(j.fitScore) : null;
+    const fitScoreClass = fitScore !== null
+      ? (fitScore >= 75 ? "fit-score-high" : fitScore >= 50 ? "fit-score-mid" : "fit-score-low")
+      : "";
+    const matchReasons = Array.isArray(j.matchReasons) && j.matchReasons.length > 0
+      ? j.matchReasons
+      : null;
+
     body.innerHTML = `
       ${fields.length ? `<div class="jd-meta-grid">${fields.map(([l,v]) =>
         `<div class="jd-meta-card"><div class="jd-meta-label">${l}</div><div class="jd-meta-value">${escapeHtml(v)}</div></div>`
       ).join("")}</div>` : ""}
+
+      ${fitScore !== null || matchReasons ? `
+      <div class="jd-section">
+        <div class="jd-section-label">Why This Match</div>
+        ${fitScore !== null ? `
+        <div class="jd-fit-score-row">
+          <div class="jd-fit-score-bar-wrap">
+            <div class="jd-fit-score-bar ${fitScoreClass}" style="width:${fitScore}%"></div>
+          </div>
+          <span class="fit-score ${fitScoreClass}" style="flex-shrink:0">${fitScore}% Fit Score</span>
+        </div>` : ""}
+        ${matchReasons ? `
+        <ul class="match-reasons-list">
+          ${matchReasons.map(r => `<li>${escapeHtml(r)}</li>`).join("")}
+        </ul>` : ""}
+      </div>` : ""}
 
       <div class="jd-section">
         <div class="jd-section-label">About the Role</div>

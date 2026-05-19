@@ -127,12 +127,23 @@ function buildSearchQuery(prefs) {
 async function runJobSearch(userId, prefs) {
   const query = buildSearchQuery(prefs);
 
-  // Fetch resume from knowledge base for better matching
+  // Fetch full knowledge base for multi-dimensional matching
   let resumeSnippet = "";
+  let candidateProfile = "";
   try {
     const kbDoc = await db.collection("knowledge").doc(userId).get();
-    if (kbDoc.exists && kbDoc.data().resume) {
-      resumeSnippet = kbDoc.data().resume.slice(0, 2000);
+    if (kbDoc.exists) {
+      const kb = kbDoc.data();
+      resumeSnippet = (kb.resume || "").slice(0, 2000);
+      const profileParts = [
+        kb.currentPosition   ? `Current role: ${kb.currentPosition}`          : "",
+        kb.targetRole        ? `Target role: ${kb.targetRole}`                 : "",
+        kb.skills            ? `Skills: ${kb.skills}`                          : "",
+        kb.education         ? `Education: ${kb.education}`                    : "",
+        kb.additionalContext ? `Additional context: ${kb.additionalContext}`    : "",
+        resumeSnippet        ? `Resume excerpt:\n${resumeSnippet}`             : "",
+      ].filter(Boolean).join("\n");
+      candidateProfile = profileParts;
     }
   } catch { /* non-fatal */ }
 
@@ -177,29 +188,44 @@ async function runJobSearch(userId, prefs) {
       }\n`
     : "";
 
-  const systemPrompt = `You are a job search agent. Search job boards and return ONLY a raw JSON array — no markdown, no explanation, nothing else.
+  const systemPrompt = `You are an intelligent job matching agent. Search job boards, find real current postings, and evaluate each one across multiple dimensions to surface the best matches for this specific candidate.
 
-REQUIRED CRITERIA (reject any job that does not match):
+${candidateProfile ? `CANDIDATE PROFILE:\n${candidateProfile}\n` : ""}
+REQUIRED CRITERIA (hard filters — reject any job that does not match ALL of these):
 ${criteria || "No specific criteria."}
 ${seenSection}
+MATCHING DIMENSIONS — score and reason across all of these for every job you return:
+1. Experience Depth: Does the required tenure and seniority match the candidate's actual depth?
+2. Transferable Skills: Which of the candidate's skills apply directly, even if from a different domain?
+3. Project Similarity: Has the candidate done work closely resembling what this role requires?
+4. Company Stage Fit: Does the company's stage (startup/growth/enterprise) match the candidate's preferred environment based on their background?
+5. Work Style & Culture: Do the role's culture cues (fast-paced, collaborative, remote-first, etc.) align with the candidate's background signals?
+6. Compensation Match: Does the advertised or typical salary for this role/company align with the candidate's expectations?
+7. Location Compatibility: Does the role's location and remote policy genuinely work for the candidate?
+8. Visa / Work Authorization: Does the posting require citizenship, clearance, or sponsorship that could be a blocker?
+9. Hiring Velocity: Is the company actively growing (recent posting, multiple open roles, expansion signals)?
+10. Recruiter Responsiveness: Does the posting appear recently active and from a team likely to respond?
+
 Rules:
-- Skip jobs where the posted experience requirement is significantly higher than the user's level
-- Only include direct job posting URLs (not search pages)
+- Only include direct job posting URLs (not search pages or Google results)
 - Prefer postings from the last 14 days
-${resumeSnippet ? `- Match roles to this candidate background:\n${resumeSnippet}` : ""}
+- Skip jobs where the required experience is significantly above the candidate's level
 
-Return 5 jobs as a JSON array. Field rules:
-- url: CRITICAL — only include a URL you found verbatim in your search results. Do NOT construct, guess, or modify any URL. A fabricated URL is worse than an empty string — use "" if you cannot confirm the exact direct link to this specific posting.
-- posted: exact date as "Month DD, YYYY" (e.g. "May 10, 2026") or relative like "2 days ago". Never just a year. If unknown use "".
-- description: full job description — include what the role does, day-to-day responsibilities, required skills/qualifications, nice-to-haves, and any other details from the posting. Aim for at least 6-8 sentences. The more detail the better.
+Return exactly 5 jobs as a raw JSON array — no markdown, no explanation, nothing else.
+Field rules:
+- fitScore: integer 0-100 reflecting overall match quality across all 10 dimensions (not keyword count)
+- matchReasons: array of 3-5 short strings (1-2 sentences each) explaining WHY this job fits the candidate — reference specific dimensions and the candidate's actual background
+- url: CRITICAL — only include a URL found verbatim in your search results. Do NOT construct or guess URLs. Use "" if you cannot confirm the exact direct link.
+- posted: exact date as "Month DD, YYYY" (e.g. "May 10, 2026") or relative like "2 days ago". Never just a year. Use "" if unknown.
+- description: full job details — role responsibilities, required skills, nice-to-haves, team context. Aim for 6-8 sentences minimum.
 
-[{"title":"","company":"","location":"","salary":"","experience":"","description":"","url":"","posted":""}]`;
+[{"title":"","company":"","location":"","salary":"","experience":"","description":"","url":"","posted":"","fitScore":85,"matchReasons":["Experience Depth: ...","Transferable Skills: ...","Project Similarity: ..."]}]`;
 
   const userQuery = `Find 5 current job listings. Search: ${query}`;
 
   const response = await anthropic.messages.create({
     model:      "claude-sonnet-4-5",
-    max_tokens: 1500,
+    max_tokens: 2500,
     // max_uses:1 limits Claude to ONE web search call — main cost control lever
     tools:      [{ type: "web_search_20250305", name: "web_search", max_uses: 1 }],
     system:     systemPrompt,
@@ -244,15 +270,17 @@ Return 5 jobs as a JSON array. Field rules:
     db.collection("jobs").add({
       userId,
       digestId: digestRef.id,
-      title:       job.title       || "",
-      company:     job.company     || "",
-      location:    job.location    || "",
-      salary:      job.salary      || "",
-      experience:  job.experience  || "",
-      description: job.description || "",
-      url:         job.url         || "",
-      posted:      job.posted      || "",
-      createdAt:   admin.firestore.FieldValue.serverTimestamp(),
+      title:        job.title        || "",
+      company:      job.company      || "",
+      location:     job.location     || "",
+      salary:       job.salary       || "",
+      experience:   job.experience   || "",
+      description:  job.description  || "",
+      url:          job.url          || "",
+      posted:       job.posted       || "",
+      fitScore:     typeof job.fitScore === "number" ? job.fitScore : null,
+      matchReasons: Array.isArray(job.matchReasons) ? job.matchReasons : [],
+      createdAt:    admin.firestore.FieldValue.serverTimestamp(),
     })
   );
   await Promise.all(savePromises);
