@@ -25,7 +25,9 @@
       "Bash(Select-Object -ExpandProperty FullName)",
       "Bash(firebase functions:secrets:set STRIPE_PRO_PRICE_ID)",
       "Bash(firebase functions:secrets:set STRIPE_PRO_ANNUAL_PRICE_ID)",
-      "Bash(powershell -Command \"\\(Get-Content index.js\\) -replace '\\\\\"claude-sonnet-4-6\\\\\"', 'MODEL_SONNET' | Set-Content index.js -Encoding utf8\")"
+      "Bash(powershell -Command \"\\(Get-Content index.js\\) -replace '\\\\\"claude-sonnet-4-6\\\\\"', 'MODEL_SONNET' | Set-Content index.js -Encoding utf8\")",
+      "Bash(Get-ChildItem -Path \"C:\\\\Users\\\\amazl\\\\Documents\\\\GitHub\\\\Adib-Agents\" -Recurse -Depth 2)",
+      "PowerShell(Get-ChildItem \"C:\\\\Users\\\\amazl\\\\Documents\\\\GitHub\\\\Adib-Agents\\\\backend\" -Recurse -Depth 1 | Where-Object { $_.Extension -eq \".js\" -or $_.Extension -eq \".json\" -or $_.PSIsContainer } | Select-Object -ExpandProperty Name)"
     ]
   }
 }

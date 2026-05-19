@@ -23,6 +23,9 @@ let isLoading      = false;
 let currentDocType = "resume";
 let currentJob     = null;
 let userTier       = "free";  // loaded on init, used for feature gating
+let allJobsList        = [];
+let allWatchlistJobs   = [];
+let allDocumentsList   = [];
 
 // ── Init ──────────────────────────────────────────────────────────────────────
 function init() {
@@ -270,39 +273,57 @@ async function loadJobs() {
       fetch(`${BACKEND_URL}/jobs/${encodeURIComponent(userId)}`),
       fetch(`${BACKEND_URL}/watchlist-jobs/${encodeURIComponent(userId)}`),
     ]);
-    const jobsData     = await jobsRes.json();
+    const jobsData      = await jobsRes.json();
     const watchlistData = await watchlistRes.json();
 
-    const jobs          = jobsData.jobs      || [];
-    const watchlistJobs = watchlistData.jobs || [];
+    allJobsList      = jobsData.jobs      || [];
+    allWatchlistJobs = watchlistData.jobs || [];
 
-    if (jobs.length === 0 && watchlistJobs.length === 0) {
-      body.innerHTML = `<div class="digest-empty"><div class="empty-icon">💼</div>
-        <h3>No jobs found yet</h3>
-        <p>Set your preferences in Settings — your daily search will run automatically, or upgrade to Pro to search on demand.</p></div>`;
-      return;
-    }
-
-    let html = "";
-
-    if (watchlistJobs.length > 0) {
-      html += `<div style="padding:20px 28px 8px">
-        <div class="prefs-section-label" style="margin:0 0 12px">Target Company Watchlist</div>
-        <div class="jobs-grid">${watchlistJobs.map(j => jobCard(j, "watchlist")).join("")}</div>
-      </div>`;
-    }
-
-    if (jobs.length > 0) {
-      const sectionLabel = watchlistJobs.length > 0
-        ? `<div style="padding:20px 28px 8px"><div class="prefs-section-label" style="margin:0 0 12px">Daily Search Results</div></div>`
-        : "";
-      html += sectionLabel + `<div class="jobs-grid" style="padding:0 28px 28px">${jobs.map(j => jobCard(j)).join("")}</div>`;
-    }
-
-    body.innerHTML = html;
+    renderJobsList();
   } catch {
     body.innerHTML = '<div class="panel-loading" style="padding:28px">Failed to load jobs.</div>';
   }
+}
+
+function renderJobsList(query = "") {
+  const body = document.getElementById("jobsBody");
+  const q = query.trim().toLowerCase();
+
+  const filterJob = (j) => !q || [j.title, j.company, j.location, j.description, j.salary]
+    .some(f => f && f.toLowerCase().includes(q));
+
+  const jobs          = allJobsList.filter(filterJob);
+  const watchlistJobs = allWatchlistJobs.filter(filterJob);
+
+  if (jobs.length === 0 && watchlistJobs.length === 0) {
+    const msg = q
+      ? `<div class="digest-empty"><div class="empty-icon">🔍</div><h3>No results for "${escapeHtml(q)}"</h3><p>Try a different search term.</p></div>`
+      : `<div class="digest-empty"><div class="empty-icon">💼</div>
+          <h3>No jobs found yet</h3>
+          <p>Set your preferences in Settings — your daily search will run automatically, or upgrade to Pro to search on demand.</p></div>`;
+    body.innerHTML = msg;
+    return;
+  }
+
+  let html = "";
+  if (watchlistJobs.length > 0) {
+    html += `<div style="padding:20px 28px 8px">
+      <div class="prefs-section-label" style="margin:0 0 12px">Target Company Watchlist</div>
+      <div class="jobs-grid">${watchlistJobs.map(j => jobCard(j, "watchlist")).join("")}</div>
+    </div>`;
+  }
+  if (jobs.length > 0) {
+    const sectionLabel = watchlistJobs.length > 0
+      ? `<div style="padding:20px 28px 8px"><div class="prefs-section-label" style="margin:0 0 12px">Daily Search Results</div></div>`
+      : "";
+    html += sectionLabel + `<div class="jobs-grid" style="padding:0 28px 28px">${jobs.map(j => jobCard(j)).join("")}</div>`;
+  }
+  body.innerHTML = html;
+}
+
+function filterJobs() {
+  const q = document.getElementById("jobsSearch")?.value || "";
+  renderJobsList(q);
 }
 
 function fitScoreBadge(score) {
@@ -487,6 +508,20 @@ async function generateJobDoc(type) {
     if (type === "resume")       currentJob.tailoredResume = data.text;
     if (type === "cover-letter") currentJob.coverLetter    = data.text;
     if (type === "interview")    currentJob.interviewPrep  = data.text;
+
+    // Auto-save resume and cover letter to Documents tab
+    if (type === "resume" || type === "cover-letter") {
+      const docType   = type === "resume" ? "resume" : "cover_letter";
+      const dateStr   = new Date().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+      const jobTitle  = currentJob.title   || "Untitled Role";
+      const company   = currentJob.company || "";
+      const docTitle  = company ? `${jobTitle} at ${company} — ${dateStr}` : `${jobTitle} — ${dateStr}`;
+      fetch(`${BACKEND_URL}/documents/save`, {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({ userId, type: docType, content: data.text, title: docTitle, company }),
+      }).catch(() => {});
+    }
 
     const downloadBtn = (type === "resume" || type === "cover-letter")
       ? `<button class="btn btn-ghost" style="padding:5px 12px;font-size:0.8rem" onclick="downloadJobDocPDF('${type}')">📄 Download PDF</button>`
@@ -707,34 +742,60 @@ async function loadDigest() {
 async function loadDocuments(type) {
   const body = document.getElementById("documentsBody");
   body.innerHTML = '<div class="panel-loading" style="padding:24px">Loading…</div>';
+  const searchEl = document.getElementById("docsSearch");
+  if (searchEl) searchEl.value = "";
   try {
     const res  = await fetch(`${BACKEND_URL}/documents/${encodeURIComponent(userId)}/${type}`);
     const data = await res.json();
-    const label = type === "resume" ? "resumes" : "cover letters";
-    if (!data.documents || data.documents.length === 0) {
-      body.innerHTML = `<div class="digest-empty"><div class="empty-icon">📁</div>
-        <h3>No ${label} yet</h3>
-        <p>Documents generated by the agent will appear here.</p></div>`;
-      return;
-    }
-    body.innerHTML = `<div style="padding:0 28px 28px;display:flex;flex-direction:column;gap:16px">` +
-      data.documents.map((d) => {
-        const date = d.createdAt?._seconds ? new Date(d.createdAt._seconds * 1000).toLocaleDateString() : "";
-        return `<div class="doc-card">
-          <div class="doc-card-header">
-            <div>
-              <div class="doc-title">${escapeHtml(d.title || "Untitled")}</div>
-              <div class="doc-meta">${date}${d.company ? ` · ${escapeHtml(d.company)}` : ""}</div>
-            </div>
-            <button class="action-btn danger" onclick="deleteDocument('${d.id}', '${type}')">Delete</button>
-          </div>
-          <div class="doc-content">${formatMarkdown(d.content || "")}</div>
-        </div>`;
-      }).join("") + "</div>";
+    allDocumentsList = data.documents || [];
+    renderDocumentsList(type);
   } catch {
     body.innerHTML = '<div class="panel-loading" style="padding:24px">Failed to load documents.</div>';
   }
 }
+
+function renderDocumentsList(type, query = "") {
+  const body  = document.getElementById("documentsBody");
+  const label = type === "resume" ? "resumes" : "cover letters";
+  const q     = query.trim().toLowerCase();
+
+  const docs = allDocumentsList.filter(d => {
+    if (!q) return true;
+    return [d.title, d.company, d.content]
+      .some(f => f && f.toLowerCase().includes(q));
+  });
+
+  if (docs.length === 0) {
+    const msg = q
+      ? `<div class="digest-empty"><div class="empty-icon">🔍</div><h3>No results for "${escapeHtml(q)}"</h3><p>Try a different search term.</p></div>`
+      : `<div class="digest-empty"><div class="empty-icon">📁</div>
+          <h3>No ${label} yet</h3>
+          <p>Documents generated by the agent will appear here.</p></div>`;
+    body.innerHTML = msg;
+    return;
+  }
+
+  body.innerHTML = `<div style="padding:0 28px 28px;display:flex;flex-direction:column;gap:16px">` +
+    docs.map((d) => {
+      const date = d.createdAt?._seconds ? new Date(d.createdAt._seconds * 1000).toLocaleDateString() : "";
+      return `<div class="doc-card">
+        <div class="doc-card-header">
+          <div>
+            <div class="doc-title">${escapeHtml(d.title || "Untitled")}</div>
+            <div class="doc-meta">${date}${d.company ? ` · ${escapeHtml(d.company)}` : ""}</div>
+          </div>
+          <button class="action-btn danger" onclick="deleteDocument('${d.id}', '${currentDocType}')">Delete</button>
+        </div>
+        <div class="doc-content">${formatMarkdown(d.content || "")}</div>
+      </div>`;
+    }).join("") + "</div>";
+}
+
+function filterDocuments() {
+  const q = document.getElementById("docsSearch")?.value || "";
+  renderDocumentsList(currentDocType, q);
+}
+
 async function deleteDocument(id, type) {
   if (!confirm("Delete this document?")) return;
   await fetch(`${BACKEND_URL}/documents/${id}`, { method: "DELETE" });

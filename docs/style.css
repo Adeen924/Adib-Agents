@@ -608,6 +608,32 @@ input::placeholder, textarea::placeholder { color: var(--text-muted); }
 .action-btn:hover { border-color: var(--gold); color: var(--gold); }
 .action-btn.danger:hover { border-color: var(--danger); color: var(--danger); }
 
+/* ── Search bar ── */
+.search-bar-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 6px 12px;
+  transition: border-color 0.2s;
+}
+.search-bar-wrap:focus-within { border-color: var(--gold); box-shadow: 0 0 0 3px var(--gold-glow); }
+.search-icon { font-size: 0.85rem; flex-shrink: 0; }
+.search-bar-wrap input[type="text"] {
+  background: transparent;
+  border: none;
+  outline: none;
+  box-shadow: none;
+  padding: 0;
+  font-size: 0.875rem;
+  color: var(--text);
+  width: 200px;
+  min-width: 0;
+}
+.search-bar-wrap input[type="text"]::placeholder { color: var(--text-muted); }
+
 /* ── Document tabs ── */
 .doc-tabs {
   display: flex;

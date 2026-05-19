@@ -149,6 +149,10 @@
   <div class="main-content panel-view" id="jobsView" style="display:none">
     <header class="main-header">
       <div><h2>Jobs Found</h2><p>Listings discovered by the agent</p></div>
+      <div class="search-bar-wrap">
+        <span class="search-icon">🔍</span>
+        <input type="text" id="jobsSearch" placeholder="Search jobs…" oninput="filterJobs()" autocomplete="off" />
+      </div>
     </header>
     <div id="jobsBody" style="overflow-y:auto;flex:1">
       <div class="panel-loading" style="padding:28px">Loading jobs…</div>
@@ -178,9 +182,15 @@
       <div><h2>Documents</h2><p>Resumes and cover letters created by the agent</p></div>
     </header>
     <div class="panel-body" style="max-width:100%;padding-bottom:0">
-      <div class="doc-tabs">
-        <button class="doc-tab active" data-doctype="resume">📄 Resumes</button>
-        <button class="doc-tab" data-doctype="cover_letter">✉️ Cover Letters</button>
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap">
+        <div class="doc-tabs">
+          <button class="doc-tab active" data-doctype="resume">📄 Resumes</button>
+          <button class="doc-tab" data-doctype="cover_letter">✉️ Cover Letters</button>
+        </div>
+        <div class="search-bar-wrap">
+          <span class="search-icon">🔍</span>
+          <input type="text" id="docsSearch" placeholder="Search documents…" oninput="filterDocuments()" autocomplete="off" />
+        </div>
       </div>
     </div>
     <div id="documentsBody" style="overflow-y:auto"><div class="panel-loading" style="padding:24px">Loading…</div></div>
