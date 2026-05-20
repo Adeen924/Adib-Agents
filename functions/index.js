@@ -251,54 +251,249 @@ function makeJobFingerprint(job) {
 
 const AGGREGATOR_RE = /indeed\.com|linkedin\.com/i;
 
-// â"€â"€ Verify job URLs via Google lookup â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
-// For every job found, does a Google-style search ("[title] [company] apply")
-// and uses the first verified result as the apply URL. Batched into a single
-// Sonnet call so cost stays flat regardless of how many jobs are returned.
-async function verifyJobUrls(jobs) {
+// â"€â"€ ATS URL patterns â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+const ATS_PATTERNS = {
+  greenhouse:     /boards\.greenhouse\.io\/[^/]+\/jobs\/\d+|[^/]+\.greenhouse\.io\/jobs\/\d+/i,
+  lever:          /jobs\.lever\.co\/[^/]+\/[a-f0-9-]{36}/i,
+  ashby:          /jobs\.ashbyhq\.com\/[^/]+\/[a-f0-9-]{36}/i,
+  workday:        /[^./]+\.wd\d+\.myworkdayjobs\.com\//i,
+  smartrecruiters:/jobs\.smartrecruiters\.com\/[^/]+\/[^/?#]+/i,
+  icims:          /careers[-.].*\.icims\.com\/jobs\/\d+/i,
+  bamboohr:       /[^./]+\.bamboohr\.com\/careers\/\d+/i,
+  hiringcafe:     /hiring\.cafe\/[^?#]+\/[^?#]+/i,
+};
+
+function detectAts(url) {
+  if (!url) return null;
+  for (const [name, pattern] of Object.entries(ATS_PATTERNS)) {
+    if (pattern.test(url)) return name;
+  }
+  return null;
+}
+
+function isSpecificJobUrl(url) {
+  if (!url || !url.startsWith("http")) return false;
+  if (AGGREGATOR_RE.test(url)) return false;
+  if (detectAts(url)) return true;
+  return /\/(jobs?|careers?|positions?|openings?|apply)\/[a-z0-9_%-]{4,}/i.test(url);
+}
+
+// â"€â"€ HTTP URL verification (follows redirects, no Sonnet cost) â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+async function fetchUrlStatus(url, hops = 0) {
+  if (hops > 5) return { status: 0, finalUrl: url, error: "too many redirects" };
+  return new Promise((resolve) => {
+    try {
+      const lib     = url.startsWith("https") ? require("https") : require("http");
+      const parsed  = new URL(url);
+      const options = {
+        hostname: parsed.hostname,
+        port:     parsed.port || (url.startsWith("https") ? 443 : 80),
+        path:     parsed.pathname + parsed.search,
+        method:   "HEAD",
+        timeout:  8000,
+        headers:  { "User-Agent": "Mozilla/5.0 (compatible; CareerCopilot/1.0)" },
+      };
+      const req = lib.request(options, (res) => {
+        res.resume();
+        if ([301, 302, 303, 307, 308].includes(res.statusCode) && res.headers.location) {
+          const next = res.headers.location.startsWith("http")
+            ? res.headers.location
+            : new URL(res.headers.location, url).href;
+          resolve(fetchUrlStatus(next, hops + 1));
+        } else {
+          resolve({ status: res.statusCode, finalUrl: url });
+        }
+      });
+      req.on("timeout", () => { req.destroy(); resolve({ status: 0, finalUrl: url, error: "timeout" }); });
+      req.on("error",   (err) => resolve({ status: 0, finalUrl: url, error: err.message }));
+      req.end();
+    } catch (err) {
+      resolve({ status: 0, finalUrl: url, error: err.message });
+    }
+  });
+}
+
+// â"€â"€ Fuzzy title matching â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+function titlesMatch(a, b) {
+  const norm = s => String(s).toLowerCase().replace(/[^a-z0-9\s]/g, "").replace(/\s+/g, " ").trim();
+  const na = norm(a), nb = norm(b);
+  if (na === nb) return true;
+  if (na.includes(nb) || nb.includes(na)) return true;
+  const wa = na.split(" ").filter(w => w.length > 2);
+  const wb = new Set(nb.split(" ").filter(w => w.length > 2));
+  const common = wa.filter(w => wb.has(w));
+  return wa.length > 0 && wb.size > 0 && (common.length / Math.max(wa.length, wb.size)) >= 0.6;
+}
+
+// â"€â"€ Company slug candidates for ATS API lookups â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+function companySlugs(name, hint) {
+  const base = name.toLowerCase();
+  const candidates = [
+    base.replace(/[^a-z0-9]/g, ""),
+    base.replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, ""),
+    base.split(/\s+/)[0].replace(/[^a-z0-9]/g, ""),
+  ].filter((s, i, arr) => s.length >= 2 && arr.indexOf(s) === i);
+  if (hint) candidates.unshift(hint);
+  return candidates;
+}
+
+// â"€â"€ ATS public API lookups (no auth required, deterministic URLs) â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+async function findGreenhouseJobUrl(company, title, slugHint) {
+  for (const slug of companySlugs(company, slugHint)) {
+    try {
+      const res = await fetch(
+        `https://boards-api.greenhouse.io/v1/boards/${encodeURIComponent(slug)}/jobs`,
+        { signal: AbortSignal.timeout(6000), headers: { "User-Agent": "Mozilla/5.0" } }
+      );
+      if (!res.ok) continue;
+      const { jobs = [] } = await res.json();
+      const match = jobs.find(j => titlesMatch(j.title, title));
+      if (match) return { url: match.absolute_url, confidence: 0.95, ats: "greenhouse" };
+    } catch { continue; }
+  }
+  return null;
+}
+
+async function findLeverJobUrl(company, title, slugHint) {
+  for (const slug of companySlugs(company, slugHint)) {
+    try {
+      const res = await fetch(
+        `https://api.lever.co/v0/postings/${encodeURIComponent(slug)}?mode=json`,
+        { signal: AbortSignal.timeout(6000), headers: { "User-Agent": "Mozilla/5.0" } }
+      );
+      if (!res.ok) continue;
+      const jobs = await res.json();
+      if (!Array.isArray(jobs)) continue;
+      const match = jobs.find(j => titlesMatch(j.text || "", title));
+      if (match) return { url: match.hostedUrl || `https://jobs.lever.co/${slug}/${match.id}`, confidence: 0.95, ats: "lever" };
+    } catch { continue; }
+  }
+  return null;
+}
+
+async function findAshbyJobUrl(company, title, slugHint) {
+  for (const slug of companySlugs(company, slugHint)) {
+    try {
+      const res = await fetch("https://jobs.ashbyhq.com/api/non-user-graphql", {
+        method:  "POST",
+        headers: { "Content-Type": "application/json", "User-Agent": "Mozilla/5.0" },
+        body: JSON.stringify({
+          operationName: "ApiJobBoardWithTeams",
+          variables:     { organizationHostedJobsPageName: slug },
+          query: `query ApiJobBoardWithTeams($organizationHostedJobsPageName: String!) {
+            jobBoard: jobBoardWithTeams(organizationHostedJobsPageName: $organizationHostedJobsPageName) {
+              jobPostings { id title jobPostingState externalLink }
+            }
+          }`,
+        }),
+        signal: AbortSignal.timeout(6000),
+      });
+      if (!res.ok) continue;
+      const data = await res.json();
+      const active = (data?.data?.jobBoard?.jobPostings || []).filter(p => p.jobPostingState === "Listed");
+      const match  = active.find(p => titlesMatch(p.title, title));
+      if (match) return { url: match.externalLink || `https://jobs.ashbyhq.com/${slug}/${match.id}`, confidence: 0.95, ats: "ashby" };
+    } catch { continue; }
+  }
+  return null;
+}
+
+// â"€â"€ HTTP-based confidence score â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+function scoreUrl(httpResult) {
+  if (!httpResult || httpResult.status !== 200) return 0;
+  let score = 0.35;
+  const url = httpResult.finalUrl || "";
+  if (detectAts(url))           score += 0.30;
+  if (isSpecificJobUrl(url))    score += 0.25;
+  if (!AGGREGATOR_RE.test(url)) score += 0.10;
+  return Math.min(1, score);
+}
+
+// â"€â"€ Web-search fallback for still-unverified jobs (batched, single Sonnet call) â"€â"€
+async function verifyViaWebSearch(jobs) {
   if (jobs.length === 0) return;
-
-  const jobList = jobs
-    .map((j, i) => `${i + 1}. "${j.title}" at ${j.company}`)
-    .join("\n");
-
+  const jobList = jobs.map((j, i) => `${i + 1}. "${j.title}" at ${j.company}`).join("\n");
   try {
     const res = await anthropic.messages.create({
       model:      MODEL_SONNET,
       max_tokens: 1024,
-      tools:      [{ type: "web_search_20250305", name: "web_search", max_uses: jobs.length + 2 }],
+      tools:      [{ type: "web_search_20250305", name: "web_search", max_uses: jobs.length + 1 }],
       messages: [{
         role:    "user",
-        content: `For each job below, search Google for the direct application link using the query: "[job title] [company] apply".
-Take the first search result URL that goes directly to that specific job posting.
+        content: `Search Google for each job below using the query "[job title] [company] apply" and return the FIRST result that is a direct job application page.
 
 ${jobList}
 
-Return ONLY a JSON array in the same order as the list above:
-[{"directUrl":"https://..."},...]
+Return ONLY a JSON array in the same order:
+[{"applyUrl":"https://..."},...]
 
 Rules:
-- Each directUrl must open the specific job posting, not a careers homepage or job board search page
-- Do NOT return indeed.com or linkedin.com URLs
-- Use "" for any job where you cannot find a verified direct posting URL`,
+- Never return indeed.com or linkedin.com URLs
+- URL must open the specific posting with an Apply button (not a careers homepage)
+- Use "" if no verified direct link is found`,
       }],
     });
-
     const raw   = res.content.filter(b => b.type === "text").map(b => b.text).join("").trim();
     const match = raw.match(/\[[\s\S]*\]/);
     if (!match) return;
-
     const results = JSON.parse(match[0]);
-    results.forEach((r, i) => {
+    await Promise.all(results.map(async (r, i) => {
       if (i >= jobs.length) return;
-      const url = (r.directUrl || "").trim();
-      if (url.startsWith("http") && !AGGREGATOR_RE.test(url)) {
-        jobs[i].directUrl = url;
+      const url = (r.applyUrl || "").trim();
+      if (!url.startsWith("http") || AGGREGATOR_RE.test(url)) return;
+      const http = await fetchUrlStatus(url);
+      if (http.status === 200 && isSpecificJobUrl(http.finalUrl)) {
+        jobs[i].directUrl          = http.finalUrl;
+        jobs[i].applyUrlConfidence = 0.70;
+        jobs[i].atsProvider        = detectAts(http.finalUrl) || "web";
+        jobs[i].urlVerified        = true;
       }
-    });
+    }));
   } catch (err) {
-    console.warn("verifyJobUrls failed:", err.message);
+    console.warn("verifyViaWebSearch failed:", err.message);
   }
+}
+
+// â"€â"€ Main URL verification pipeline â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+// Step 1 â€" ATS public APIs (Greenhouse/Lever/Ashby)  â†' highest confidence, no AI cost
+// Step 2 â€" HTTP-verify the source URL                â†' medium confidence
+// Step 3 â€" Web-search fallback (batch, one Sonnet call) â†' last resort
+const CONFIDENCE_THRESHOLD = 0.70;
+
+async function verifyJobUrls(jobs) {
+  await Promise.all(jobs.map(async (job) => {
+    let bestUrl = null, bestConf = 0, bestAts = "";
+    const atsHint = (job.atsProvider || "").toLowerCase();
+
+    // Step 1 â€" run applicable ATS API lookups in parallel
+    const atsLookups = await Promise.all([
+      (!atsHint || atsHint === "greenhouse") ? findGreenhouseJobUrl(job.company, job.title, job.atsSlug) : null,
+      (!atsHint || atsHint === "lever")      ? findLeverJobUrl(job.company, job.title, job.atsSlug)      : null,
+      (!atsHint || atsHint === "ashby")      ? findAshbyJobUrl(job.company, job.title, job.atsSlug)      : null,
+    ]);
+    for (const r of atsLookups) {
+      if (r && r.confidence > bestConf) { bestUrl = r.url; bestConf = r.confidence; bestAts = r.ats; }
+    }
+
+    // Step 2 â€" HTTP-verify AI-provided source URL if ATS lookup didnâ€™t succeed
+    if (bestConf < CONFIDENCE_THRESHOLD && job.url && job.url.startsWith("http") && !AGGREGATOR_RE.test(job.url)) {
+      const http = await fetchUrlStatus(job.url);
+      const s    = scoreUrl(http);
+      if (s > bestConf) { bestUrl = http.finalUrl; bestConf = s; bestAts = detectAts(http.finalUrl) || ""; }
+    }
+
+    if (bestUrl && bestConf >= CONFIDENCE_THRESHOLD) {
+      job.directUrl          = bestUrl;
+      job.applyUrlConfidence = bestConf;
+      job.atsProvider        = bestAts;
+      job.urlVerified        = true;
+    } else {
+      job.urlVerified = false;
+    }
+  }));
+
+  // Step 3 â€" batch web-search for anything still unverified
+  await verifyViaWebSearch(jobs.filter(j => !j.urlVerified));
 }
 
 // Build a specific, criteria-aware search query
@@ -452,11 +647,13 @@ Return UP TO ${jobCount} jobs as a raw JSON array — no markdown, no explanatio
 Field rules:
 - fitScore: integer 0-100 reflecting overall match quality across all 10 dimensions (not keyword count)
 - matchReasons: array of 3-5 short strings (1-2 sentences each) explaining WHY this job fits the candidate — reference specific dimensions and the candidate's actual background
-- url: the verified direct URL to this specific posting, copied verbatim from your search results. Use "" only if you truly cannot find one — but if url is "", the job will be dropped entirely, so only include the job if you have a real URL.
+- url: the source URL where you found this job. Provide the most direct link available — the verification pipeline will confirm it separately.
+- atsProvider: the ATS platform if identifiable from the URL or page — "greenhouse" | "lever" | "ashby" | "workday" | "smartrecruiters" | "icims" | "bamboohr" | "hiringcafe" | "" if unknown.
+- atsSlug: if the ATS is Greenhouse, Lever, or Ashby, extract the company slug from the URL (e.g. from boards.greenhouse.io/SLUG/jobs/... the slug is SLUG). Use "" if unknown.
 - posted: exact date as "Month DD, YYYY" (e.g. "May 10, 2026") or relative like "2 days ago". Never just a year. Use "" if unknown.
 - description: full job details — role responsibilities, required skills, nice-to-haves, team context. Aim for 6-8 sentences minimum.
 
-[{"title":"","company":"","location":"","salary":"","experience":"","description":"","url":"","posted":"","fitScore":85,"matchReasons":["Experience Depth: ...","Transferable Skills: ...","Project Similarity: ..."]}]`;
+[{"title":"","company":"","location":"","salary":"","experience":"","description":"","url":"","atsProvider":"","atsSlug":"","posted":"","fitScore":85,"matchReasons":["Experience Depth: ...","Transferable Skills: ...","Project Similarity: ..."]}]`;
 
   const userQuery = `Find up to ${jobCount} job listings for: ${query}
 
@@ -519,38 +716,46 @@ Do NOT search indeed.com or linkedin.com under any circumstances. Only include a
     return true;
   });
 
-  // Google-verify every job URL and store the confirmed direct link as directUrl
+  // Verify every job URL through the ATS API → HTTP → web-search pipeline
   await verifyJobUrls(uniqueJobs);
+
+  // Only keep jobs that have a verified direct apply URL
+  const verifiedJobs = uniqueJobs.filter(j => j.urlVerified);
+  console.log(`[runJobSearch] ${uniqueJobs.length} found, ${verifiedJobs.length} verified for ${userId}`);
 
   // Save search summary to digests
   const digestRef = await db.collection("digests").add({
     userId, query,
-    jobCount:  uniqueJobs.length,
+    jobCount:  verifiedJobs.length,
     createdAt: admin.firestore.FieldValue.serverTimestamp(),
   });
 
-  // Save each new job as an individual document
-  const savePromises = uniqueJobs.map(job =>
+  // Save each verified job as an individual document
+  const savePromises = verifiedJobs.map(job =>
     db.collection("users").doc(userId).collection("jobs").add({
       userId,
-      digestId: digestRef.id,
-      title:        job.title        || "",
-      company:      job.company      || "",
-      location:     job.location     || "",
-      salary:       job.salary       || "",
-      experience:   job.experience   || "",
-      description:  job.description  || "",
-      url:          job.url          || "",
-      directUrl:    job.directUrl    || "",
-      posted:       job.posted       || "",
-      fitScore:     typeof job.fitScore === "number" ? job.fitScore : null,
-      matchReasons: Array.isArray(job.matchReasons) ? job.matchReasons : [],
-      createdAt:    admin.firestore.FieldValue.serverTimestamp(),
+      digestId:          digestRef.id,
+      title:             job.title        || "",
+      company:           job.company      || "",
+      location:          job.location     || "",
+      salary:            job.salary       || "",
+      experience:        job.experience   || "",
+      description:       job.description  || "",
+      url:               job.url          || "",
+      directUrl:         job.directUrl    || "",
+      applyUrlConfidence:job.applyUrlConfidence || 0,
+      atsProvider:       job.atsProvider  || "",
+      urlVerified:       true,
+      urlLastValidated:  admin.firestore.FieldValue.serverTimestamp(),
+      posted:            job.posted       || "",
+      fitScore:          typeof job.fitScore === "number" ? job.fitScore : null,
+      matchReasons:      Array.isArray(job.matchReasons) ? job.matchReasons : [],
+      createdAt:         admin.firestore.FieldValue.serverTimestamp(),
     })
   );
-  // Write new jobs to global jobs_cache (dedup index by URL, 30-day TTL)
-  const cacheWrites = uniqueJobs.filter(j => j.url).map(j => {
-    const hash = jobUrlHash(j.url);
+  // Write to global jobs_cache (dedup index by URL, 30-day TTL)
+  const cacheWrites = verifiedJobs.filter(j => j.directUrl || j.url).map(j => {
+    const hash = jobUrlHash(j.directUrl || j.url);
     if (!hash) return null;
     return db.collection("jobs_cache").doc(hash).set({
       title:       j.title       || "",
@@ -558,7 +763,7 @@ Do NOT search indeed.com or linkedin.com under any circumstances. Only include a
       location:    j.location    || "",
       salary:      j.salary      || "",
       description: j.description || "",
-      url:         j.url,
+      url:         j.directUrl || j.url,
       posted:      j.posted      || "",
       cachedAt:    admin.firestore.FieldValue.serverTimestamp(),
       expiresAt:   new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
@@ -566,19 +771,16 @@ Do NOT search indeed.com or linkedin.com under any circumstances. Only include a
   }).filter(Boolean);
   await Promise.all([...savePromises, ...cacheWrites]);
 
-
   // Increment denormalised counters in the root user doc (non-blocking)
   db.collection("users").doc(userId).update({
     "stats.searchesRun": admin.firestore.FieldValue.increment(1),
-    ...(uniqueJobs.length > 0 ? { "stats.jobsFound": admin.firestore.FieldValue.increment(uniqueJobs.length) } : {}),
+    ...(verifiedJobs.length > 0 ? { "stats.jobsFound": admin.firestore.FieldValue.increment(verifiedJobs.length) } : {}),
   }).catch(() => {});
 
   // Send push notification if new jobs were found
-  if (uniqueJobs.length > 0) {
-    const preview = uniqueJobs.slice(0, 2).map(j => `${j.title} at ${j.company}`).join(" Â· ");
-    const notifTitle = uniqueJobs.length === 1
-      ? "1 new job found"
-      : `${uniqueJobs.length} new jobs found`;
+  if (verifiedJobs.length > 0) {
+    const preview    = verifiedJobs.slice(0, 2).map(j => `${j.title} at ${j.company}`).join(" · ");
+    const notifTitle = verifiedJobs.length === 1 ? "1 new job found" : `${verifiedJobs.length} new jobs found`;
     sendPushNotification(userId, notifTitle, preview).catch(() => {});
   }
 
@@ -594,7 +796,7 @@ Do NOT search indeed.com or linkedin.com under any circumstances. Only include a
     });
   }
 
-  return uniqueJobs;
+  return verifiedJobs;
 }
 
 // â"€â"€ Health check â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
@@ -1965,6 +2167,63 @@ exports.weeklyJobCacheCleanup = onSchedule(
     } catch (err) {
       console.error("[weeklyJobCacheCleanup] Error:", err.message);
     }
+  }
+);
+
+// â"€â"€ Nightly URL revalidation â€" detects expired / redirected job URLs â"€â"€â"€â"€â"€â"€â"€â"€â"€
+// Checks up to 200 jobs per run, prioritising those not validated in 3+ days.
+// Marks expired links (404/410), follows permanent redirects to update URLs.
+// Requires a Firestore composite index: collection-group "jobs", field "createdAt" ASC.
+exports.revalidateJobUrls = onSchedule(
+  { schedule: "0 4 * * *", timeZone: "UTC", timeoutSeconds: 300 },
+  async () => {
+    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    const threeDaysAgo  = new Date(Date.now() -  3 * 24 * 60 * 60 * 1000);
+
+    let snap;
+    try {
+      snap = await db.collectionGroup("jobs")
+        .where("createdAt", ">", thirtyDaysAgo)
+        .limit(200)
+        .get();
+    } catch (err) {
+      // Collection-group query requires an index — log and skip gracefully
+      console.warn("[revalidate] Index may be missing:", err.message);
+      return;
+    }
+
+    let checked = 0, expired = 0, updated = 0;
+    for (const doc of snap.docs) {
+      const job       = doc.data();
+      const validated = job.urlLastValidated?.toDate?.();
+      if (validated && validated > threeDaysAgo) continue; // recently checked
+
+      const urlToCheck = job.directUrl || job.url;
+      if (!urlToCheck?.startsWith("http")) continue;
+
+      try {
+        const result = await fetchUrlStatus(urlToCheck);
+        const patch  = { urlLastValidated: admin.firestore.FieldValue.serverTimestamp() };
+
+        if (result.status === 404 || result.status === 410) {
+          patch.urlExpired = true;
+          patch.directUrl  = "";
+          expired++;
+        } else if (result.status === 200 && result.finalUrl !== urlToCheck) {
+          patch.directUrl  = result.finalUrl; // permanent redirect â€" update
+          patch.urlExpired = false;
+          updated++;
+        } else if (result.status === 200) {
+          patch.urlExpired = false;
+        }
+
+        await doc.ref.update(patch);
+        checked++;
+      } catch (err) {
+        console.warn(`[revalidate] ${job.title} @ ${job.company}: ${err.message}`);
+      }
+    }
+    console.log(`[revalidate] checked=${checked} expired=${expired} redirects_updated=${updated}`);
   }
 );
 
