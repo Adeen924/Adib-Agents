@@ -249,6 +249,52 @@ function makeJobFingerprint(job) {
   return `${co}::${ti}`;
 }
 
+// â"€â"€ Resolve direct company application URLs for aggregator-sourced jobs â"€â"€â"€â"€â"€â"€â"€
+// For jobs sourced from Indeed or LinkedIn, search for the same role on the
+// company's own careers page / ATS so users can apply directly.
+const AGGREGATOR_RE = /indeed\.com|linkedin\.com/i;
+
+async function resolveDirectUrls(jobs) {
+  const targets = jobs.filter(j => j.url && AGGREGATOR_RE.test(j.url));
+  if (targets.length === 0) return;
+
+  await Promise.all(targets.map(async (job) => {
+    try {
+      const res = await anthropic.messages.create({
+        model:      MODEL_SONNET,
+        max_tokens: 300,
+        tools:      [{ type: "web_search_20250305", name: "web_search", max_uses: 2 }],
+        messages: [{
+          role:    "user",
+          content: `Find the direct application link for this specific job on the company's own careers page or their ATS (Greenhouse, Lever, Workday, SmartRecruiters, etc.).
+
+Role: "${job.title}"
+Company: ${job.company}
+Currently listed at: ${job.url}
+
+Search for this exact position on ${job.company}'s own website. Return ONLY valid JSON â€" no explanation, no markdown:
+{"directUrl":"https://..."}
+
+Rules:
+- The URL must link to THIS specific role (unique ID or slug in the path), not just a generic careers page
+- Do NOT return an Indeed or LinkedIn URL
+- Use "" if you cannot confirm a direct link to this specific posting`,
+        }],
+      });
+      const raw   = res.content.filter(b => b.type === "text").map(b => b.text).join("").trim();
+      const match = raw.match(/\{[\s\S]*?\}/);
+      if (match) {
+        const resolved = JSON.parse(match[0]).directUrl || "";
+        if (resolved.startsWith("http") && !AGGREGATOR_RE.test(resolved)) {
+          job.directUrl = resolved;
+        }
+      }
+    } catch (err) {
+      console.warn(`resolveDirectUrls: ${job.title} @ ${job.company}: ${err.message}`);
+    }
+  }));
+}
+
 // Build a specific, criteria-aware search query
 function buildSearchQuery(prefs) {
   const expLabels = {
@@ -437,6 +483,9 @@ Field rules:
     return true;
   });
 
+  // Resolve direct company application URLs for Indeed/LinkedIn-sourced jobs
+  await resolveDirectUrls(uniqueJobs);
+
   // Save search summary to digests
   const digestRef = await db.collection("digests").add({
     userId, query,
@@ -456,6 +505,7 @@ Field rules:
       experience:   job.experience   || "",
       description:  job.description  || "",
       url:          job.url          || "",
+      directUrl:    job.directUrl    || "",
       posted:       job.posted       || "",
       fitScore:     typeof job.fitScore === "number" ? job.fitScore : null,
       matchReasons: Array.isArray(job.matchReasons) ? job.matchReasons : [],

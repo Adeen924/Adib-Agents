@@ -918,7 +918,19 @@ async function openJobDetail(jobId, source) {
       <div class="jd-section">
         <div class="jd-section-label">Job Posting Links</div>
         <div style="display:flex;flex-direction:column;gap:10px">
+          ${j.directUrl && j.directUrl.startsWith("http") ? `
+          <div>
+            <a href="${escapeHtml(j.directUrl)}" target="_blank" rel="noopener" class="btn btn-gold" style="display:inline-flex">
+              Apply Directly ↗
+            </a>
+            <div class="jd-url-preview">${escapeHtml(j.directUrl)}</div>
+          </div>
           ${j.url && j.url.startsWith("http") ? `
+          <div>
+            <a href="${escapeHtml(j.url)}" target="_blank" rel="noopener" class="btn btn-ghost" style="display:inline-flex;font-size:0.82rem">
+              Also on ${/indeed\.com/i.test(j.url) ? "Indeed" : /linkedin\.com/i.test(j.url) ? "LinkedIn" : "aggregator"} ↗
+            </a>
+          </div>` : ""}` : j.url && j.url.startsWith("http") ? `
           <div>
             <a href="${escapeHtml(j.url)}" target="_blank" rel="noopener" class="btn btn-gold" style="display:inline-flex">
               View Posting ↗
@@ -937,7 +949,7 @@ async function openJobDetail(jobId, source) {
           <button class="btn btn-gold"  onclick="generateJobDoc('resume')">📄 Tailor Resume</button>
           <button class="btn btn-gold"  onclick="generateJobDoc('cover-letter')">✉️ Cover Letter</button>
           <button class="btn btn-ghost" onclick="networkForRole()">🔗 Find Connections</button>
-          ${j.url && j.url.startsWith("http") ? `<a href="${escapeHtml(j.url)}" target="_blank" rel="noopener" class="btn btn-ghost">Apply ↗</a>` : ""}
+          ${(j.directUrl && j.directUrl.startsWith("http")) || (j.url && j.url.startsWith("http")) ? `<a href="${escapeHtml((j.directUrl && j.directUrl.startsWith("http")) ? j.directUrl : j.url)}" target="_blank" rel="noopener" class="btn btn-ghost">Apply ↗</a>` : ""}
           <button class="btn btn-ghost" onclick="generateJobDoc('interview')">🎯 Prep for Interview</button>
         </div>
       </div>
