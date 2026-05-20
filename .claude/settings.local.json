@@ -28,7 +28,14 @@
       "Bash(powershell -Command \"\\(Get-Content index.js\\) -replace '\\\\\"claude-sonnet-4-6\\\\\"', 'MODEL_SONNET' | Set-Content index.js -Encoding utf8\")",
       "Bash(Get-ChildItem -Path \"C:\\\\Users\\\\amazl\\\\Documents\\\\GitHub\\\\Adib-Agents\" -Recurse -Depth 2)",
       "PowerShell(Get-ChildItem \"C:\\\\Users\\\\amazl\\\\Documents\\\\GitHub\\\\Adib-Agents\\\\backend\" -Recurse -Depth 1 | Where-Object { $_.Extension -eq \".js\" -or $_.Extension -eq \".json\" -or $_.PSIsContainer } | Select-Object -ExpandProperty Name)",
-      "PowerShell(Get-ChildItem -Path \"C:\\\\Users\\\\amazl\\\\Documents\\\\GitHub\\\\Adib-Agents\" -Force | Select-Object Name, @{Name=\"Type\";Expression={if\\($_.PSIsContainer\\){\"DIR\"}else{\"FILE\"}}} | Format-Table -AutoSize)"
+      "PowerShell(Get-ChildItem -Path \"C:\\\\Users\\\\amazl\\\\Documents\\\\GitHub\\\\Adib-Agents\" -Force | Select-Object Name, @{Name=\"Type\";Expression={if\\($_.PSIsContainer\\){\"DIR\"}else{\"FILE\"}}} | Format-Table -AutoSize)",
+      "Bash(Get-ChildItem -Force)",
+      "Bash(Select-Object Name, Mode)",
+      "Bash(node -e \"require\\('./functions/index.js'\\)\")",
+      "Bash(node --check index.js)",
+      "Bash(python -c ' *)",
+      "Bash(git checkout *)",
+      "Bash(python patch_backend.py)"
     ]
   }
 }
