@@ -134,7 +134,7 @@ const OnboardingEngine = (() => {
     {
       target:   '.stats-grid',
       title:    'Agent Activity',
-      body:     'Your AI agent\'s 24-hour summary lives here — how many searches ran, tokens used, and estimated cost.',
+      body:     'Your activity summary lives here — new jobs found in the last 24 hours, total jobs discovered, applications you\'re tracking, and documents generated.',
       position: 'bottom',
     },
     {
