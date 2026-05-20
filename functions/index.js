@@ -457,7 +457,15 @@ Field rules:
 
 [{"title":"","company":"","location":"","salary":"","experience":"","description":"","url":"","posted":"","fitScore":85,"matchReasons":["Experience Depth: ...","Transferable Skills: ...","Project Similarity: ..."]}]`;
 
-  const userQuery = `Find ${jobCount} job listings matching: ${query}`;
+  const userQuery = `Find up to ${jobCount} job listings for: ${query}
+
+Run your web searches in this exact order and stop adding jobs once you have ${jobCount} with verified direct URLs:
+1. site:hiring.cafe ${query}
+2. site:boards.greenhouse.io ${query}
+3. site:jobs.lever.co ${query}
+4. site:wellfound.com ${query}
+
+Do NOT search indeed.com or linkedin.com under any circumstances. Only include a job if the URL opens directly to that specific posting.`;
 
   const response = await anthropic.messages.create({
     model:      MODEL_SONNET,
