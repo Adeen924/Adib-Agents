@@ -1256,9 +1256,9 @@ app.post("/target-companies/save", async (req, res) => {
   if (!Array.isArray(companies)) return res.status(400).json({ error: "companies must be an array" });
   try {
     await db.collection("targetCompanies").doc(userId).set({
-      companies: companies.filter(c => c.name && c.url).map(c => ({
+      companies: companies.filter(c => c.name).map(c => ({
         name: c.name.trim(),
-        url:  c.url.trim(),
+        url:  (c.url || "").trim(),
       })),
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     });
@@ -1346,18 +1346,50 @@ function makeWatchlistFingerprint(company, title, url) {
 
 async function checkTargetCompany(userId, company) {
   // Get fingerprints of jobs already seen for this company
-  const seenSnap = await db.collection("watchlistJobs")
-    .where("userId", "==", userId)
-    .where("company", "==", company.name)
+  const seenSnap = await db.collection(“watchlistJobs”)
+    .where(“userId”, “==”, userId)
+    .where(“company”, “==”, company.name)
     .get();
   const seenFingerprints = new Set(
     seenSnap.docs.map(d => d.data().fingerprint).filter(Boolean)
   );
 
+  // Resolve career page URL via web search if not stored
+  let careerPageUrl = company.url || “”;
+  if (!careerPageUrl) {
+    try {
+      const urlRes = await anthropic.messages.create({
+        model:      MODEL_SONNET,
+        max_tokens: 256,
+        tools:      [{ type: “web_search_20250305”, name: “web_search”, max_uses: 1 }],
+        messages:   [{ role: “user”, content: `Find the official careers or jobs page URL for “${company.name}”. Return ONLY a JSON object, no explanation: {“url”:”https://...”}` }],
+      });
+      const urlRaw  = urlRes.content.filter(b => b.type === “text”).map(b => b.text).join(“”).trim();
+      const urlMatch = urlRaw.match(/\{[\s\S]*\}/);
+      if (urlMatch) {
+        const resolved = JSON.parse(urlMatch[0]).url || “”;
+        if (resolved.startsWith(“http”)) {
+          careerPageUrl = resolved;
+          // Persist resolved URL so future checks skip this lookup
+          const docRef = db.collection(“targetCompanies”).doc(userId);
+          const snap   = await docRef.get();
+          if (snap.exists) {
+            const updated = (snap.data().companies || []).map(c =>
+              c.name === company.name ? { ...c, url: careerPageUrl } : c
+            );
+            await docRef.update({ companies: updated });
+          }
+        }
+      }
+    } catch (err) {
+      console.warn(`Could not resolve career page for ${company.name}:`, err.message);
+    }
+  }
+
   const systemPrompt = `You are a job search agent monitoring a specific company's career page. Visit the URL provided and list all currently open positions.
 
 Return ONLY a raw JSON array â€” no markdown, no explanation:
-[{"title":"","location":"","url":"","salary":"","description":"","posted":""}]
+[{“title”:””,”location”:””,”url”:””,”salary”:””,”description”:””,”posted”:””}]
 
 Rules:
 - url: copy the DIRECT job posting URL verbatim from the page. Do NOT construct or guess URLs. If no direct link is visible, use the career page URL.
@@ -1370,9 +1402,9 @@ Rules:
     const response = await anthropic.messages.create({
       model:      MODEL_SONNET,
       max_tokens: 3000,
-      tools:      [{ type: "web_search_20250305", name: "web_search", max_uses: 2 }],
+      tools:      [{ type: “web_search_20250305”, name: “web_search”, max_uses: 2 }],
       system:     systemPrompt,
-      messages:   [{ role: "user", content: `Find all open jobs at ${company.name}. Career page: ${company.url}` }],
+      messages:   [{ role: “user”, content: `Find all open jobs at ${company.name}. Career page: ${careerPageUrl || company.name + “ careers”}` }],
     });
 
     const raw = response.content
@@ -1570,7 +1602,7 @@ exports.dailyWatchlistCheck = onSchedule(
         const userId    = doc.id;
         const companies = doc.data().companies || [];
         for (const company of companies) {
-          if (!company.name || !company.url) continue;
+          if (!company.name) continue;
           try {
             const count = await checkTargetCompany(userId, company);
             console.log(`Watchlist: ${count} new jobs at ${company.name} for ${userId}`);

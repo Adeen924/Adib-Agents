@@ -1562,13 +1562,13 @@ function renderTargetCompanies(companies) {
   if (!list) return;
   list.innerHTML = "";
   if (companies.length === 0) {
-    addTargetCompanyRow("", "");
+    addTargetCompanyRow("");
     return;
   }
-  companies.forEach(c => addTargetCompanyRow(c.name || "", c.url || ""));
+  companies.forEach(c => addTargetCompanyRow(c.name || ""));
 }
 
-function addTargetCompanyRow(name, url) {
+function addTargetCompanyRow(name) {
   const list = document.getElementById("targetCompaniesList");
   if (!list) return;
   const row = document.createElement("div");
@@ -1578,8 +1578,6 @@ function addTargetCompanyRow(name, url) {
   row.innerHTML = `
     <input type="text" class="tc-name" placeholder="Company name" value="${escapeAttr(name || "")}"
       style="${inputStyle}" />
-    <input type="text" class="tc-url" placeholder="Career page URL" value="${escapeAttr(url || "")}"
-      style="${inputStyle};flex:2" />
     <button type="button" class="btn btn-ghost tc-remove"
       style="padding:8px 12px;flex-shrink:0;font-size:1.1rem;line-height:1">×</button>`;
   row.querySelector(".tc-remove").addEventListener("click", () => row.remove());
@@ -1593,11 +1591,8 @@ async function saveWatchlistCompanies() {
   try {
     const rows     = document.querySelectorAll(".target-company-row");
     const companies = Array.from(rows)
-      .map(row => ({
-        name: row.querySelector(".tc-name").value.trim(),
-        url:  row.querySelector(".tc-url").value.trim(),
-      }))
-      .filter(c => c.name && c.url);
+      .map(row => ({ name: row.querySelector(".tc-name").value.trim() }))
+      .filter(c => c.name);
 
     const res = await fetch(`${BACKEND_URL}/target-companies/save`, {
       method: "POST", headers: { "Content-Type": "application/json" },
