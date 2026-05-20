@@ -266,19 +266,24 @@ async function resolveDirectUrls(jobs) {
         tools:      [{ type: "web_search_20250305", name: "web_search", max_uses: 2 }],
         messages: [{
           role:    "user",
-          content: `Find the direct application link for this specific job on the company's own careers page or their ATS (Greenhouse, Lever, Workday, SmartRecruiters, etc.).
+          content: `Find the direct application URL for this job on the company's ATS or careers page. Try these searches in order â€" stop as soon as you find a match:
+
+1. site:hiring.cafe "${job.company}" "${job.title}"
+2. site:boards.greenhouse.io "${job.company}" "${job.title}"
+3. site:jobs.lever.co "${job.company}" "${job.title}"
+4. site:wellfound.com/jobs "${job.company}" "${job.title}"
+5. "${job.company}" "${job.title}" (site:greenhouse.io OR site:lever.co OR site:workday.com OR site:smartrecruiters.com OR site:icims.com) -site:indeed.com -site:linkedin.com
 
 Role: "${job.title}"
 Company: ${job.company}
-Currently listed at: ${job.url}
 
-Search for this exact position on ${job.company}'s own website. Return ONLY valid JSON â€" no explanation, no markdown:
+Return ONLY valid JSON â€" no explanation, no markdown:
 {"directUrl":"https://..."}
 
 Rules:
-- The URL must link to THIS specific role (unique ID or slug in the path), not just a generic careers page
+- URL must link to THIS specific posting (must have a unique job ID or slug â€" not just /careers or /jobs)
 - Do NOT return an Indeed or LinkedIn URL
-- Use "" if you cannot confirm a direct link to this specific posting`,
+- Use "" if no specific direct posting URL is found`,
         }],
       });
       const raw   = res.content.filter(b => b.type === "text").map(b => b.text).join("").trim();
@@ -329,7 +334,8 @@ function buildSearchQuery(prefs) {
 }
 
 function buildJobBoardsContext(prefs, tierConfig) {
-  const builtIn = ["LinkedIn", "Indeed", "Greenhouse", "Lever", "Wellfound", "Builtin"];
+  // ATS-first order: direct platforms with clean, permanent URLs come before aggregators
+  const builtIn = ["hiring.cafe", "Greenhouse", "Lever", "Wellfound", "Builtin", "LinkedIn", "Indeed"];
   const custom  = tierConfig.customSites
     ? (prefs.customSites || "").split(",").map(s => s.trim()).filter(Boolean)
     : [];
@@ -429,7 +435,14 @@ MATCHING DIMENSIONS — score and reason across all of these for every job you r
 9. Hiring Velocity: Is the company actively growing (recent posting, multiple open roles, expansion signals)?
 10. Recruiter Responsiveness: Does the posting appear recently active and from a team likely to respond?
 
+Search strategy â€" follow this order strictly:
+1. Search hiring.cafe FIRST â€" it always provides direct application links to the actual job posting.
+2. Search Greenhouse (boards.greenhouse.io), Lever (jobs.lever.co), Wellfound, and Builtin â€" these platforms have permanent, directly-linkable URLs.
+3. Search the company's own careers page next (e.g. company.com/careers).
+4. Only use LinkedIn or Indeed as a last resort if nothing is found on direct platforms.
+
 Rules:
+- STRONGLY prefer hiring.cafe, Greenhouse, Lever, Wellfound, and Builtin URLs over Indeed or LinkedIn for the same job â€" aggregator links are a last resort only
 - Only include direct job posting URLs (not search pages or Google results)
 - Prefer postings from the last 14 days
 - Skip jobs where the required experience is significantly above the candidate's level
