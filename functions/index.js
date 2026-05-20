@@ -136,7 +136,11 @@ async function ensureUser(userId) {
   const ref = db.collection("users").doc(userId);
   const doc = await ref.get();
   if (!doc.exists) {
-    await ref.set({ tier: "free", role: "customer", email: userId, createdAt: admin.firestore.FieldValue.serverTimestamp() });
+    await ref.set({
+      tier: "free", role: "customer", email: userId,
+      stats: { jobsFound: 0, applicationsSubmitted: 0, documentsGenerated: 0, searchesRun: 0 },
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
   } else if (!doc.data().role) {
     await ref.update({ role: "customer" });
   }
@@ -175,7 +179,7 @@ async function enforceFeatureLimit(userId, feature) {
     ? now.toISOString().slice(0, 10)   // YYYY-MM-DD
     : now.toISOString().slice(0, 7);   // YYYY-MM
 
-  const ref = db.collection("featureUsage").doc(`${userId}_${windowKey}`);
+  const ref = db.collection("users").doc(userId).collection("usage").doc(windowKey);
 
   await db.runTransaction(async (txn) => {
     const snap    = await txn.get(ref);
@@ -200,7 +204,7 @@ async function enforceFeatureLimit(userId, feature) {
 
     txn.set(
       ref,
-      { [feature]: current + 1, userId, updatedAt: admin.firestore.FieldValue.serverTimestamp() },
+      { [feature]: current + 1, updatedAt: admin.firestore.FieldValue.serverTimestamp() },
       { merge: true }
     );
   });
@@ -292,7 +296,7 @@ async function runJobSearch(userId, prefs, tier = "free") {
   let resumeSnippet = "";
   let candidateProfile = "";
   try {
-    const kbDoc = await db.collection("knowledge").doc(userId).get();
+    const kbDoc = await db.collection("users").doc(userId).collection("knowledge").doc("profile").get();
     if (kbDoc.exists) {
       const kb = kbDoc.data();
       resumeSnippet = (kb.resume || "").slice(0, 2000);
@@ -449,6 +453,12 @@ Field rules:
   );
   await Promise.all(savePromises);
 
+  // Increment denormalised counters in the root user doc (non-blocking)
+  db.collection("users").doc(userId).update({
+    "stats.searchesRun": admin.firestore.FieldValue.increment(1),
+    ...(uniqueJobs.length > 0 ? { "stats.jobsFound": admin.firestore.FieldValue.increment(uniqueJobs.length) } : {}),
+  }).catch(() => {});
+
   // Send push notification if new jobs were found
   if (uniqueJobs.length > 0) {
     const preview = uniqueJobs.slice(0, 2).map(j => `${j.title} at ${j.company}`).join(" Â· ");
@@ -483,19 +493,20 @@ app.get("/stats/:userId", async (req, res) => {
     const cutoff   = Date.now() - 24 * 60 * 60 * 1000;
     const monthKey = new Date().toISOString().slice(0, 7);
 
-    const [jobsSnap, appsSnap, docsSnap, featureSnap] = await Promise.all([
-      db.collection("jobs").where("userId", "==", userId).get(),
-      db.collection("applications").where("userId", "==", userId).get(),
-      db.collection("documents").where("userId", "==", userId).get(),
-      db.collection("featureUsage").doc(`${userId}_${monthKey}`).get(),
+    const [newJobsSnap, userDoc, usageDoc] = await Promise.all([
+      db.collection("jobs").where("userId", "==", userId)
+        .where("createdAt", ">", new Date(Date.now() - 24 * 60 * 60 * 1000)).get(),
+      db.collection("users").doc(userId).get(),
+      db.collection("users").doc(userId).collection("usage").doc(monthKey).get(),
     ]);
 
-    const newJobs24h        = jobsSnap.docs.filter(d => (d.data().createdAt?.toMillis?.() || 0) > cutoff).length;
-    const totalJobs         = jobsSnap.docs.length;
-    const applicationsCount = appsSnap.docs.length;
-    const documentsCount    = docsSnap.docs.length;
-    const featureData       = featureSnap.exists ? featureSnap.data() : {};
-    const searchesThisMonth = featureData.searches_manual || 0;
+    const userStats         = userDoc.exists ? (userDoc.data().stats || {}) : {};
+    const usageData         = usageDoc.exists ? usageDoc.data() : {};
+    const newJobs24h        = newJobsSnap.size;
+    const totalJobs         = userStats.jobsFound             || 0;
+    const applicationsCount = userStats.applicationsSubmitted || 0;
+    const documentsCount    = userStats.documentsGenerated    || 0;
+    const searchesThisMonth = usageData.searches_manual       || 0;
 
     res.json({ newJobs24h, totalJobs, applicationsCount, documentsCount, searchesThisMonth });
   } catch (err) {
@@ -529,6 +540,10 @@ app.post("/documents/save", async (req, res) => {
       company: company || "",
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
     });
+    // Increment denormalised counter (non-blocking)
+    db.collection("users").doc(userId).update({
+      "stats.documentsGenerated": admin.firestore.FieldValue.increment(1),
+    }).catch(() => {});
     res.json({ ok: true, id: ref.id });
   } catch (err) {
     res.status(500).json({ error: "Failed to save document" });
@@ -574,6 +589,10 @@ app.post("/applications/save", async (req, res) => {
     } else {
       data.createdAt = admin.firestore.FieldValue.serverTimestamp();
       const ref = await db.collection("applications").add(data);
+      // Increment denormalised counter for new applications (non-blocking)
+      db.collection("users").doc(userId).update({
+        "stats.applicationsSubmitted": admin.firestore.FieldValue.increment(1),
+      }).catch(() => {});
       res.json({ ok: true, id: ref.id });
     }
   } catch (err) {
@@ -593,7 +612,7 @@ app.delete("/applications/:appId", async (req, res) => {
 // â”€â”€ Knowledge Base â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 app.get("/knowledge/:userId", async (req, res) => {
   try {
-    const doc = await db.collection("knowledge").doc(req.params.userId).get();
+    const doc = await db.collection("users").doc(req.params.userId).collection("knowledge").doc("profile").get();
     res.json(doc.exists ? doc.data() : {});
   } catch (err) {
     res.status(500).json({ error: "Failed to load knowledge base" });
@@ -605,7 +624,7 @@ app.post("/knowledge/save", async (req, res) => {
           targetRole, skills, education, additionalContext } = req.body;
   if (!userId) return res.status(400).json({ error: "userId is required" });
   try {
-    await db.collection("knowledge").doc(userId).set({
+    await db.collection("users").doc(userId).collection("knowledge").doc("profile").set({
       resume:            resume            || "",
       currentPosition:   currentPosition   || "",
       previousPositions: previousPositions || "",
@@ -624,7 +643,7 @@ app.post("/knowledge/save", async (req, res) => {
 // â”€â”€ Preferences â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 app.get("/preferences/:userId", async (req, res) => {
   try {
-    const doc = await db.collection("preferences").doc(req.params.userId).get();
+    const doc = await db.collection("users").doc(req.params.userId).collection("preferences").doc("config").get();
     res.json(doc.exists ? doc.data() : {});
   } catch (err) {
     res.status(500).json({ error: "Failed to load preferences" });
@@ -661,7 +680,7 @@ app.post("/preferences/save", async (req, res) => {
   if (notifPhone      !== undefined) update.notifPhone      = notifPhone      || "";
 
   try {
-    await db.collection("preferences").doc(userId).set(update, { merge: true });
+    await db.collection("users").doc(userId).collection("preferences").doc("config").set(update, { merge: true });
     res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: "Failed to save preferences" });
@@ -738,7 +757,7 @@ app.get("/jobs/detail/:jobId", async (req, res) => {
 async function getJobAndResume(jobId, userId) {
   const [jobDoc, kbDoc] = await Promise.all([
     db.collection("jobs").doc(jobId).get(),
-    db.collection("knowledge").doc(userId).get(),
+    db.collection("users").doc(userId).collection("knowledge").doc("profile").get(),
   ]);
   if (!jobDoc.exists) throw new Error("Job not found");
   const job    = { id: jobDoc.id, ...jobDoc.data() };
@@ -893,7 +912,7 @@ app.post("/jobs/:jobId/network", async (req, res) => {
     await enforceFeatureLimit(userId, "networking");
     const [jobDoc, kbDoc] = await Promise.all([
       db.collection("jobs").doc(req.params.jobId).get(),
-      db.collection("knowledge").doc(userId).get(),
+      db.collection("users").doc(userId).collection("knowledge").doc("profile").get(),
     ]);
     if (!jobDoc.exists) throw new Error("Job not found");
     const job = { id: jobDoc.id, ...jobDoc.data() };
@@ -989,7 +1008,7 @@ app.post("/search/now/:userId", async (req, res) => {
   const { userId } = req.params;
   try {
     const [prefDoc, tier] = await Promise.all([
-      db.collection("preferences").doc(userId).get(),
+      db.collection("users").doc(userId).collection("preferences").doc("config").get(),
       getUserTier(userId),
     ]);
     if (!prefDoc.exists) {
@@ -1414,11 +1433,13 @@ exports.dailyJobSearch = onSchedule(
   async () => {
     try {
       const now       = new Date();
-      const prefsSnap = await db.collection("preferences").get();
+      // Collection-group query across all users/{userId}/preferences/config docs
+      const prefsSnap = await db.collectionGroup("preferences").get();
       if (prefsSnap.empty) return;
 
       for (const doc of prefsSnap.docs) {
-        const userId = doc.id;
+        if (doc.id !== "config") continue; // only process config docs
+        const userId = doc.ref.parent.parent.id; // users/{userId}/preferences/config
         const prefs  = doc.data();
 
         // Skip if user has turned off automated search
@@ -1492,22 +1513,21 @@ exports.onUserDeleted = functions.auth.user().onDelete(async (user) => {
     //    added in future migrations automatically -- no edits needed here.
     admin.firestore().recursiveDelete(db.collection("users").doc(uid)),
 
-    // 2. Flat top-level collections still keyed by email (pre-migration).
-    //    Remove each entry below as that collection moves under /users/{uid}/.
-    db.collection("users")           .doc(email).delete(),
-    db.collection("knowledge")       .doc(email).delete(),
-    db.collection("preferences")     .doc(email).delete(),
-    db.collection("fcmTokens")       .doc(email).delete(),
-    db.collection("targetCompanies") .doc(email).delete(),
+    // 2. Email-keyed user doc + all subcollections (preferences, knowledge, usage).
+    //    recursiveDelete handles the full subtree in one call.
+    admin.firestore().recursiveDelete(db.collection("users").doc(email)),
 
-    // 3. Collections that store userId as a field -- query + batch-delete.
+    // 3. Remaining flat top-level collections not yet migrated.
+    db.collection("fcmTokens")      .doc(email).delete(),
+    db.collection("targetCompanies").doc(email).delete(),
+
+    // 4. Collections that store userId as a field -- query + batch-delete.
     deleteQuery(db.collection("jobs")          .where("userId", "==", email)),
     deleteQuery(db.collection("applications")  .where("userId", "==", email)),
     deleteQuery(db.collection("documents")     .where("userId", "==", email)),
     deleteQuery(db.collection("digests")       .where("userId", "==", email)),
     deleteQuery(db.collection("activity")      .where("userId", "==", email)),
     deleteQuery(db.collection("watchlistJobs") .where("userId", "==", email)),
-    deleteQuery(db.collection("featureUsage")  .where("userId", "==", email)),
   ]);
 
   console.log('[onUserDeleted] Wipe complete for ' + uid);
