@@ -12,15 +12,16 @@ const userId = email;
 
 // ── Panel registry ────────────────────────────────────────────────────────────
 const PANELS = {
-  dashboard:   document.getElementById("dashboardView"),
-  jobs:        document.getElementById("jobsView"),
-  jobDetail:   document.getElementById("jobDetailView"),
-  documents:   document.getElementById("documentsView"),
-  digest:      document.getElementById("digestView"),
-  profile:     document.getElementById("profileView"),
-  account:     document.getElementById("accountView"),
-  preferences: document.getElementById("preferencesView"),
-  admin:       document.getElementById("adminView"),
+  dashboard:    document.getElementById("dashboardView"),
+  applications: document.getElementById("applicationsView"),
+  jobs:         document.getElementById("jobsView"),
+  jobDetail:    document.getElementById("jobDetailView"),
+  documents:    document.getElementById("documentsView"),
+  digest:       document.getElementById("digestView"),
+  profile:      document.getElementById("profileView"),
+  account:      document.getElementById("accountView"),
+  preferences:  document.getElementById("preferencesView"),
+  admin:        document.getElementById("adminView"),
 };
 
 let isLoading      = false;
@@ -48,10 +49,12 @@ function init() {
   document.getElementById("nav-admin")?.addEventListener("click",       () => showPanel("admin"));
   document.getElementById("signOutBtn").addEventListener("click",    signOut);
 
-  // Applications
-  document.getElementById("addAppBtn").addEventListener("click",    showAppForm);
-  document.getElementById("saveAppBtn").addEventListener("click",   saveApplication);
-  document.getElementById("cancelAppBtn").addEventListener("click", hideAppForm);
+  // Applications panel
+  document.getElementById("nav-applications").addEventListener("click", () => showPanel("applications"));
+  document.getElementById("quickAddBtn").addEventListener("click", showQuickAdd);
+
+  // Close detail panel on Escape key
+  document.addEventListener("keydown", e => { if (e.key === "Escape") closeAppDetail(); });
 
   // Document tabs
   document.querySelectorAll(".doc-tab").forEach((tab) => {
@@ -126,25 +129,27 @@ function showPanel(name) {
 
   document.querySelectorAll(".nav-item").forEach(b => b.classList.remove("active"));
   const navIds = {
-    dashboard:   "nav-dashboard",
-    jobs:        "nav-jobs",
-    documents:   "nav-documents",
-    digest:      "nav-digest",
-    profile:     "nav-profile",
-    account:     "nav-account",
-    preferences: "nav-preferences",
-    admin:       "nav-admin",
+    dashboard:    "nav-dashboard",
+    applications: "nav-applications",
+    jobs:         "nav-jobs",
+    documents:    "nav-documents",
+    digest:       "nav-digest",
+    profile:      "nav-profile",
+    account:      "nav-account",
+    preferences:  "nav-preferences",
+    admin:        "nav-admin",
   };
   if (navIds[name]) document.getElementById(navIds[name])?.classList.add("active");
 
-  if (name === "dashboard")   { loadStats(); loadRecentJobs(); loadApplications(); }
-  if (name === "admin")       loadAdminPanel();
-  if (name === "jobs")        loadJobs();
-  if (name === "documents")   loadDocuments(currentDocType);
-  if (name === "digest")      loadDigest();
-  if (name === "profile")     loadProfilePanel();
-  if (name === "account")     loadAccountPanel();
-  if (name === "preferences") loadPreferencesPanel();
+  if (name === "dashboard")    { loadStats(); loadRecentJobs(); loadApplications(); }
+  if (name === "applications") loadApplications();
+  if (name === "admin")        loadAdminPanel();
+  if (name === "jobs")         loadJobs();
+  if (name === "documents")    loadDocuments(currentDocType);
+  if (name === "digest")       loadDigest();
+  if (name === "profile")      loadProfilePanel();
+  if (name === "account")      loadAccountPanel();
+  if (name === "preferences")  loadPreferencesPanel();
 }
 
 // ── Dashboard recent jobs ─────────────────────────────────────────────────────
@@ -179,88 +184,547 @@ async function loadStats() {
 }
 
 // ── Applications ──────────────────────────────────────────────────────────────
+let allApplicationsList = [];
+let currentAppView      = "kanban";
+let currentDetailAppId  = null;
+let currentDetailTab    = "notes";
+
+const ALL_STATUSES_FE = ["Saved","Preparing","Applied","Assessment","Phone Screen",
+  "Interview","Final Interview","Offer","Rejected","Ghosted","Withdrawn","Accepted"];
+
+const KANBAN_COLS = [
+  { id: "saved",        label: "Saved",        statuses: ["Saved","Preparing"] },
+  { id: "applied",      label: "Applied",      statuses: ["Applied","Assessment"] },
+  { id: "screening",    label: "Screening",    statuses: ["Phone Screen"] },
+  { id: "interviewing", label: "Interviewing", statuses: ["Interview","Final Interview"] },
+  { id: "decision",     label: "Decision",     statuses: ["Offer"] },
+  { id: "closed",       label: "Closed",       statuses: ["Rejected","Ghosted","Withdrawn","Accepted"] },
+];
+
+function statusClass(status) {
+  const map = {
+    "Saved":"saved","Preparing":"preparing","Applied":"applied",
+    "Assessment":"assessment","Phone Screen":"phone-screen",
+    "Interview":"interview","Final Interview":"final-interview",
+    "Offer":"offer","Rejected":"rejected","Ghosted":"ghosted",
+    "Withdrawn":"withdrawn","Accepted":"accepted",
+  };
+  return map[status] || "applied";
+}
+
+function daysInStatus(app) {
+  const since = app.statusChangedAt || app.appliedAt;
+  if (!since) return 0;
+  const d = new Date(since);
+  if (isNaN(d)) return 0;
+  return Math.floor((Date.now() - d.getTime()) / 86400000);
+}
+
+function filteredApps() {
+  const statusFilter = document.getElementById("filterStatus")?.value || "";
+  const sourceFilter = document.getElementById("filterSource")?.value || "";
+  const searchQ      = (document.getElementById("appSearch")?.value || "").toLowerCase().trim();
+  return allApplicationsList.filter(a => {
+    if (statusFilter && a.status !== statusFilter) return false;
+    if (sourceFilter && a.source !== sourceFilter) return false;
+    if (searchQ && !`${a.company} ${a.role} ${(a.tags||[]).join(" ")}`.toLowerCase().includes(searchQ)) return false;
+    return true;
+  });
+}
+
 async function loadApplications() {
-  const el = document.getElementById("applicationsTable");
   try {
     const res  = await fetch(`${BACKEND_URL}/applications/${encodeURIComponent(userId)}`);
     const data = await res.json();
-
-    if (!data.applications || data.applications.length === 0) {
-      el.innerHTML = `<div class="empty-table">No applications yet. Click "+ Add Application" to start tracking.</div>`;
-      return;
-    }
-
-    el.innerHTML = `
-      <table class="app-table">
-        <thead><tr>
-          <th>Company</th><th>Role</th><th>Status</th><th>Applied</th><th>Actions</th>
-        </tr></thead>
-        <tbody>
-          ${data.applications.map((a) => `
-            <tr>
-              <td><strong>${escapeHtml(a.company)}</strong>${a.url ? ` <a href="${escapeHtml(a.url)}" target="_blank" class="table-link">↗</a>` : ""}</td>
-              <td>${escapeHtml(a.role)}</td>
-              <td><span class="status-badge status-${a.status.toLowerCase().replace(" ","-")}">${escapeHtml(a.status)}</span></td>
-              <td>${a.appliedAt ? new Date(a.appliedAt).toLocaleDateString() : "—"}</td>
-              <td class="table-actions">
-                <button class="action-btn" onclick="editApplication('${a.id}','${escapeHtml(a.company)}','${escapeHtml(a.role)}','${escapeHtml(a.status)}','${escapeHtml(a.url||"")}','${escapeHtml(a.notes||"")}','${escapeHtml(a.appliedAt||"")}')">Edit</button>
-                <button class="action-btn danger" onclick="deleteApplication('${a.id}')">Delete</button>
-              </td>
-            </tr>`).join("")}
-        </tbody>
-      </table>`;
+    allApplicationsList = data.applications || [];
+    renderPipelineBar();
+    renderCurrentView();
+    renderDashboardPipeline();
   } catch {
-    el.innerHTML = '<div class="panel-loading">Failed to load applications.</div>';
+    const b = document.getElementById("kanbanCols");
+    if (b) b.innerHTML = '<div class="panel-loading" style="padding:32px">Failed to load applications.</div>';
   }
 }
 
-function showAppForm() {
-  document.getElementById("appForm").style.display = "block";
-  document.getElementById("appDate").value = new Date().toISOString().split("T")[0];
-  document.getElementById("appEditId").value = "";
+function renderDashboardPipeline() {
+  const el = document.getElementById("dashboardPipeline");
+  if (!el) return;
+  if (!allApplicationsList.length) {
+    el.innerHTML = `<div class="empty-table">No applications yet.
+      <button class="btn btn-gold" onclick="showPanel('applications')" style="padding:6px 14px;font-size:0.8rem;margin-left:8px">Start Tracking →</button></div>`;
+    return;
+  }
+  const active     = allApplicationsList.filter(a => ["Applied","Assessment","Phone Screen","Interview","Final Interview"].includes(a.status)).length;
+  const interviews = allApplicationsList.filter(a => ["Interview","Final Interview"].includes(a.status)).length;
+  const offers     = allApplicationsList.filter(a => a.status === "Offer").length;
+  el.innerHTML = `<div class="pipeline-bar" style="margin-bottom:0">
+    <div class="pipeline-pill" onclick="showPanel('applications')">
+      <span class="pill-count">${allApplicationsList.length}</span><span class="pill-label">Total</span>
+    </div>
+    <div class="pipeline-pill" onclick="showPanel('applications')">
+      <span class="pill-count" style="color:#6495ed">${active}</span><span class="pill-label">Active</span>
+    </div>
+    <div class="pipeline-pill" onclick="showPanel('applications')">
+      <span class="pill-count" style="color:#9370db">${interviews}</span><span class="pill-label">Interviewing</span>
+    </div>
+    ${offers ? `<div class="pipeline-pill" onclick="showPanel('applications')">
+      <span class="pill-count" style="color:#4caf7d">${offers}</span><span class="pill-label">Offer${offers>1?"s":""}</span>
+    </div>` : ""}
+  </div>`;
 }
-function hideAppForm() {
-  document.getElementById("appForm").style.display = "none";
-  ["appCompany","appRole","appUrl","appNotes","appEditId"].forEach(id => document.getElementById(id).value = "");
-  document.getElementById("appStatus").value = "Applied";
+
+function renderPipelineBar() {
+  const el = document.getElementById("pipelineBar");
+  if (!el) return;
+  const groups = [
+    { label:"All",          statuses:null },
+    { label:"Active",       statuses:["Applied","Assessment","Phone Screen"],        color:"#d4af37" },
+    { label:"Interviewing", statuses:["Interview","Final Interview"],                color:"#9370db" },
+    { label:"Offer",        statuses:["Offer"],                                      color:"#4caf7d" },
+    { label:"Rejected",     statuses:["Rejected","Ghosted"],                         color:"#e05c5c" },
+    { label:"Closed",       statuses:["Withdrawn","Accepted"],                       color:"#888" },
+  ];
+  el.innerHTML = groups.map(g => {
+    const count = g.statuses
+      ? allApplicationsList.filter(a => g.statuses.includes(a.status)).length
+      : allApplicationsList.length;
+    return `<div class="pipeline-pill" onclick="filterByGroup(${JSON.stringify(g.statuses||null)})">
+      <span class="pill-count" ${g.color?`style="color:${g.color}"`:""} >${count}</span>
+      <span class="pill-label">${g.label}</span>
+    </div>`;
+  }).join("");
 }
-function editApplication(id, company, role, status, url, notes, appliedAt) {
-  document.getElementById("appForm").style.display = "block";
-  document.getElementById("appCompany").value = company;
-  document.getElementById("appRole").value    = role;
-  document.getElementById("appStatus").value  = status;
-  document.getElementById("appUrl").value     = url;
-  document.getElementById("appNotes").value   = notes;
-  document.getElementById("appDate").value    = appliedAt ? appliedAt.split("T")[0] : "";
-  document.getElementById("appEditId").value  = id;
-  document.getElementById("appForm").scrollIntoView({ behavior: "smooth" });
+
+function filterByGroup(statuses) {
+  const sel = document.getElementById("filterStatus");
+  if (!sel) return;
+  sel.value = (!statuses || statuses.length > 1) ? "" : (statuses[0] || "");
+  renderCurrentView();
 }
-async function saveApplication() {
-  const company = document.getElementById("appCompany").value.trim();
-  const role    = document.getElementById("appRole").value.trim();
-  if (!company || !role) { alert("Company and role are required."); return; }
-  const btn = document.getElementById("saveAppBtn");
+
+function switchAppView(view) {
+  currentAppView = view;
+  document.getElementById("kanbanBoard").style.display = view === "kanban" ? "" : "none";
+  document.getElementById("tableBoard").style.display  = view === "table"  ? "" : "none";
+  document.getElementById("viewKanbanBtn").classList.toggle("active", view === "kanban");
+  document.getElementById("viewTableBtn").classList.toggle("active",  view === "table");
+  renderCurrentView();
+}
+
+function renderCurrentView() {
+  if (currentAppView === "kanban") renderKanban();
+  else renderAppTable();
+}
+
+// ── Kanban ────────────────────────────────────────────────────────────────────
+function renderKanban() {
+  const apps  = filteredApps();
+  const board = document.getElementById("kanbanCols");
+  if (!board) return;
+  if (!allApplicationsList.length) {
+    board.innerHTML = `<div class="empty-state">
+      <div class="empty-state-icon">📋</div>
+      <div class="empty-state-title">No applications yet</div>
+      <div class="empty-state-sub">Click "+ Add Application" to start tracking your pipeline.</div>
+    </div>`;
+    return;
+  }
+  board.innerHTML = KANBAN_COLS.map(col => {
+    const colApps = apps.filter(a => col.statuses.includes(a.status));
+    return `<div class="kanban-col">
+      <div class="kanban-col-header">
+        <span class="kanban-col-title">${col.label}</span>
+        <span class="kanban-col-count">${colApps.length}</span>
+      </div>
+      <div class="kanban-cards">
+        ${colApps.length ? colApps.map(kanbanCard).join("") :
+          '<div style="font-size:0.75rem;color:var(--text-muted);padding:4px 2px;text-align:center">—</div>'}
+      </div>
+    </div>`;
+  }).join("");
+}
+
+function kanbanCard(a) {
+  const days    = daysInStatus(a);
+  const isStale = days > 14 && ["Applied","Assessment"].includes(a.status);
+  const isGhost = days > 21 && ["Applied","Phone Screen","Interview"].includes(a.status);
+  const daysCls = isGhost ? "ghost" : isStale ? "stale" : "";
+  return `<div class="kanban-card" onclick="openAppDetail('${a.id}')">
+    <div class="kanban-card-company">${escapeHtml(a.company)}</div>
+    <div class="kanban-card-role">${escapeHtml(a.role)}</div>
+    <div class="kanban-card-meta">
+      <span class="status-badge status-${statusClass(a.status)}">${escapeHtml(a.status)}</span>
+      <div style="display:flex;align-items:center;gap:6px">
+        <span class="kanban-card-days ${daysCls}">${days === 0 ? "Today" : days + "d"}</span>
+        ${a.url ? `<a class="kanban-card-url" href="${escapeHtml(a.url)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">↗</a>` : ""}
+      </div>
+    </div>
+  </div>`;
+}
+
+// ── Table view ────────────────────────────────────────────────────────────────
+function renderAppTable() {
+  const apps  = filteredApps();
+  const tbody = document.getElementById("appTableBody");
+  if (!tbody) return;
+  if (!allApplicationsList.length) {
+    tbody.innerHTML = `<tr><td colspan="7"><div class="empty-state">
+      <div class="empty-state-icon">📋</div>
+      <div class="empty-state-title">No applications yet</div>
+      <div class="empty-state-sub">Click "+ Add Application" to start tracking.</div>
+    </div></td></tr>`;
+    return;
+  }
+  if (!apps.length) {
+    tbody.innerHTML = `<tr><td colspan="7" style="padding:32px;text-align:center;color:var(--text-muted)">No applications match these filters.</td></tr>`;
+    return;
+  }
+  tbody.innerHTML = apps.map(a => {
+    const days    = daysInStatus(a);
+    const isStale = days > 14 && ["Applied","Assessment"].includes(a.status);
+    const isGhost = days > 21 && ["Applied","Phone Screen","Interview"].includes(a.status);
+    const daysStyle = isGhost ? "color:#e05c5c" : isStale ? "color:#ffaa44" : "color:var(--text-muted)";
+    const opts = ALL_STATUSES_FE.map(s =>
+      `<option value="${s}" ${s === a.status ? "selected" : ""}>${s}</option>`).join("");
+    return `<tr>
+      <td><strong>${escapeHtml(a.company)}</strong>${a.url ? ` <a href="${escapeHtml(a.url)}" target="_blank" rel="noopener" class="table-link">↗</a>` : ""}</td>
+      <td style="cursor:pointer;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
+          onclick="openAppDetail('${a.id}')" title="Open details">${escapeHtml(a.role)}</td>
+      <td><select class="inline-status-select status-badge status-${statusClass(a.status)}"
+            onchange="quickStatusUpdate('${a.id}',this.value,this)">${opts}</select></td>
+      <td style="color:var(--text-muted);font-size:0.82rem">${escapeHtml(a.source || "—")}</td>
+      <td style="color:var(--text-muted);font-size:0.82rem;white-space:nowrap">${a.appliedAt ? new Date(a.appliedAt).toLocaleDateString() : "—"}</td>
+      <td style="font-size:0.82rem;white-space:nowrap;${daysStyle}">${days}d</td>
+      <td class="table-actions">
+        <button class="action-btn" onclick="openAppDetail('${a.id}')">Details</button>
+        <button class="action-btn danger" onclick="deleteApplication('${a.id}')">Delete</button>
+      </td>
+    </tr>`;
+  }).join("");
+}
+
+// ── Quick status update (table inline select) ─────────────────────────────────
+async function quickStatusUpdate(appId, newStatus, selectEl) {
+  try {
+    await fetch(`${BACKEND_URL}/applications/${encodeURIComponent(userId)}/${appId}/status`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status: newStatus }),
+    });
+    const app = allApplicationsList.find(a => a.id === appId);
+    if (app) { app.status = newStatus; app.statusChangedAt = new Date().toISOString(); }
+    selectEl.className = `inline-status-select status-badge status-${statusClass(newStatus)}`;
+    renderPipelineBar();
+    renderDashboardPipeline();
+  } catch {
+    showToast("Error", "Could not update status. Please try again.");
+  }
+}
+
+// ── Detail side panel ─────────────────────────────────────────────────────────
+async function openAppDetail(appId) {
+  currentDetailAppId = appId;
+  const app = allApplicationsList.find(a => a.id === appId);
+  if (!app) return;
+
+  document.getElementById("detailCompany").textContent = app.company;
+  document.getElementById("detailRole").textContent    = app.role;
+
+  const sel = document.getElementById("detailStatusSelect");
+  sel.innerHTML = ALL_STATUSES_FE.map(s =>
+    `<option value="${s}" ${s === app.status ? "selected" : ""}>${s}</option>`).join("");
+  sel.className = `detail-status-select status-badge status-${statusClass(app.status)}`;
+
+  const srcEl = document.getElementById("detailSource");
+  srcEl.textContent = app.source || "manual";
+
+  const d = daysInStatus(app);
+  document.getElementById("detailDays").textContent = d === 0 ? "Today" : `${d}d in status`;
+
+  const urlEl = document.getElementById("detailUrl");
+  if (app.url) { urlEl.href = app.url; urlEl.style.display = ""; }
+  else { urlEl.style.display = "none"; }
+
+  document.getElementById("detailOverlay").classList.add("open");
+  document.getElementById("detailPanel").classList.add("open");
+  document.body.style.overflow = "hidden";
+
+  switchDetailTab("notes");
+}
+
+function closeAppDetail() {
+  document.getElementById("detailOverlay").classList.remove("open");
+  document.getElementById("detailPanel").classList.remove("open");
+  document.body.style.overflow = "";
+  currentDetailAppId = null;
+}
+
+function switchDetailTab(tab) {
+  currentDetailTab = tab;
+  const tabs = ["notes","timeline","interviews"];
+  document.querySelectorAll(".detail-tab").forEach((btn, i) =>
+    btn.classList.toggle("active", tabs[i] === tab));
+  document.querySelectorAll(".detail-tab-content").forEach(el => el.classList.remove("active"));
+  if (tab === "notes")      { document.getElementById("detailTabNotes").classList.add("active");      loadNotes(currentDetailAppId); }
+  if (tab === "timeline")   { document.getElementById("detailTabTimeline").classList.add("active");   loadTimeline(currentDetailAppId); }
+  if (tab === "interviews") { document.getElementById("detailTabInterviews").classList.add("active"); loadInterviews(currentDetailAppId); }
+}
+
+async function detailStatusChange() {
+  if (!currentDetailAppId) return;
+  const sel = document.getElementById("detailStatusSelect");
+  const newStatus = sel.value;
+  sel.className = `detail-status-select status-badge status-${statusClass(newStatus)}`;
+  try {
+    await fetch(`${BACKEND_URL}/applications/${encodeURIComponent(userId)}/${currentDetailAppId}/status`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status: newStatus }),
+    });
+    const app = allApplicationsList.find(a => a.id === currentDetailAppId);
+    if (app) { app.status = newStatus; app.statusChangedAt = new Date().toISOString(); }
+    renderPipelineBar();
+    renderCurrentView();
+    renderDashboardPipeline();
+    if (currentDetailTab === "timeline") loadTimeline(currentDetailAppId);
+  } catch {
+    showToast("Error", "Could not update status.");
+  }
+}
+
+// ── Notes ─────────────────────────────────────────────────────────────────────
+async function loadNotes(appId) {
+  const el = document.getElementById("notesList");
+  if (!el || !appId) return;
+  el.innerHTML = '<div style="font-size:0.8rem;color:var(--text-muted);padding:4px 0">Loading…</div>';
+  try {
+    const res  = await fetch(`${BACKEND_URL}/applications/${encodeURIComponent(userId)}/${appId}/notes`);
+    const data = await res.json();
+    if (!data.notes?.length) {
+      el.innerHTML = '<div style="font-size:0.82rem;color:var(--text-muted);padding:4px 0">No notes yet.</div>';
+      return;
+    }
+    el.innerHTML = data.notes.map(n => `<div class="note-item">
+      ${escapeHtml(n.content)}
+      <div class="note-item-meta">
+        <span class="note-item-date">${n.createdAt?.seconds ? new Date(n.createdAt.seconds*1000).toLocaleString() : ""}</span>
+        <button class="note-item-del" onclick="deleteNote('${appId}','${n.id}')">✕ Delete</button>
+      </div>
+    </div>`).join("");
+  } catch {
+    el.innerHTML = '<div style="font-size:0.82rem;color:var(--danger)">Failed to load notes.</div>';
+  }
+}
+
+async function submitNote() {
+  const input   = document.getElementById("noteInput");
+  const content = input?.value.trim();
+  if (!content || !currentDetailAppId) return;
+  const btn = document.querySelector("#detailTabNotes .btn");
+  if (btn) { btn.disabled = true; btn.textContent = "Saving…"; }
+  try {
+    await fetch(`${BACKEND_URL}/applications/${encodeURIComponent(userId)}/${currentDetailAppId}/notes`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ content }),
+    });
+    input.value = "";
+    loadNotes(currentDetailAppId);
+  } catch {
+    showToast("Error", "Could not save note.");
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = "Save"; }
+  }
+}
+
+async function deleteNote(appId, noteId) {
+  try {
+    await fetch(`${BACKEND_URL}/applications/${encodeURIComponent(userId)}/${appId}/notes/${noteId}`, { method: "DELETE" });
+    loadNotes(appId);
+  } catch {
+    showToast("Error", "Could not delete note.");
+  }
+}
+
+// ── Timeline ──────────────────────────────────────────────────────────────────
+async function loadTimeline(appId) {
+  const el = document.getElementById("timelineList");
+  if (!el || !appId) return;
+  el.innerHTML = '<div style="font-size:0.8rem;color:var(--text-muted);padding:4px 0">Loading…</div>';
+  try {
+    const res  = await fetch(`${BACKEND_URL}/applications/${encodeURIComponent(userId)}/${appId}`);
+    const data = await res.json();
+    const events = data.timeline || [];
+    if (!events.length) {
+      el.innerHTML = '<div style="font-size:0.82rem;color:var(--text-muted);padding:4px 0">No events yet.</div>';
+      return;
+    }
+    el.innerHTML = events.map(timelineItem).join("");
+  } catch {
+    el.innerHTML = '<div style="font-size:0.82rem;color:var(--danger)">Failed to load timeline.</div>';
+  }
+}
+
+function timelineItem(e) {
+  const dotClass = { status_change:"status", note_added:"note", created:"created", interview_scheduled:"interview" }[e.type] || "status";
+  const icons    = { status_change:"↕", note_added:"📝", created:"✓", interview_scheduled:"📅" };
+  let title = "";
+  if (e.type === "status_change")       title = e.previousStatus ? `${e.previousStatus} → ${e.newStatus}` : `Status: ${e.newStatus}`;
+  else if (e.type === "note_added")     title = "Note added";
+  else if (e.type === "created")        title = `Application created (${e.newStatus})`;
+  else if (e.type === "interview_scheduled") title = "Interview scheduled";
+  else title = e.type.replace(/_/g," ");
+  const date = e.createdAt?.seconds
+    ? new Date(e.createdAt.seconds*1000).toLocaleString()
+    : (e.createdAt ? new Date(e.createdAt).toLocaleString() : "");
+  return `<div class="timeline-item">
+    <div class="timeline-dot ${dotClass}">${icons[e.type] || "•"}</div>
+    <div class="timeline-body">
+      <div class="timeline-title">${escapeHtml(title)}</div>
+      ${e.note ? `<div class="timeline-sub">${escapeHtml(e.note)}</div>` : ""}
+      <div class="timeline-date">${escapeHtml(date)}</div>
+    </div>
+  </div>`;
+}
+
+// ── Interviews ────────────────────────────────────────────────────────────────
+async function loadInterviews(appId) {
+  const el = document.getElementById("interviewsList");
+  if (!el || !appId) return;
+  el.innerHTML = '<div style="font-size:0.8rem;color:var(--text-muted);padding:4px 0">Loading…</div>';
+  try {
+    const res  = await fetch(`${BACKEND_URL}/interviews/${encodeURIComponent(userId)}`);
+    const data = await res.json();
+    const list = (data.interviews || []).filter(i => i.applicationId === appId);
+    if (!list.length) {
+      el.innerHTML = '<div style="font-size:0.82rem;color:var(--text-muted);margin-bottom:8px">No interviews scheduled.</div>';
+      return;
+    }
+    el.innerHTML = list.map(i => {
+      const d = i.scheduledAt ? new Date(i.scheduledAt) : null;
+      return `<div class="interview-card">
+        <div class="interview-card-header">
+          <span class="interview-card-title">${escapeHtml(i.type||"General")} · ${escapeHtml(i.format||"Video")}</span>
+          <button class="interview-card-del" onclick="deleteInterview('${i.id}','${appId}')">✕</button>
+        </div>
+        <div class="interview-card-meta">${d ? d.toLocaleString() : "—"} · ${i.duration||60} min</div>
+        ${i.notes ? `<div style="font-size:0.8rem;margin-top:6px;color:var(--text-muted)">${escapeHtml(i.notes)}</div>` : ""}
+      </div>`;
+    }).join("");
+  } catch {
+    el.innerHTML = '<div style="font-size:0.82rem;color:var(--danger)">Failed to load interviews.</div>';
+  }
+}
+
+async function saveInterview() {
+  if (!currentDetailAppId) return;
+  const dt = document.getElementById("intDatetime")?.value;
+  if (!dt) { showToast("Missing info", "Please pick a date and time."); return; }
+  const app = allApplicationsList.find(a => a.id === currentDetailAppId);
+  const btn = document.querySelector("#detailTabInterviews .btn-gold");
+  if (btn) { btn.disabled = true; btn.textContent = "Saving…"; }
+  try {
+    await fetch(`${BACKEND_URL}/interviews/save`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        userId, applicationId: currentDetailAppId,
+        company: app?.company || "", role: app?.role || "",
+        type:     document.getElementById("intType")?.value    || "general",
+        format:   document.getElementById("intFormat")?.value  || "video",
+        scheduledAt: new Date(dt).toISOString(),
+        duration: parseInt(document.getElementById("intDuration")?.value) || 60,
+      }),
+    });
+    document.getElementById("intDatetime").value = "";
+    loadInterviews(currentDetailAppId);
+    if (currentDetailTab === "timeline") loadTimeline(currentDetailAppId);
+    showToast("Interview added", `${document.getElementById("intType")?.value||"General"} interview scheduled.`);
+  } catch {
+    showToast("Error", "Could not save interview.");
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = "Add Interview"; }
+  }
+}
+
+async function deleteInterview(id, appId) {
+  if (!confirm("Delete this interview?")) return;
+  try {
+    await fetch(`${BACKEND_URL}/interviews/${encodeURIComponent(userId)}/${id}`, { method: "DELETE" });
+    loadInterviews(appId);
+  } catch {
+    showToast("Error", "Could not delete interview.");
+  }
+}
+
+// ── Quick-add modal ───────────────────────────────────────────────────────────
+function showQuickAdd() {
+  ["qaCompany","qaRole","qaUrl"].forEach(id => document.getElementById(id).value = "");
+  document.getElementById("qaStatus").value   = "Applied";
+  document.getElementById("qaSource").value   = "manual";
+  document.getElementById("qaPriority").value = "normal";
+  document.getElementById("qaDate").value     = new Date().toISOString().split("T")[0];
+  document.getElementById("qaDupeWarning").style.display = "none";
+  document.getElementById("qaSubmitBtn").textContent = "Save Application";
+  document.getElementById("qaSubmitBtn").onclick = submitQuickAdd;
+  document.getElementById("quickAddModal").classList.add("open");
+  setTimeout(() => document.getElementById("qaCompany").focus(), 80);
+}
+
+function hideQuickAdd() {
+  document.getElementById("quickAddModal").classList.remove("open");
+}
+
+async function submitQuickAdd() {
+  const company = document.getElementById("qaCompany").value.trim();
+  const role    = document.getElementById("qaRole").value.trim();
+  if (!company || !role) { showToast("Required fields", "Company and role are required."); return; }
+  const btn = document.getElementById("qaSubmitBtn");
   btn.disabled = true; btn.textContent = "Saving…";
-  await fetch(`${BACKEND_URL}/applications/save`, {
-    method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      userId,
-      id:        document.getElementById("appEditId").value || undefined,
-      company, role,
-      status:    document.getElementById("appStatus").value,
-      url:       document.getElementById("appUrl").value,
-      notes:     document.getElementById("appNotes").value,
-      appliedAt: document.getElementById("appDate").value,
-    }),
-  });
-  btn.disabled = false; btn.textContent = "Save";
-  hideAppForm();
-  loadApplications();
+  try {
+    const res  = await fetch(`${BACKEND_URL}/applications/save`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        userId, company, role,
+        status:    document.getElementById("qaStatus").value,
+        source:    document.getElementById("qaSource").value,
+        url:       document.getElementById("qaUrl").value,
+        appliedAt: document.getElementById("qaDate").value,
+        priority:  document.getElementById("qaPriority").value,
+      }),
+    });
+    const data = await res.json();
+    if (data.duplicateWarning) {
+      document.getElementById("qaDupeWarning").style.display = "block";
+      btn.disabled = false; btn.textContent = "Save Anyway";
+      btn.onclick = async () => { hideQuickAdd(); showToast("Already exists", `An application to ${escapeHtml(company)} already exists.`); btn.onclick = submitQuickAdd; };
+      return;
+    }
+    hideQuickAdd();
+    await loadApplications();
+    showToast("Application added", `${company} — ${role}`);
+  } catch {
+    showToast("Error", "Could not save application. Please try again.");
+  } finally {
+    btn.disabled = false;
+    if (btn.textContent === "Saving…") btn.textContent = "Save Application";
+  }
 }
+
+// ── Delete application ────────────────────────────────────────────────────────
 async function deleteApplication(id) {
-  if (!confirm("Delete this application?")) return;
-  await fetch(`${BACKEND_URL}/applications/${encodeURIComponent(userId)}/${id}`, { method: "DELETE" });
-  loadApplications();
+  if (!confirm("Delete this application and all its notes and history?")) return;
+  try {
+    await fetch(`${BACKEND_URL}/applications/${encodeURIComponent(userId)}/${id}`, { method: "DELETE" });
+    allApplicationsList = allApplicationsList.filter(a => a.id !== id);
+    if (currentDetailAppId === id) closeAppDetail();
+    renderPipelineBar();
+    renderCurrentView();
+    renderDashboardPipeline();
+  } catch {
+    showToast("Error", "Could not delete application.");
+  }
 }
 
 // ── Search Now ────────────────────────────────────────────────────────────────

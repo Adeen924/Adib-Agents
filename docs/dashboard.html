@@ -32,7 +32,10 @@
         <span class="nav-icon">📬</span> Daily Openings
       </button>
 
-      <div class="nav-label" style="margin-top:10px">Saved</div>
+      <div class="nav-label" style="margin-top:10px">Job Search</div>
+      <button class="nav-item" id="nav-applications">
+        <span class="nav-icon">📋</span> Applications
+      </button>
       <button class="nav-item" id="nav-jobs">
         <span class="nav-icon">💼</span> Jobs Found
       </button>
@@ -113,55 +116,208 @@
 
       <div class="section-header" style="margin-top:8px">
         <h3>Active Applications</h3>
-        <button class="btn btn-gold" id="addAppBtn" style="padding:7px 16px;font-size:0.8rem">+ Add Application</button>
+        <button class="btn btn-ghost" onclick="showPanel('applications')" style="padding:6px 14px;font-size:0.8rem">View All →</button>
+      </div>
+      <div id="dashboardPipeline"><div class="panel-loading" style="padding:16px">Loading…</div></div>
+
+    </div>
+  </div>
+
+  <!-- ── Applications view ── -->
+  <div class="main-content panel-view" id="applicationsView" style="display:none">
+    <header class="main-header">
+      <div><h2>Applications</h2><p>Track every application in your pipeline</p></div>
+      <button class="btn btn-gold" id="quickAddBtn" style="padding:8px 18px;font-size:0.85rem">+ Add Application</button>
+    </header>
+    <div class="panel-body" style="max-width:100%;overflow-y:auto;padding-bottom:32px">
+
+      <!-- Pipeline summary pills -->
+      <div class="pipeline-bar" id="pipelineBar"></div>
+
+      <!-- Toolbar: view toggle + filters + search -->
+      <div class="tracker-toolbar">
+        <div class="view-toggle">
+          <button class="view-toggle-btn active" id="viewKanbanBtn" onclick="switchAppView('kanban')">⊞ Kanban</button>
+          <button class="view-toggle-btn" id="viewTableBtn" onclick="switchAppView('table')">≡ Table</button>
+        </div>
+        <div class="tracker-filters">
+          <select class="filter-select" id="filterStatus" onchange="renderCurrentView()">
+            <option value="">All Statuses</option>
+            <option>Saved</option><option>Preparing</option><option>Applied</option>
+            <option>Assessment</option><option>Phone Screen</option><option>Interview</option>
+            <option>Final Interview</option><option>Offer</option><option>Rejected</option>
+            <option>Ghosted</option><option>Withdrawn</option><option>Accepted</option>
+          </select>
+          <select class="filter-select" id="filterSource" onchange="renderCurrentView()">
+            <option value="">All Sources</option>
+            <option value="LinkedIn">LinkedIn</option>
+            <option value="company_website">Company Site</option>
+            <option value="referral">Referral</option>
+            <option value="Handshake">Handshake</option>
+            <option value="Indeed">Indeed</option>
+            <option value="manual">Manual</option>
+          </select>
+          <div class="search-bar-wrap" style="flex:1;min-width:160px">
+            <span class="search-icon">🔍</span>
+            <input type="text" id="appSearch" placeholder="Search…" oninput="renderCurrentView()" autocomplete="off" />
+          </div>
+        </div>
       </div>
 
-      <div class="app-form card" id="appForm" style="display:none">
-        <div class="app-form-grid">
-          <div class="input-group">
-            <label>Company</label>
-            <input type="text" id="appCompany" placeholder="e.g. Google" />
+      <!-- Kanban board -->
+      <div id="kanbanBoard" style="overflow-x:auto">
+        <div class="kanban-board" id="kanbanCols"></div>
+      </div>
+
+      <!-- Table view (hidden by default) -->
+      <div id="tableBoard" style="display:none;overflow-x:auto">
+        <table class="app-table" id="appTableEl">
+          <thead><tr>
+            <th>Company</th><th>Role</th><th>Status</th><th>Source</th>
+            <th>Applied</th><th>Days</th><th>Actions</th>
+          </tr></thead>
+          <tbody id="appTableBody"></tbody>
+        </table>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ── Application detail side panel (overlay) ── -->
+  <div class="detail-overlay" id="detailOverlay" onclick="closeAppDetail()"></div>
+  <div class="detail-panel" id="detailPanel">
+    <div class="detail-header">
+      <div class="detail-header-top">
+        <div>
+          <div class="detail-company" id="detailCompany">Company</div>
+          <div class="detail-role" id="detailRole">Role</div>
+        </div>
+        <button class="detail-close" onclick="closeAppDetail()">✕ Close</button>
+      </div>
+      <div class="detail-status-row">
+        <select class="detail-status-select" id="detailStatusSelect" onchange="detailStatusChange()"></select>
+        <span class="detail-meta-chip" id="detailSource"></span>
+        <span class="detail-meta-chip" id="detailDays"></span>
+        <a class="detail-meta-chip" id="detailUrl" href="#" target="_blank" rel="noopener" style="color:var(--gold);text-decoration:none;display:none">View Posting ↗</a>
+      </div>
+    </div>
+    <div class="detail-tabs" id="detailTabs">
+      <button class="detail-tab active" onclick="switchDetailTab('notes')">Notes</button>
+      <button class="detail-tab" onclick="switchDetailTab('timeline')">Timeline</button>
+      <button class="detail-tab" onclick="switchDetailTab('interviews')">Interviews</button>
+    </div>
+    <div class="detail-body">
+      <!-- Notes tab -->
+      <div class="detail-tab-content active" id="detailTabNotes">
+        <div class="notes-list" id="notesList"></div>
+        <div class="note-input-row">
+          <textarea id="noteInput" placeholder="Add a note — recruiter details, next steps, impressions…" rows="3"></textarea>
+          <button class="btn btn-gold" onclick="submitNote()" style="padding:8px 14px;font-size:0.82rem">Save</button>
+        </div>
+      </div>
+      <!-- Timeline tab -->
+      <div class="detail-tab-content" id="detailTabTimeline">
+        <div class="timeline-list" id="timelineList"></div>
+      </div>
+      <!-- Interviews tab -->
+      <div class="detail-tab-content" id="detailTabInterviews">
+        <div id="interviewsList" style="margin-bottom:14px"></div>
+        <div class="card" style="padding:16px">
+          <div style="font-size:0.82rem;font-weight:700;margin-bottom:12px;text-transform:uppercase;letter-spacing:0.05em;color:var(--text-muted)">Schedule Interview</div>
+          <div class="app-form-grid" style="margin-bottom:12px">
+            <div class="input-group">
+              <label>Type</label>
+              <select class="filter-select" id="intType" style="width:100%">
+                <option value="general">General</option>
+                <option value="technical">Technical</option>
+                <option value="behavioral">Behavioral</option>
+                <option value="system_design">System Design</option>
+                <option value="hiring_manager">Hiring Manager</option>
+                <option value="final">Final Round</option>
+              </select>
+            </div>
+            <div class="input-group">
+              <label>Format</label>
+              <select class="filter-select" id="intFormat" style="width:100%">
+                <option value="video">Video</option>
+                <option value="phone">Phone</option>
+                <option value="onsite">On-site</option>
+                <option value="async">Async / Take-home</option>
+              </select>
+            </div>
+            <div class="input-group">
+              <label>Date &amp; Time</label>
+              <input type="datetime-local" id="intDatetime" />
+            </div>
+            <div class="input-group">
+              <label>Duration (min)</label>
+              <input type="number" id="intDuration" value="60" min="15" step="15" />
+            </div>
           </div>
-          <div class="input-group">
-            <label>Role</label>
-            <input type="text" id="appRole" placeholder="e.g. Senior Engineer" />
-          </div>
+          <button class="btn btn-gold" onclick="saveInterview()" style="padding:7px 16px;font-size:0.82rem">Add Interview</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Quick-add modal ── -->
+  <div class="modal-backdrop" id="quickAddModal">
+    <div class="modal-box">
+      <div class="modal-title">Add Application</div>
+      <div style="display:flex;flex-direction:column;gap:12px">
+        <div class="input-group">
+          <label>Company *</label>
+          <input type="text" id="qaCompany" placeholder="e.g. Google" autocomplete="off" />
+        </div>
+        <div class="input-group">
+          <label>Role *</label>
+          <input type="text" id="qaRole" placeholder="e.g. Senior Engineer" autocomplete="off" />
+        </div>
+        <div class="app-form-grid" style="margin:0">
           <div class="input-group">
             <label>Status</label>
-            <select id="appStatus">
-              <option>Applied</option>
-              <option>Screening</option>
-              <option>Interview</option>
-              <option>Final Round</option>
-              <option>Offer</option>
-              <option>Rejected</option>
-              <option>Withdrawn</option>
+            <select class="filter-select" id="qaStatus" style="width:100%">
+              <option>Saved</option><option>Preparing</option><option selected>Applied</option>
+              <option>Assessment</option><option>Phone Screen</option><option>Interview</option>
+              <option>Final Interview</option><option>Offer</option>
+            </select>
+          </div>
+          <div class="input-group">
+            <label>Source</label>
+            <select class="filter-select" id="qaSource" style="width:100%">
+              <option value="manual">Manual</option>
+              <option value="LinkedIn">LinkedIn</option>
+              <option value="company_website">Company Site</option>
+              <option value="referral">Referral</option>
+              <option value="Handshake">Handshake</option>
+              <option value="Indeed">Indeed</option>
             </select>
           </div>
           <div class="input-group">
             <label>Applied Date</label>
-            <input type="date" id="appDate" />
+            <input type="date" id="qaDate" />
           </div>
-          <div class="input-group" style="grid-column:1/-1">
-            <label>Job URL</label>
-            <input type="url" id="appUrl" placeholder="https://..." />
-          </div>
-          <div class="input-group" style="grid-column:1/-1">
-            <label>Notes</label>
-            <input type="text" id="appNotes" placeholder="Recruiter name, next steps, etc." />
+          <div class="input-group">
+            <label>Priority</label>
+            <select class="filter-select" id="qaPriority" style="width:100%">
+              <option value="normal">Normal</option>
+              <option value="high">High</option>
+              <option value="low">Low</option>
+            </select>
           </div>
         </div>
-        <div style="display:flex;gap:8px">
-          <button class="btn btn-gold" id="saveAppBtn">Save</button>
-          <button class="btn btn-ghost" id="cancelAppBtn">Cancel</button>
+        <div class="input-group">
+          <label>Job URL</label>
+          <input type="url" id="qaUrl" placeholder="https://…" autocomplete="off" />
         </div>
-        <input type="hidden" id="appEditId" />
+        <div id="qaDupeWarning" style="display:none;font-size:0.82rem;color:#ffaa44;padding:8px 12px;background:rgba(255,170,68,0.1);border-radius:8px;border:1px solid rgba(255,170,68,0.3)">
+          ⚠️ A similar application already exists. Saving anyway will create a duplicate.
+        </div>
       </div>
-
-      <div id="applicationsTable">
-        <div class="panel-loading">Loading applications…</div>
+      <div class="modal-footer">
+        <button class="btn btn-gold" id="qaSubmitBtn" onclick="submitQuickAdd()">Save Application</button>
+        <button class="btn btn-ghost" onclick="hideQuickAdd()">Cancel</button>
       </div>
-
     </div>
   </div>
 

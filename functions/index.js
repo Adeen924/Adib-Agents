@@ -96,6 +96,10 @@ const OUTPUT_COST = OUTPUT_COST_SONNET;
 const MODEL_SONNET = "claude-sonnet-4-6";
 const MODEL_HAIKU  = "claude-haiku-4-5-20251001";
 
+// ── Application status system ─────────────────────────────────────────────────
+const ALL_STATUSES = ['Saved','Preparing','Applied','Assessment','Phone Screen','Interview','Final Interview','Offer','Rejected','Ghosted','Withdrawn','Accepted'];
+const STATUS_ORDER = { Saved:0, Preparing:1, Applied:2, Assessment:3, 'Phone Screen':4, Interview:5, 'Final Interview':6, Offer:7, Rejected:8, Ghosted:9, Withdrawn:10, Accepted:11 };
+
 // â"€â"€ Subscription tiers â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 // Enforce these limits in runJobSearch and the scheduler.
 // When Stripe is wired up, the webhook sets tier in the `users` collection.
@@ -584,6 +588,7 @@ app.delete("/documents/:userId/:docId", async (req, res) => {
 });
 
 // â"€â"€ Applications â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+// GET all applications for a user
 app.get("/applications/:userId", async (req, res) => {
   try {
     const snap = await db.collection("users").doc(req.params.userId).collection("applications").get();
@@ -594,42 +599,285 @@ app.get("/applications/:userId", async (req, res) => {
   }
 });
 
+// GET single application with its timeline
+app.get("/applications/:userId/:appId", async (req, res) => {
+  try {
+    const appRef = db.collection("users").doc(req.params.userId)
+      .collection("applications").doc(req.params.appId);
+    const [appDoc, timelineSnap] = await Promise.all([
+      appRef.get(),
+      appRef.collection("timeline").get(),
+    ]);
+    if (!appDoc.exists) return res.status(404).json({ error: "Not found" });
+    const timeline = sortByDate(timelineSnap.docs).map(d => ({ id: d.id, ...d.data() }));
+    res.json({ application: { id: appDoc.id, ...appDoc.data() }, timeline });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to load application" });
+  }
+});
+
+// POST create or update an application (full schema)
 app.post("/applications/save", async (req, res) => {
-  const { userId, id, company, role, status, url, notes, appliedAt } = req.body;
+  const {
+    userId, id, company, role, status, url, notes, appliedAt,
+    source, priority, tags, recruiterName, recruiterEmail,
+    salaryExpectation, industry, remote, companySize,
+  } = req.body;
   if (!userId || !company || !role)
     return res.status(400).json({ error: "userId, company, and role are required" });
+
+  const newStatus = ALL_STATUSES.includes(status) ? status : "Applied";
+
   try {
+    const now = admin.firestore.FieldValue.serverTimestamp();
+    const appliedDate = appliedAt || new Date().toISOString();
+
+    // Duplicate detection for new applications only
+    if (!id) {
+      const dupeSnap = await db.collection("users").doc(userId)
+        .collection("applications")
+        .where("company", "==", company)
+        .where("role", "==", role)
+        .limit(1)
+        .get();
+      if (!dupeSnap.empty) {
+        const existing = dupeSnap.docs[0];
+        return res.json({ ok: true, id: existing.id, duplicateWarning: true, existingStatus: existing.data().status });
+      }
+    }
+
     const data = {
       userId, company, role,
-      status:    status    || "Applied",
-      url:       url       || "",
-      notes:     notes     || "",
-      appliedAt: appliedAt || new Date().toISOString(),
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      status:    newStatus,
+      statusOrder: STATUS_ORDER[newStatus] ?? 2,
+      url:       url            || "",
+      notes:     notes          || "",
+      appliedAt: appliedDate,
+      source:    source         || "manual",
+      priority:  priority       || "normal",
+      tags:      Array.isArray(tags) ? tags : [],
+      recruiterName:  recruiterName  || "",
+      recruiterEmail: recruiterEmail || "",
+      salaryExpectation: salaryExpectation || null,
+      industry:    industry    || "",
+      remote:      remote      || "",
+      companySize: companySize || "",
+      isGhosted: newStatus === "Ghosted",
+      followUpCount: 0,
+      daysInCurrentStatus: 0,
+      statusChangedAt: appliedDate,
+      updatedAt: now,
     };
+
+    let appId;
     if (id) {
-      await db.collection("users").doc(userId).collection("applications").doc(id).set(data, { merge: true });
-      res.json({ ok: true, id });
+      const existing = await db.collection("users").doc(userId)
+        .collection("applications").doc(id).get();
+      const prevStatus = existing.exists ? existing.data().status : null;
+      const statusChanged = prevStatus && prevStatus !== newStatus;
+
+      await db.collection("users").doc(userId).collection("applications")
+        .doc(id).set(data, { merge: true });
+      appId = id;
+
+      if (statusChanged) {
+        await db.collection("users").doc(userId).collection("applications")
+          .doc(id).collection("timeline").add({
+            type: "status_change", actor: "user",
+            previousStatus: prevStatus, newStatus,
+            note: notes || "", createdAt: now,
+          });
+      }
     } else {
-      data.createdAt = admin.firestore.FieldValue.serverTimestamp();
-      const ref = await db.collection("users").doc(userId).collection("applications").add(data);
-      // Increment denormalised counter for new applications (non-blocking)
+      data.createdAt = now;
+      const ref = await db.collection("users").doc(userId)
+        .collection("applications").add(data);
+      appId = ref.id;
+
+      await ref.collection("timeline").add({
+        type: "created", actor: "user",
+        newStatus, note: "", createdAt: now,
+      });
+
       db.collection("users").doc(userId).update({
         "stats.applicationsSubmitted": admin.firestore.FieldValue.increment(1),
       }).catch(() => {});
-      res.json({ ok: true, id: ref.id });
     }
+
+    res.json({ ok: true, id: appId });
   } catch (err) {
+    console.error("Save application error:", err);
     res.status(500).json({ error: "Failed to save application" });
   }
 });
 
+// PATCH fast status update (used for inline/kanban status changes)
+app.patch("/applications/:userId/:appId/status", async (req, res) => {
+  const { userId, appId } = req.params;
+  const { status, note } = req.body;
+  if (!ALL_STATUSES.includes(status))
+    return res.status(400).json({ error: "Invalid status" });
+  try {
+    const appRef = db.collection("users").doc(userId)
+      .collection("applications").doc(appId);
+    const doc = await appRef.get();
+    if (!doc.exists) return res.status(404).json({ error: "Not found" });
+
+    const prev = doc.data().status;
+    const now  = admin.firestore.FieldValue.serverTimestamp();
+
+    await appRef.update({
+      status,
+      statusOrder: STATUS_ORDER[status] ?? 0,
+      statusChangedAt: new Date().toISOString(),
+      daysInCurrentStatus: 0,
+      isGhosted: status === "Ghosted",
+      updatedAt: now,
+    });
+
+    await appRef.collection("timeline").add({
+      type: "status_change", actor: "user",
+      previousStatus: prev, newStatus: status,
+      note: note || "", createdAt: now,
+    });
+
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to update status" });
+  }
+});
+
+// GET notes for an application
+app.get("/applications/:userId/:appId/notes", async (req, res) => {
+  try {
+    const snap = await db.collection("users").doc(req.params.userId)
+      .collection("applications").doc(req.params.appId)
+      .collection("notes").get();
+    const notes = sortByDate(snap.docs).map(d => ({ id: d.id, ...d.data() }));
+    res.json({ notes });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to load notes" });
+  }
+});
+
+// POST add note
+app.post("/applications/:userId/:appId/notes", async (req, res) => {
+  const { userId, appId } = req.params;
+  const { content, type } = req.body;
+  if (!content?.trim()) return res.status(400).json({ error: "Content required" });
+  try {
+    const now    = admin.firestore.FieldValue.serverTimestamp();
+    const appRef = db.collection("users").doc(userId).collection("applications").doc(appId);
+    const noteRef = await appRef.collection("notes").add({
+      content: content.trim(), type: type || "general",
+      isPinned: false, createdAt: now, updatedAt: now,
+    });
+    await appRef.collection("timeline").add({
+      type: "note_added", actor: "user",
+      noteId: noteRef.id, note: content.trim().slice(0, 120), createdAt: now,
+    });
+    await appRef.update({ updatedAt: now });
+    res.json({ ok: true, id: noteRef.id });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to add note" });
+  }
+});
+
+// DELETE note
+app.delete("/applications/:userId/:appId/notes/:noteId", async (req, res) => {
+  try {
+    await db.collection("users").doc(req.params.userId)
+      .collection("applications").doc(req.params.appId)
+      .collection("notes").doc(req.params.noteId).delete();
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to delete note" });
+  }
+});
+
+// DELETE application (cascades subcollections)
 app.delete("/applications/:userId/:appId", async (req, res) => {
   try {
-    await db.collection("users").doc(req.params.userId).collection("applications").doc(req.params.appId).delete();
+    const appRef = db.collection("users").doc(req.params.userId)
+      .collection("applications").doc(req.params.appId);
+    const [tlSnap, notesSnap] = await Promise.all([
+      appRef.collection("timeline").get(),
+      appRef.collection("notes").get(),
+    ]);
+    const batch = db.batch();
+    tlSnap.docs.forEach(d => batch.delete(d.ref));
+    notesSnap.docs.forEach(d => batch.delete(d.ref));
+    batch.delete(appRef);
+    await batch.commit();
     res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: "Failed to delete application" });
+  }
+});
+
+// ── Interviews ────────────────────────────────────────────────────────────────
+app.get("/interviews/:userId", async (req, res) => {
+  try {
+    const snap = await db.collection("users").doc(req.params.userId)
+      .collection("interviews").get();
+    const interviews = snap.docs
+      .map(d => ({ id: d.id, ...d.data() }))
+      .sort((a, b) => (a.scheduledAt || "").localeCompare(b.scheduledAt || ""));
+    res.json({ interviews });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to load interviews" });
+  }
+});
+
+app.post("/interviews/save", async (req, res) => {
+  const { userId, id, applicationId, company, role, type, format,
+          scheduledAt, duration, interviewers, notes } = req.body;
+  if (!userId || !applicationId || !scheduledAt)
+    return res.status(400).json({ error: "userId, applicationId, and scheduledAt are required" });
+  try {
+    const now  = admin.firestore.FieldValue.serverTimestamp();
+    const data = {
+      applicationId,
+      company:    company    || "",
+      role:       role       || "",
+      type:       type       || "general",
+      format:     format     || "video",
+      scheduledAt,
+      duration:   duration   || 60,
+      interviewers: Array.isArray(interviewers) ? interviewers : [],
+      notes:      notes      || "",
+      outcome:    null,
+      prepCompleted: false,
+      updatedAt:  now,
+    };
+    if (id) {
+      await db.collection("users").doc(userId).collection("interviews").doc(id).set(data, { merge: true });
+      res.json({ ok: true, id });
+    } else {
+      data.createdAt = now;
+      const ref = await db.collection("users").doc(userId).collection("interviews").add(data);
+      // Log timeline event on the linked application
+      await db.collection("users").doc(userId).collection("applications")
+        .doc(applicationId).collection("timeline").add({
+          type: "interview_scheduled", actor: "user",
+          interviewId: ref.id,
+          note: `${type || "General"} interview on ${new Date(scheduledAt).toLocaleDateString()}`,
+          createdAt: now,
+        }).catch(() => {});
+      res.json({ ok: true, id: ref.id });
+    }
+  } catch (err) {
+    res.status(500).json({ error: "Failed to save interview" });
+  }
+});
+
+app.delete("/interviews/:userId/:interviewId", async (req, res) => {
+  try {
+    await db.collection("users").doc(req.params.userId)
+      .collection("interviews").doc(req.params.interviewId).delete();
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to delete interview" });
   }
 });
 
