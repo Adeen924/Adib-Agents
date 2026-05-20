@@ -192,6 +192,18 @@ const OnboardingEngine = (() => {
 
     _state = await _loadState();
 
+    // Always stamp the email into the Firestore doc on every login so it's
+    // visible in the Firebase console even if the user never touches the wizard.
+    try {
+      const emailStamp = sessionStorage.getItem('fbEmail');
+      if (emailStamp && typeof firebase !== 'undefined' && firebase.firestore) {
+        firebase.firestore().collection(FS_COL).doc(_userId).set(
+          { email: emailStamp },
+          { merge: true }
+        );
+      }
+    } catch (e) { /* non-fatal */ }
+
     if (!_state.wizardStarted) {
       // Brand-new user — show welcome modal after short delay
       setTimeout(showWelcomeModal, 800);
