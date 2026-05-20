@@ -1454,18 +1454,16 @@ exports.dailyJobSearch = onSchedule(
   }
 );
 
-// â”€â”€ Daily watchlist check â€” 9am Pacific â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-
-// -- Account deletion trigger: wipe ALL user data when a Firebase Auth account is deleted --------
+// â”€â”€ Account deletion trigger: wipe ALL user data when a Firebase Auth account is deleted â”€â”€â”€â”€â”€â”€â”€â”€
 // Fires automatically whether the account is deleted from the Firebase console,
 // the app UI, or anywhere else.
 exports.onUserDeleted = functions.auth.user().onDelete(async (user) => {
   const email = user.email;
   const uid   = user.uid;
 
-  if (!email) return; // anonymous / phone-only accounts -- nothing keyed by email
+  if (!email) return; // anonymous / phone-only accounts â€” nothing keyed by email
 
-  console.log('[onUserDeleted] Starting full data wipe for ' + email + ' (' + uid + ')');
+  console.log(`[onUserDeleted] Starting full data wipe for ${email} (${uid})`);
 
   // Helper: batch-delete every document returned by a query, 400 at a time.
   async function deleteQuery(query) {
@@ -1488,31 +1486,34 @@ exports.onUserDeleted = functions.auth.user().onDelete(async (user) => {
 
   await Promise.all([
     // 1. Recursively delete the entire uid-keyed user subtree.
-    //    Covers /users/{uid}/onboarding/state now, and every subcollection
-    //    added in future migrations automatically -- no edits needed here.
-    admin.firestore().recursiveDelete(db.collection("users").doc(uid)),
+    //    This covers /users/{uid}/onboarding/state today, and will automatically
+    //    cover every subcollection added in future migrations (preferences, jobs, etc.)
+    //    without needing to update this function.
+    admin.firestore().recursiveDelete(db.collection(“users”).doc(uid)),
 
     // 2. Flat top-level collections still keyed by email (pre-migration).
-    //    Remove each entry below as that collection moves under /users/{uid}/.
-    db.collection("users")           .doc(email).delete(),
-    db.collection("knowledge")       .doc(email).delete(),
-    db.collection("preferences")     .doc(email).delete(),
-    db.collection("fcmTokens")       .doc(email).delete(),
-    db.collection("targetCompanies") .doc(email).delete(),
+    //    Remove each line here as the corresponding collection is migrated
+    //    into the /users/{uid}/... subtree.
+    db.collection(“users”)          .doc(email).delete(),
+    db.collection(“knowledge”)      .doc(email).delete(),
+    db.collection(“preferences”)    .doc(email).delete(),
+    db.collection(“fcmTokens”)      .doc(email).delete(),
+    db.collection(“targetCompanies”).doc(email).delete(),
 
-    // 3. Collections that store userId as a field -- query + batch-delete.
-    deleteQuery(db.collection("jobs")          .where("userId", "==", email)),
-    deleteQuery(db.collection("applications")  .where("userId", "==", email)),
-    deleteQuery(db.collection("documents")     .where("userId", "==", email)),
-    deleteQuery(db.collection("digests")       .where("userId", "==", email)),
-    deleteQuery(db.collection("activity")      .where("userId", "==", email)),
-    deleteQuery(db.collection("watchlistJobs") .where("userId", "==", email)),
-    deleteQuery(db.collection("featureUsage")  .where("userId", "==", email)),
+    // 3. Collections that store userId as a field â€” query + batch-delete.
+    deleteQuery(db.collection(“jobs”)         .where(“userId”, “==”, email)),
+    deleteQuery(db.collection(“applications”) .where(“userId”, “==”, email)),
+    deleteQuery(db.collection(“documents”)    .where(“userId”, “==”, email)),
+    deleteQuery(db.collection(“digests”)      .where(“userId”, “==”, email)),
+    deleteQuery(db.collection(“activity”)     .where(“userId”, “==”, email)),
+    deleteQuery(db.collection(“watchlistJobs”).where(“userId”, “==”, email)),
+    deleteQuery(db.collection(“featureUsage”) .where(“userId”, “==”, email)),
   ]);
 
-  console.log('[onUserDeleted] Wipe complete for ' + uid);
+  console.log(`[onUserDeleted] Wipe complete for ${uid}`);
 });
 
+// â”€â”€ Daily watchlist check â€” 9am Pacific â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 exports.dailyWatchlistCheck = onSchedule(
   { schedule: "0 9 * * *", timeZone: "America/Los_Angeles" },
   async () => {

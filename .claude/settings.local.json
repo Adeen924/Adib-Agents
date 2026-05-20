@@ -35,7 +35,17 @@
       "Bash(node --check index.js)",
       "Bash(python -c ' *)",
       "Bash(git checkout *)",
-      "Bash(python patch_backend.py)"
+      "Bash(python patch_backend.py)",
+      "Bash(node --check \"C:\\\\Users\\\\amazl\\\\Documents\\\\GitHub\\\\Adib-Agents\\\\functions\\\\index.js\")",
+      "Bash(git stash *)",
+      "Bash(node --check functions/index.js)",
+      "Bash(node --check /dev/stdin)",
+      "Bash(node --check C:\\\\Temp\\\\index_head.js)",
+      "Bash(git show *)",
+      "Bash(node --check \"%TEMP%\\\\index_head.js\")",
+      "Bash(node --check /tmp/index_head.js)",
+      "Bash(node --check /tmp/index_c2.js)",
+      "Bash(firebase functions:artifacts:setpolicy)"
     ]
   }
 }
