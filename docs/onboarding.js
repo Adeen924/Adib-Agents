@@ -7,8 +7,18 @@ const OnboardingEngine = (() => {
   'use strict';
 
   // ── Config ───────────────────────────────────────────────────────
-  const FS_COL  = 'onboarding';
+  // Onboarding state lives at /users/{uid}/onboarding/state so that
+  // admin.firestore().recursiveDelete(usersRef) wipes it automatically
+  // when an account is deleted, with no extra cleanup code needed.
   const LS_KEY  = 'cc_ob_v1';
+
+  // Returns the Firestore DocumentReference for this user's onboarding state.
+  // Centralised here so a future path change only touches one line.
+  function _stateRef() {
+    return firebase.firestore()
+      .collection('users').doc(_userId)
+      .collection('onboarding').doc('state');
+  }
 
   // ── State ────────────────────────────────────────────────────────
   let _userId  = null;
@@ -197,10 +207,7 @@ const OnboardingEngine = (() => {
     try {
       const emailStamp = sessionStorage.getItem('fbEmail');
       if (emailStamp && typeof firebase !== 'undefined' && firebase.firestore) {
-        firebase.firestore().collection(FS_COL).doc(_userId).set(
-          { email: emailStamp },
-          { merge: true }
-        );
+        _stateRef().set({ email: emailStamp }, { merge: true });
       }
     } catch (e) { /* non-fatal */ }
 
@@ -703,8 +710,7 @@ const OnboardingEngine = (() => {
     // Try Firestore first
     try {
       if (typeof firebase !== 'undefined' && firebase.firestore) {
-        const db  = firebase.firestore();
-        const doc = await db.collection(FS_COL).doc(_userId).get();
+        const doc = await _stateRef().get();
         if (doc.exists) return { ...defaultState(), ...doc.data() };
       }
     } catch (e) { /* fall through */ }
@@ -725,7 +731,7 @@ const OnboardingEngine = (() => {
     // Firestore (non-blocking)
     try {
       if (typeof firebase !== 'undefined' && firebase.firestore) {
-        firebase.firestore().collection(FS_COL).doc(_userId).set(data, { merge: true });
+        _stateRef().set(data, { merge: true });
       }
     } catch (e) { /* non-fatal */ }
 

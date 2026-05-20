@@ -1717,6 +1717,36 @@ async function loadAdminPanel() {
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function signOut() { sessionStorage.clear(); window.location.href = "index.html"; }
 
+async function deleteAccount() {
+  const confirmed = confirm(
+    "Delete your account?\n\n" +
+    "This will permanently erase ALL your data — resumes, jobs found, search history, " +
+    "preferences, and everything else.\n\n" +
+    "This cannot be undone."
+  );
+  if (!confirmed) return;
+
+  const user = firebase.auth().currentUser;
+  if (!user) { signOut(); return; }
+
+  try {
+    // Firebase deletes the Auth account; this triggers the onUserDeleted
+    // Cloud Function which wipes every Firestore collection automatically.
+    await user.delete();
+    sessionStorage.clear();
+    window.location.href = "index.html";
+  } catch (err) {
+    if (err.code === "auth/requires-recent-login") {
+      showToast(
+        "Sign in again first",
+        "For security, please sign out and sign back in before deleting your account."
+      );
+    } else {
+      showToast("Error", err.message || "Could not delete account. Please try again.");
+    }
+  }
+}
+
 function escapeHtml(str) {
   return String(str)
     .replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")
