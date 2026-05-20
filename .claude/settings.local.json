@@ -45,7 +45,8 @@
       "Bash(node --check \"%TEMP%\\\\index_head.js\")",
       "Bash(node --check /tmp/index_head.js)",
       "Bash(node --check /tmp/index_c2.js)",
-      "Bash(firebase functions:artifacts:setpolicy)"
+      "Bash(firebase functions:artifacts:setpolicy)",
+      "Bash(Get-ChildItem -Path \"C:\\\\Users\\\\amazl\\\\Documents\\\\GitHub\\\\Adib-Agents\\\\docs\" -Recurse -Include \"app.js\", \"dashboard.html\")"
     ]
   }
 }

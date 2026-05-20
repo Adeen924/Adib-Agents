@@ -911,6 +911,7 @@ select:focus { border-color: var(--gold); box-shadow: 0 0 0 3px var(--gold-glow)
   display: flex;
   flex-direction: column;
   gap: 12px;
+  overflow: hidden;
 }
 .job-card:hover {
   border-color: var(--gold);
@@ -935,6 +936,9 @@ select:focus { border-color: var(--gold); box-shadow: 0 0 0 3px var(--gold-glow)
   font-size: 0.74rem;
   color: var(--text-muted);
   white-space: nowrap;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .job-desc {

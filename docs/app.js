@@ -509,9 +509,17 @@ function renderJobDocSection(type, label, savedText, savedAt) {
 
 async function generateJobDoc(type) {
   if (!currentJob?.id) return;
+
+  // Disable all AI tool buttons while generating to prevent double-clicks
+  const toolBtns = document.querySelectorAll('.jd-section .btn');
+  toolBtns.forEach(b => { b.disabled = true; b._wasDisabled = b.disabled; });
+
   const section = document.getElementById(`jd-doc-${type}`);
   section.style.display = "";
   section.innerHTML = `<div class="panel-loading" style="padding:20px">Generating — this takes about 15 seconds…</div>`;
+  // Move the section to the top immediately so the loading state is visible
+  document.getElementById("jd-ai-sections")?.prepend(section);
+  section.scrollIntoView({ behavior: "smooth", block: "start" });
 
   const endpointMap = { "resume": "tailored-resume", "cover-letter": "cover-letter", "interview": "interview-prep" };
   const labelMap    = { "resume": "Tailored Resume", "cover-letter": "Cover Letter", "interview": "Interview Prep" };
@@ -557,9 +565,10 @@ async function generateJobDoc(type) {
         </div>
       </div>
       <pre class="jd-doc-text" id="jd-doc-text-${type}">${escapePre(data.text)}</pre>`;
-    document.getElementById("jd-ai-sections")?.prepend(section);
   } catch (err) {
     section.innerHTML = `<div style="padding:16px;color:var(--danger)">${escapeHtml(err.message)}</div>`;
+  } finally {
+    toolBtns.forEach(b => { b.disabled = false; });
   }
 }
 

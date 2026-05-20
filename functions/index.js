@@ -381,7 +381,7 @@ Return exactly ${jobCount} jobs as a raw JSON array â€” no markdown, no exp
 Field rules:
 - fitScore: integer 0-100 reflecting overall match quality across all 10 dimensions (not keyword count)
 - matchReasons: array of 3-5 short strings (1-2 sentences each) explaining WHY this job fits the candidate â€” reference specific dimensions and the candidate's actual background
-- url: CRITICAL â€” only include a URL found verbatim in your search results. Do NOT construct or guess URLs. Use "" if you cannot confirm the exact direct link.
+- url: CRITICAL â€” must be the URL of THIS SPECIFIC job posting, not the company homepage or a generic careers/jobs listing page (e.g. “company.com/careers” is WRONG â€” that is a careers page, not a posting). A valid posting URL has a unique identifier or slug in the path (e.g. “company.com/careers/senior-engineer-12345” or “lever.co/company/abc-uuid”). Copy it verbatim from your search results. Use “” if you cannot confirm a direct posting URL â€” an empty string is better than a careers page URL.
 - posted: exact date as "Month DD, YYYY" (e.g. "May 10, 2026") or relative like "2 days ago". Never just a year. Use "" if unknown.
 - description: full job details â€” role responsibilities, required skills, nice-to-haves, team context. Aim for 6-8 sentences minimum.
 
@@ -1392,7 +1392,7 @@ Return ONLY a raw JSON array â€” no markdown, no explanation:
 [{“title”:””,”location”:””,”url”:””,”salary”:””,”description”:””,”posted”:””}]
 
 Rules:
-- url: copy the DIRECT job posting URL verbatim from the page. Do NOT construct or guess URLs. If no direct link is visible, use the career page URL.
+- url: copy the DIRECT job posting URL verbatim from the page â€" it must link to THIS specific listing, not the company's generic careers page. Do NOT construct or guess URLs. If no direct posting link is visible, use "" (empty string).
 - description: 2-4 sentences describing the role and key requirements.
 - Return up to 25 jobs; if more exist, prioritise the most recently posted.
 - Return [] if the page is inaccessible or has no open positions.`;
