@@ -137,6 +137,8 @@ async function ensureUser(userId) {
   const doc = await ref.get();
   if (!doc.exists) {
     await ref.set({ tier: "free", role: "customer", email: userId, createdAt: admin.firestore.FieldValue.serverTimestamp() });
+  } else if (!doc.data().role) {
+    await ref.update({ role: "customer" });
   }
 }
 
