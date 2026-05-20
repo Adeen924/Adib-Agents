@@ -6,8 +6,8 @@ const BACKEND_URL =
 // ── Auth guard ────────────────────────────────────────────────────────────────
 const email = sessionStorage.getItem("fbEmail");
 const token = sessionStorage.getItem("fbToken");
+const userId = sessionStorage.getItem("fbUid") || email;
 if (!email || !token) window.location.href = "index.html";
-const userId = email;
 
 // ── Panel registry ────────────────────────────────────────────────────────────
 const PANELS = {

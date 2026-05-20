@@ -831,7 +831,7 @@ const OnboardingEngine = (() => {
    If loadUserTier() later resolves a Pro tier, app.js calls setTier.
 ─────────────────────────────────────────────────────────────────── */
 (function () {
-  const uid  = (typeof userId   !== 'undefined') ? userId   : sessionStorage.getItem('fbEmail');
+  const uid  = (typeof userId   !== 'undefined') ? userId   : (sessionStorage.getItem('fbUid') || sessionStorage.getItem('fbEmail'));
   const tier = (typeof userTier !== 'undefined') ? userTier : 'free';
   if (uid) {
     OnboardingEngine.init(uid, tier);

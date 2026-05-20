@@ -137,6 +137,7 @@
       const token = await user.getIdToken();
       sessionStorage.setItem("fbToken", token);
       sessionStorage.setItem("fbEmail", user.email);
+      sessionStorage.setItem("fbUid", user.uid);
       window.location.href = "dashboard.html";
     }
 
