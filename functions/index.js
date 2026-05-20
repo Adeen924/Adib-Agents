@@ -107,7 +107,7 @@ const TIERS = {
   free: {
     label:               "Free",
     maxSearchesPerDay:   1,
-    webSearchesPerQuery: 1,
+    webSearchesPerQuery: 3,
     maxOutputTokens:     4000,
     customSites:         false,
     maxTargetCompanies:  3,
@@ -117,7 +117,7 @@ const TIERS = {
   pro: {
     label:               "Pro",
     maxSearchesPerDay:   4,
-    webSearchesPerQuery: 3,
+    webSearchesPerQuery: 5,
     maxOutputTokens:     4000,
     customSites:         true,
     maxTargetCompanies:  50,
@@ -435,23 +435,23 @@ MATCHING DIMENSIONS — score and reason across all of these for every job you r
 9. Hiring Velocity: Is the company actively growing (recent posting, multiple open roles, expansion signals)?
 10. Recruiter Responsiveness: Does the posting appear recently active and from a team likely to respond?
 
-Search strategy â€" follow this order strictly:
-1. Search hiring.cafe FIRST â€" it always provides direct application links to the actual job posting.
-2. Search Greenhouse (boards.greenhouse.io), Lever (jobs.lever.co), Wellfound, and Builtin â€" these platforms have permanent, directly-linkable URLs.
-3. Search the company's own careers page next (e.g. company.com/careers).
-4. Only use LinkedIn or Indeed as a last resort if nothing is found on direct platforms.
+SOURCE RULES — non-negotiable:
+- Search hiring.cafe FIRST and use it as your PRIMARY source. It provides direct, verified links to the exact job posting.
+- Secondary sources (only if hiring.cafe does not have enough results): boards.greenhouse.io, jobs.lever.co, Wellfound, Builtin, company careers pages.
+- NEVER use Indeed or LinkedIn as a source. Do not visit indeed.com or linkedin.com. Do not return any URL containing "indeed.com" or "linkedin.com". This is absolute.
 
-Rules:
-- STRONGLY prefer hiring.cafe, Greenhouse, Lever, Wellfound, and Builtin URLs over Indeed or LinkedIn for the same job â€" aggregator links are a last resort only
-- Only include direct job posting URLs (not search pages or Google results)
-- Prefer postings from the last 14 days
-- Skip jobs where the required experience is significantly above the candidate's level
+URL RULES — non-negotiable:
+- Every job you return MUST have a URL that opens directly to that specific posting. Before including a job, verify the URL actually leads to the individual listing — not the company homepage, not a /careers page, not a search results page.
+- A valid URL contains a unique job identifier or slug (e.g. hiring.cafe/jobs/12345, boards.greenhouse.io/company/jobs/67890, jobs.lever.co/company/uuid, company.com/careers/role-name-id).
+- If you cannot find a verified direct URL for a role, DO NOT include it. Return fewer than ${jobCount} jobs rather than include even one with a bad, unverified, or generic URL.
+- Prefer postings from the last 14 days.
+- Skip jobs where the required experience is significantly above the candidate's level.
 
-Return exactly ${jobCount} jobs as a raw JSON array — no markdown, no explanation, nothing else.
+Return UP TO ${jobCount} jobs as a raw JSON array — no markdown, no explanation, nothing else. Fewer high-quality results with accurate links is better than ${jobCount} results with bad links.
 Field rules:
 - fitScore: integer 0-100 reflecting overall match quality across all 10 dimensions (not keyword count)
 - matchReasons: array of 3-5 short strings (1-2 sentences each) explaining WHY this job fits the candidate — reference specific dimensions and the candidate's actual background
-- url: CRITICAL — must be the URL of THIS SPECIFIC job posting, not the company homepage or a generic careers/jobs listing page (e.g. "company.com/careers" is WRONG — that is a careers page, not a posting). A valid posting URL has a unique identifier or slug in the path (e.g. "company.com/careers/senior-engineer-12345" or "lever.co/company/abc-uuid"). Copy it verbatim from your search results. Use "" if you cannot confirm a direct posting URL — an empty string is better than a careers page URL.
+- url: the verified direct URL to this specific posting, copied verbatim from your search results. Use "" only if you truly cannot find one — but if url is "", the job will be dropped entirely, so only include the job if you have a real URL.
 - posted: exact date as "Month DD, YYYY" (e.g. "May 10, 2026") or relative like "2 days ago". Never just a year. Use "" if unknown.
 - description: full job details — role responsibilities, required skills, nice-to-haves, team context. Aim for 6-8 sentences minimum.
 
@@ -487,6 +487,20 @@ Field rules:
     jobs = [];
   }
 
+  // Hard filter: drop jobs with no URL, or any aggregator URL that slipped through
+  const BANNED_DOMAINS = /indeed\.com|linkedin\.com/i;
+  jobs = jobs.filter(job => {
+    if (!job.url || !job.url.startsWith("http")) {
+      console.warn(`[runJobSearch] Dropping "${job.title}" @ ${job.company} — no valid URL`);
+      return false;
+    }
+    if (BANNED_DOMAINS.test(job.url)) {
+      console.warn(`[runJobSearch] Dropping "${job.title}" @ ${job.company} — aggregator URL blocked: ${job.url}`);
+      return false;
+    }
+    return true;
+  });
+
   // Server-side deduplication: remove jobs already found this week
   const uniqueJobs = jobs.filter(job => {
     if (!job.title && !job.company) return false;
@@ -496,7 +510,7 @@ Field rules:
     return true;
   });
 
-  // Resolve direct company application URLs for Indeed/LinkedIn-sourced jobs
+  // Attempt to sharpen any non-ATS company career page URLs to a specific posting
   await resolveDirectUrls(uniqueJobs);
 
   // Save search summary to digests
