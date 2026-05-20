@@ -136,7 +136,7 @@ async function ensureUser(userId) {
   const ref = db.collection("users").doc(userId);
   const doc = await ref.get();
   if (!doc.exists) {
-    await ref.set({ tier: "free", email: userId, createdAt: admin.firestore.FieldValue.serverTimestamp() });
+    await ref.set({ tier: "free", role: "customer", email: userId, createdAt: admin.firestore.FieldValue.serverTimestamp() });
   }
 }
 
@@ -477,27 +477,25 @@ app.get("/", (req, res) => res.send("Backend is running"));
 // â”€â”€ Stats â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 app.get("/stats/:userId", async (req, res) => {
   try {
-    const snap   = await db.collection("activity").where("userId", "==", req.params.userId).get();
-    const cutoff = Date.now() - 24 * 60 * 60 * 1000;
-    const recent = snap.docs.filter((d) => (d.data().createdAt?.toMillis?.() || 0) > cutoff);
+    const userId   = req.params.userId;
+    const cutoff   = Date.now() - 24 * 60 * 60 * 1000;
+    const monthKey = new Date().toISOString().slice(0, 7);
 
-    const totals = recent.reduce(
-      (acc, d) => {
-        const data = d.data();
-        acc.runs++;
-        acc.inputTokens  += data.inputTokens  || 0;
-        acc.outputTokens += data.outputTokens || 0;
-        acc.cost         += data.cost         || 0;
-        return acc;
-      },
-      { runs: 0, inputTokens: 0, outputTokens: 0, cost: 0 }
-    );
+    const [jobsSnap, appsSnap, docsSnap, featureSnap] = await Promise.all([
+      db.collection("jobs").where("userId", "==", userId).get(),
+      db.collection("applications").where("userId", "==", userId).get(),
+      db.collection("documents").where("userId", "==", userId).get(),
+      db.collection("featureUsage").doc(`${userId}_${monthKey}`).get(),
+    ]);
 
-    res.json({
-      ...totals,
-      totalTokens:   totals.inputTokens + totals.outputTokens,
-      costFormatted: `$${totals.cost.toFixed(4)}`,
-    });
+    const newJobs24h        = jobsSnap.docs.filter(d => (d.data().createdAt?.toMillis?.() || 0) > cutoff).length;
+    const totalJobs         = jobsSnap.docs.length;
+    const applicationsCount = appsSnap.docs.length;
+    const documentsCount    = docsSnap.docs.length;
+    const featureData       = featureSnap.exists ? featureSnap.data() : {};
+    const searchesThisMonth = featureData.searches_manual || 0;
+
+    res.json({ newJobs24h, totalJobs, applicationsCount, documentsCount, searchesThisMonth });
   } catch (err) {
     console.error("Stats error:", err.message);
     res.status(500).json({ error: "Failed to load stats" });
@@ -939,8 +937,8 @@ Respond with ONLY a valid JSON object, no text before or after:
   "contacts": [
     {
       "name": "Full Name",
-      "title": "Their Job Title",
-      "linkedinSearch": "name company search query to find them",
+      "title": "Their exact verified job title from search results -- never guess or infer",
+      "linkedinSearch": "only the person's full name, nothing else (used for LinkedIn people search)",
       "type": "recruiter|hiring_manager|team_member|alumni|peer",
       "score": 85,
       "why": "2-sentence explanation of why contacting this person is valuable",
@@ -1011,9 +1009,12 @@ app.get("/user/:userId", async (req, res) => {
   const { userId } = req.params;
   try {
     await ensureUser(userId);
-    const tier       = await getUserTier(userId);
+    const doc        = await db.collection("users").doc(userId).get();
+    const data       = doc.exists ? doc.data() : {};
+    const tier       = data.tier || "free";
+    const role       = data.role || "customer";
     const tierConfig = TIERS[tier] || TIERS.free;
-    res.json({ tier, tierConfig });
+    res.json({ tier, tierConfig, role });
   } catch (err) {
     res.status(500).json({ error: "Failed to load user" });
   }
@@ -1023,6 +1024,88 @@ app.get("/user/:userId", async (req, res) => {
 // Protect this with a shared secret before exposing to the internet.
 // When integrating Stripe: call this from your webhook handler after
 // a checkout.session.completed or customer.subscription.updated event.
+
+// -- Admin stats endpoint (role must equal "admin" in Firestore users doc) --
+app.get("/admin/stats/:userId", async (req, res) => {
+  const { userId } = req.params;
+  try {
+    const userDoc = await db.collection("users").doc(userId).get();
+    if (!userDoc.exists || userDoc.data().role !== "admin") {
+      return res.status(403).json({ error: "Forbidden" });
+    }
+
+    const now         = Date.now();
+    const cutoff24h   = now - 24 * 60 * 60 * 1000;
+    const cutoffWeek  = now -  7 * 24 * 60 * 60 * 1000;
+    const cutoffMonth = now - 30 * 24 * 60 * 60 * 1000;
+
+    const [usersSnap, activitySnap] = await Promise.all([
+      db.collection("users").get(),
+      db.collection("activity").get(),
+    ]);
+
+    const users         = usersSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+    const freeTierCount = users.filter(u => (u.tier || "free") === "free").length;
+    const proTierCount  = users.filter(u => u.tier === "pro").length;
+    const activity      = activitySnap.docs.map(d => d.data());
+
+    const computeSpend = (cutoff) => {
+      const byUser = {};
+      for (const a of activity) {
+        if ((a.createdAt?.toMillis?.() || 0) <= cutoff) continue;
+        if (!byUser[a.userId]) byUser[a.userId] = { cost: 0, runs: 0 };
+        byUser[a.userId].cost += a.cost || 0;
+        byUser[a.userId].runs += 1;
+      }
+      return { total: Object.values(byUser).reduce((s, u) => s + u.cost, 0), byUser };
+    };
+
+    const stats24h   = computeSpend(cutoff24h);
+    const statsWeek  = computeSpend(cutoffWeek);
+    const statsMonth = computeSpend(cutoffMonth);
+
+    const activeUserIds = new Set(
+      activity.filter(a => (a.createdAt?.toMillis?.() || 0) > cutoffWeek).map(a => a.userId)
+    );
+
+    const activityCountMonth = {};
+    activity
+      .filter(a => (a.createdAt?.toMillis?.() || 0) > cutoffMonth)
+      .forEach(a => { activityCountMonth[a.userId] = (activityCountMonth[a.userId] || 0) + 1; });
+
+    const mostActiveUsers = Object.entries(activityCountMonth)
+      .sort(([, a], [, b]) => b - a)
+      .slice(0, 10)
+      .map(([uid, count]) => {
+        const u = users.find(x => x.id === uid) || {};
+        return { userId: uid, count, tier: u.tier || "free", spending30d: statsMonth.byUser[uid]?.cost || 0 };
+      });
+
+    const inactivePaidUsers = users
+      .filter(u => u.tier === "pro" && !activeUserIds.has(u.id))
+      .slice(0, 20)
+      .map(u => ({ userId: u.id, tier: "pro" }));
+
+    const inactiveFreeUsers = users
+      .filter(u => (u.tier || "free") === "free" && !activeUserIds.has(u.id))
+      .slice(0, 20)
+      .map(u => ({ userId: u.id, tier: "free" }));
+
+    res.json({
+      totalUsers: users.length,
+      freeTierCount,
+      proTierCount,
+      activeUsersWeek: activeUserIds.size,
+      spending: { "24h": stats24h.total, week: statsWeek.total, month: statsMonth.total },
+      mostActiveUsers,
+      inactivePaidUsers,
+      inactiveFreeUsers,
+    });
+  } catch (err) {
+    console.error("Admin stats error:", err);
+    res.status(500).json({ error: "Failed to load admin stats" });
+  }
+});
 app.post("/user/tier", async (req, res) => {
   const { userId, tier, secret } = req.body;
   if (!userId || !tier) return res.status(400).json({ error: "userId and tier required" });
@@ -1162,7 +1245,11 @@ app.get("/watchlist-jobs/:userId", async (req, res) => {
 });
 
 exports.api = functions
-  .runWith({ secrets: ["ANTHROPIC_API_KEY", "STRIPE_SECRET_KEY", "STRIPE_WEBHOOK_SECRET", "STRIPE_PRO_PRICE_ID", "STRIPE_PRO_ANNUAL_PRICE_ID"] })
+  .runWith({
+    timeoutSeconds: 300,
+    secrets: ["ANTHROPIC_API_KEY", "STRIPE_SECRET_KEY", "STRIPE_WEBHOOK_SECRET",
+              "STRIPE_PRO_PRICE_ID", "STRIPE_PRO_ANNUAL_PRICE_ID"],
+  })
   .https.onRequest(app);
 
 // â”€â”€ Push notification sender â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€

@@ -50,6 +50,11 @@
       <button class="nav-item" id="nav-preferences">
         <span class="nav-icon">🎯</span> Preferences
       </button>
+
+      <div class="nav-label" id="nav-admin-label" style="margin-top:10px;display:none">Admin</div>
+      <button class="nav-item" id="nav-admin" style="display:none">
+        <span class="nav-icon">🛡️</span> Admin Panel
+      </button>
     </nav>
 
     <div class="sidebar-footer">
@@ -83,20 +88,20 @@
 
       <div class="stats-grid" id="statsGrid">
         <div class="stat-card">
-          <div class="stat-value" id="stat-runs">—</div>
-          <div class="stat-label">Agent Runs (24h)</div>
+          <div class="stat-value" id="stat-new-jobs">—</div>
+          <div class="stat-label">New Jobs (24h)</div>
         </div>
         <div class="stat-card">
-          <div class="stat-value" id="stat-tokens">—</div>
-          <div class="stat-label">Tokens Used (24h)</div>
+          <div class="stat-value" id="stat-total-jobs">—</div>
+          <div class="stat-label">Total Jobs Found</div>
         </div>
         <div class="stat-card">
-          <div class="stat-value" id="stat-cost">—</div>
-          <div class="stat-label">Cost (24h)</div>
+          <div class="stat-value" id="stat-applications">—</div>
+          <div class="stat-label">Applications Tracking</div>
         </div>
         <div class="stat-card">
-          <div class="stat-value" id="stat-items">—</div>
-          <div class="stat-label">Items Processed (24h)</div>
+          <div class="stat-value" id="stat-documents">—</div>
+          <div class="stat-label">Documents Created</div>
         </div>
       </div>
 
@@ -407,6 +412,19 @@
           </div>
         </div>
 
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Admin Panel view ── -->
+  <div class="main-content panel-view" id="adminView" style="display:none">
+    <header class="main-header">
+      <div><h2>Admin Panel</h2><p>Platform overview and user analytics</p></div>
+      <div class="header-status"><span class="status-dot"></span> Admin</div>
+    </header>
+    <div style="overflow-y:auto;flex:1">
+      <div class="settings-content" id="adminBody">
+        <div class="panel-loading">Loading admin stats…</div>
       </div>
     </div>
   </div>

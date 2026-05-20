@@ -19,12 +19,14 @@ const PANELS = {
   profile:     document.getElementById("profileView"),
   account:     document.getElementById("accountView"),
   preferences: document.getElementById("preferencesView"),
+  admin:       document.getElementById("adminView"),
 };
 
 let isLoading      = false;
 let currentDocType = "resume";
 let currentJob     = null;
 let userTier       = "free";  // loaded on init, used for feature gating
+let userRole       = "customer"; // loaded on init; "admin" shows Admin Panel
 let allJobsList        = [];
 let allWatchlistJobs   = [];
 let allDocumentsList   = [];
@@ -42,6 +44,7 @@ function init() {
   document.getElementById("nav-profile").addEventListener("click",     () => showPanel("profile"));
   document.getElementById("nav-account").addEventListener("click",     () => showPanel("account"));
   document.getElementById("nav-preferences").addEventListener("click", () => showPanel("preferences"));
+  document.getElementById("nav-admin")?.addEventListener("click",       () => showPanel("admin"));
   document.getElementById("signOutBtn").addEventListener("click",    signOut);
 
   // Applications
@@ -129,10 +132,12 @@ function showPanel(name) {
     profile:     "nav-profile",
     account:     "nav-account",
     preferences: "nav-preferences",
+    admin:       "nav-admin",
   };
   if (navIds[name]) document.getElementById(navIds[name])?.classList.add("active");
 
   if (name === "dashboard")   { loadStats(); loadRecentJobs(); loadApplications(); }
+  if (name === "admin")       loadAdminPanel();
   if (name === "jobs")        loadJobs();
   if (name === "documents")   loadDocuments(currentDocType);
   if (name === "digest")      loadDigest();
@@ -163,10 +168,10 @@ async function loadStats() {
   try {
     const res  = await fetch(`${BACKEND_URL}/stats/${encodeURIComponent(userId)}`);
     const data = await res.json();
-    document.getElementById("stat-runs").textContent   = data.runs          ?? 0;
-    document.getElementById("stat-tokens").textContent = (data.totalTokens  ?? 0).toLocaleString();
-    document.getElementById("stat-cost").textContent   = data.costFormatted ?? "$0.0000";
-    document.getElementById("stat-items").textContent  = data.runs          ?? 0;
+    document.getElementById("stat-new-jobs").textContent    = data.newJobs24h        ?? 0;
+    document.getElementById("stat-total-jobs").textContent  = data.totalJobs         ?? 0;
+    document.getElementById("stat-applications").textContent = data.applicationsCount ?? 0;
+    document.getElementById("stat-documents").textContent   = data.documentsCount    ?? 0;
   } catch (err) {
     console.error("Stats error:", err);
   }
@@ -618,7 +623,7 @@ function renderNetworkingSection(contacts, strategy, networkingAt) {
         <textarea class="nc-message-textarea" id="nc-msg-${i}" rows="5">${escapePre(c.messageDraft)}</textarea>
         <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">
           <button class="btn btn-ghost" style="padding:5px 12px;font-size:0.8rem" onclick="copyNetworkMsg(${i})">Copy Message</button>
-          ${c.linkedinSearch ? `<a href="https://www.linkedin.com/search/results/people/?keywords=${encodeURIComponent(c.linkedinSearch)}" target="_blank" rel="noopener" class="btn btn-ghost" style="padding:5px 12px;font-size:0.8rem">Find on LinkedIn ↗</a>` : ""}
+          ${c.name ? `<a href="https://www.linkedin.com/search/results/people/?keywords=${encodeURIComponent(c.name)}" target="_blank" rel="noopener" class="btn btn-ghost" style="padding:5px 12px;font-size:0.8rem">Find on LinkedIn ↗</a>` : ""}
         </div>
       </div>` : ""}
     </div>`).join("");
@@ -931,7 +936,12 @@ async function loadUserTier() {
     const res  = await fetch(`${BACKEND_URL}/user/${encodeURIComponent(userId)}`);
     const data = await res.json();
     userTier   = data.tier || "free";
+    userRole   = data.role || "customer";
     applyTierGates();
+    // Show admin nav if user is an admin
+    const isAdmin = userRole === "admin";
+    document.getElementById("nav-admin-label")?.style.setProperty("display", isAdmin ? "" : "none");
+    document.getElementById("nav-admin")?.style.setProperty("display",       isAdmin ? "" : "none");
     // Sidebar badge
     const badge = document.getElementById("tierBadge");
     if (badge) {
@@ -1597,6 +1607,110 @@ async function saveWatchlistCompanies() {
   } catch {
     status.textContent = "Failed to save. Please try again.";
   } finally { btn.disabled = false; btn.textContent = "Save Watchlist"; }
+}
+
+// ── Admin Panel ───────────────────────────────────────────────────────────────
+async function loadAdminPanel() {
+  const body = document.getElementById("adminBody");
+  body.innerHTML = '<div class="panel-loading" style="padding:28px">Loading admin stats…</div>';
+  try {
+    const res  = await fetch(`${BACKEND_URL}/admin/stats/${encodeURIComponent(userId)}`);
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "Failed to load");
+
+    const fmt = (n) => `$${(n || 0).toFixed(4)}`;
+
+    const mostActiveRows = (data.mostActiveUsers || []).map(u => `
+      <tr>
+        <td style="max-width:220px;overflow:hidden;text-overflow:ellipsis">${escapeHtml(u.userId)}</td>
+        <td><span class="tier-badge${u.tier === "pro" ? " pro" : ""}">${u.tier.toUpperCase()}</span></td>
+        <td>${u.count}</td>
+        <td>${fmt(u.spending30d)}</td>
+      </tr>`).join("") || `<tr><td colspan="4" class="empty-table">No activity recorded yet.</td></tr>`;
+
+    const inactivePaidRows = (data.inactivePaidUsers || []).map(u => `
+      <tr>
+        <td style="max-width:300px;overflow:hidden;text-overflow:ellipsis">${escapeHtml(u.userId)}</td>
+        <td><span class="tier-badge pro">PRO</span></td>
+      </tr>`).join("") || `<tr><td colspan="2" class="empty-table">All paid users are active!</td></tr>`;
+
+    const inactiveFreeRows = (data.inactiveFreeUsers || []).map(u => `
+      <tr><td style="max-width:300px;overflow:hidden;text-overflow:ellipsis">${escapeHtml(u.userId)}</td></tr>`
+    ).join("") || `<tr><td class="empty-table">All free users are active!</td></tr>`;
+
+    body.innerHTML = `
+      <div class="settings-section">
+        <div class="settings-section-title">Platform Spending</div>
+        <div class="stats-grid" style="max-width:640px">
+          <div class="stat-card">
+            <div class="stat-value" style="font-size:1.2rem">${fmt(data.spending?.["24h"])}</div>
+            <div class="stat-label">Last 24 Hours</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-value" style="font-size:1.2rem">${fmt(data.spending?.week)}</div>
+            <div class="stat-label">Last 7 Days</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-value" style="font-size:1.2rem">${fmt(data.spending?.month)}</div>
+            <div class="stat-label">Last 30 Days</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="settings-section">
+        <div class="settings-section-title">User Overview</div>
+        <div class="stats-grid" style="max-width:640px">
+          <div class="stat-card">
+            <div class="stat-value">${data.totalUsers || 0}</div>
+            <div class="stat-label">Total Users</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-value">${data.proTierCount || 0}</div>
+            <div class="stat-label">Pro Users</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-value">${data.freeTierCount || 0}</div>
+            <div class="stat-label">Free Users</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-value">${data.activeUsersWeek || 0}</div>
+            <div class="stat-label">Active This Week</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="settings-section">
+        <div class="settings-section-title">Most Active Users (30 days)</div>
+        <div style="overflow-x:auto">
+          <table class="app-table">
+            <thead><tr><th>User</th><th>Tier</th><th>Runs</th><th>Spending (30d)</th></tr></thead>
+            <tbody>${mostActiveRows}</tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="settings-section">
+        <div class="settings-section-title">Inactive Pro Users (7+ days no activity)</div>
+        <div style="overflow-x:auto">
+          <table class="app-table">
+            <thead><tr><th>User</th><th>Tier</th></tr></thead>
+            <tbody>${inactivePaidRows}</tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="settings-section">
+        <div class="settings-section-title">Inactive Free Users (7+ days no activity)</div>
+        <div style="overflow-x:auto">
+          <table class="app-table">
+            <thead><tr><th>User</th></tr></thead>
+            <tbody>${inactiveFreeRows}</tbody>
+          </table>
+        </div>
+      </div>`;
+  } catch (err) {
+    body.innerHTML = `<div class="panel-loading" style="padding:28px">Failed to load admin stats: ${escapeHtml(err.message)}</div>`;
+  }
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
