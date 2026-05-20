@@ -694,35 +694,59 @@ app.post("/knowledge/parse-resume", async (req, res) => {
     return res.status(400).json({ error: "resumeText is required" });
 
   try {
-    const response = await anthropic.messages.create({
-      model:      MODEL_HAIKU,
-      max_tokens: 1024,
-      messages: [{
-        role:    "user",
-        content: `You are a resume parser. Extract structured information from the resume below and return ONLY a valid JSON object â€” no explanation, no markdown, no code fences, just the raw JSON.
+    // Run both calls in parallel: Haiku for straightforward extraction, Sonnet for career trajectory inference
+    const [haikusResponse, sonnetResponse] = await Promise.all([
+      anthropic.messages.create({
+        model:      MODEL_HAIKU,
+        max_tokens: 1024,
+        messages: [{
+          role:    “user”,
+          content: `You are a resume parser. Extract structured information from the resume below and return ONLY a valid JSON object â€” no explanation, no markdown, no code fences, just the raw JSON.
 
-Use these exact fields (use empty string "" for anything not found):
+Use these exact fields (use empty string “” for anything not found):
 {
-  "currentPosition": "Most recent job title and company with dates, e.g. Senior Engineer at Acme Corp (2022â€“present)",
-  "previousPositions": "All previous roles, one per line, e.g.\\nSoftware Engineer at Startup Inc (2019â€“2022)\\nJunior Developer at Agency (2017â€“2019)",
-  "targetRole": "The next logical role for this candidate based on their trajectory, e.g. Staff Engineer or Head of Product",
-  "skills": "Comma-separated list of all technical skills, tools, languages, and frameworks found",
-  "education": "Degree, institution, and graduation year, e.g. BS Computer Science, University of Washington (2017)",
-  "additionalContext": "Notable projects, certifications, publications, awards, or anything else that stands out"
+  “currentPosition”: “Most recent job title and company with dates, e.g. Senior Engineer at Acme Corp (2022â€”present)”,
+  “previousPositions”: “All previous roles, one per line, e.g.\\nSoftware Engineer at Startup Inc (2019â€”2022)\\nJunior Developer at Agency (2017â€”2019)”,
+  “skills”: “Comma-separated list of all technical skills, tools, languages, and frameworks found”,
+  “education”: “Degree, institution, and graduation year, e.g. BS Computer Science, University of Washington (2017)”,
+  “additionalContext”: “Notable projects, certifications, publications, awards, or anything else that stands out”
 }
 
 Resume:
 ${resumeText.slice(0, 8000)}`,
-      }],
-    });
+        }],
+      }),
+      anthropic.messages.create({
+        model:      MODEL_SONNET,
+        max_tokens: 256,
+        messages: [{
+          role:    “user”,
+          content: `Based on this resume, determine the most logical next role for this candidate â€” the role they are clearly working toward based on their career progression, seniority trajectory, and skills. Consider implicit signals like the types of companies they've worked at, the scope of their responsibilities, and the natural next step in their field.
 
-    const raw = response.content.filter(b => b.type === "text").map(b => b.text).join("").trim();
-    // Strip markdown code fences if Claude adds them despite instructions
-    const jsonStr = raw.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim();
-    const jsonMatch = jsonStr.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) throw new Error("No JSON found in response");
-    const parsed = JSON.parse(jsonMatch[0]);
-    res.json(parsed);
+Return ONLY a valid JSON object â€” no explanation, no markdown, no code fences:
+{“targetRole”: “e.g. Staff Engineer or Head of Product at a growth-stage startup”}
+
+Resume:
+${resumeText.slice(0, 8000)}`,
+        }],
+      }),
+    ]);
+
+    const haikuRaw     = haikusResponse.content.filter(b => b.type === “text”).map(b => b.text).join(“”).trim();
+    const haikuJsonStr = haikuRaw.replace(/^```(?:json)?\s*/i, “”).replace(/\s*```$/, “”).trim();
+    const haikuMatch   = haikuJsonStr.match(/\{[\s\S]*\}/);
+    if (!haikuMatch) throw new Error(“No JSON found in response”);
+    const parsed = JSON.parse(haikuMatch[0]);
+
+    const sonnetRaw     = sonnetResponse.content.filter(b => b.type === “text”).map(b => b.text).join(“”).trim();
+    const sonnetJsonStr = sonnetRaw.replace(/^```(?:json)?\s*/i, “”).replace(/\s*```$/, “”).trim();
+    const sonnetMatch   = sonnetJsonStr.match(/\{[\s\S]*\}/);
+    let targetRole = “”;
+    if (sonnetMatch) {
+      try { targetRole = JSON.parse(sonnetMatch[0]).targetRole || “”; } catch { /* use empty string */ }
+    }
+
+    res.json({ ...parsed, targetRole });
   } catch (err) {
     console.error("Parse resume error:", err.message);
     res.status(500).json({ error: "Failed to parse resume" });
@@ -1528,6 +1552,9 @@ exports.onUserDeleted = functions.auth.user().onDelete(async (user) => {
     deleteQuery(db.collection("digests")       .where("userId", "==", email)),
     deleteQuery(db.collection("activity")      .where("userId", "==", email)),
     deleteQuery(db.collection("watchlistJobs") .where("userId", "==", email)),
+    // chats: cover both doc-keyed-by-email and userId-field patterns
+    db.collection("chats").doc(email).delete(),
+    deleteQuery(db.collection("chats").where("userId", "==", email)),
   ]);
 
   console.log('[onUserDeleted] Wipe complete for ' + uid);
