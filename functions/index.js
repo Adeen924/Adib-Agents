@@ -5,17 +5,18 @@ const cors      = require("cors");
 const { Anthropic } = require("@anthropic-ai/sdk");
 const admin     = require("firebase-admin");
 const Stripe    = require("stripe");
+const crypto    = require("crypto");
 
 admin.initializeApp();
 
-// Live site URL â€” used as the click-through destination in push notifications.
+// Live site URL — used as the click-through destination in push notifications.
 // Update this if you move to a custom domain.
 const SITE_URL = "https://adeen924.github.io/Adib-Agents";
 
 const app = express();
 app.use(cors({ origin: true }));
 
-// â”€â”€ Stripe webhook â€” must be registered BEFORE express.json() so we get the raw body â”€â”€
+// â"€â"€ Stripe webhook — must be registered BEFORE express.json() so we get the raw body â"€â"€
 app.post("/webhook", express.raw({ type: "application/json" }), async (req, res) => {
   const stripe        = Stripe(process.env.STRIPE_SECRET_KEY);
   const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
@@ -82,10 +83,10 @@ app.use(express.json({ limit: "2mb" }));
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 const db = admin.firestore();
 
-// Claude Sonnet 4.6 â€” complex reasoning, writing, web synthesis
+// Claude Sonnet 4.6 — complex reasoning, writing, web synthesis
 const INPUT_COST_SONNET  = 3    / 1_000_000;
 const OUTPUT_COST_SONNET = 15   / 1_000_000;
-// Claude Haiku 4.5 â€” structured extraction and templated generation (~3.75Ã— cheaper)
+// Claude Haiku 4.5 — structured extraction and templated generation (~3.75Ã— cheaper)
 const INPUT_COST_HAIKU   = 0.80 / 1_000_000;
 const OUTPUT_COST_HAIKU  = 4    / 1_000_000;
 // Legacy aliases
@@ -95,7 +96,7 @@ const OUTPUT_COST = OUTPUT_COST_SONNET;
 const MODEL_SONNET = "claude-sonnet-4-6";
 const MODEL_HAIKU  = "claude-haiku-4-5-20251001";
 
-// â”€â”€ Subscription tiers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// â"€â"€ Subscription tiers â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 // Enforce these limits in runJobSearch and the scheduler.
 // When Stripe is wired up, the webhook sets tier in the `users` collection.
 const TIERS = {
@@ -107,7 +108,7 @@ const TIERS = {
     customSites:         false,
     maxTargetCompanies:  3,
     jobsPerSearch:       5,
-    manualSearch:        false, // scheduled only â€” no Search Now button
+    manualSearch:        false, // scheduled only — no Search Now button
   },
   pro: {
     label:               "Pro",
@@ -146,7 +147,7 @@ async function ensureUser(userId) {
   }
 }
 
-// â”€â”€ Feature usage limits â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// â"€â"€ Feature usage limits â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 // Tracks per-day (free) or per-month (pro) usage in featureUsage/{userId}_{window}
 const FEATURE_LIMITS = {
   free: {
@@ -211,7 +212,7 @@ async function enforceFeatureLimit(userId, feature) {
 }
 
 
-// â”€â”€ Helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// â"€â"€ Helpers â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 // Sort Firestore docs by createdAt descending (in JS, no index needed)
 function sortByDate(docs) {
   return docs.sort((a, b) => {
@@ -285,7 +286,13 @@ function buildJobBoardsContext(prefs, tierConfig) {
   return [...custom, ...builtIn].join(", ");
 }
 
-// Run a job search for one user â€” limits are tier-based
+// Run a job search for one user — limits are tier-based
+// ── jobs_cache helpers ─────────────────────────────────────────────────────────
+function jobUrlHash(url) {
+  if (!url) return null;
+  return crypto.createHash("sha256").update(url).digest("hex").slice(0, 20);
+}
+
 async function runJobSearch(userId, prefs, tier = "free") {
   const tierConfig = TIERS[tier] || TIERS.free;
 
@@ -318,7 +325,7 @@ async function runJobSearch(userId, prefs, tier = "free") {
   try {
     const sevenDaysAgo = new Date();
     sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
-    const recentSnap = await db.collection("jobs").where("userId", "==", userId).get();
+    const recentSnap = await db.collection("users").doc(userId).collection("jobs").get();
     recentJobs = recentSnap.docs
       .map(d => d.data())
       .filter(j => {
@@ -347,7 +354,7 @@ async function runJobSearch(userId, prefs, tier = "free") {
   ].filter(Boolean).join("\n");
 
   const seenSection = recentJobs.length > 0
-    ? `\nAlready found this week â€” skip these, find different ones:\n${
+    ? `\nAlready found this week — skip these, find different ones:\n${
         recentJobs.slice(0, 20).map(j => `- ${j.company}: ${j.title}`).join("\n")
       }\n`
     : "";
@@ -357,10 +364,10 @@ async function runJobSearch(userId, prefs, tier = "free") {
   const systemPrompt = `You are an intelligent job matching agent. Search job boards, find real current postings, and evaluate each one across multiple dimensions to surface the best matches for this specific candidate.
 
 ${candidateProfile ? `CANDIDATE PROFILE:\n${candidateProfile}\n` : ""}
-REQUIRED CRITERIA (hard filters â€” reject any job that does not match ALL of these):
+REQUIRED CRITERIA (hard filters — reject any job that does not match ALL of these):
 ${criteria || "No specific criteria."}
 ${seenSection}
-MATCHING DIMENSIONS â€” score and reason across all of these for every job you return:
+MATCHING DIMENSIONS — score and reason across all of these for every job you return:
 1. Experience Depth: Does the required tenure and seniority match the candidate's actual depth?
 2. Transferable Skills: Which of the candidate's skills apply directly, even if from a different domain?
 3. Project Similarity: Has the candidate done work closely resembling what this role requires?
@@ -377,13 +384,13 @@ Rules:
 - Prefer postings from the last 14 days
 - Skip jobs where the required experience is significantly above the candidate's level
 
-Return exactly ${jobCount} jobs as a raw JSON array â€” no markdown, no explanation, nothing else.
+Return exactly ${jobCount} jobs as a raw JSON array — no markdown, no explanation, nothing else.
 Field rules:
 - fitScore: integer 0-100 reflecting overall match quality across all 10 dimensions (not keyword count)
-- matchReasons: array of 3-5 short strings (1-2 sentences each) explaining WHY this job fits the candidate â€” reference specific dimensions and the candidate's actual background
-- url: CRITICAL â€” must be the URL of THIS SPECIFIC job posting, not the company homepage or a generic careers/jobs listing page (e.g. “company.com/careers” is WRONG â€” that is a careers page, not a posting). A valid posting URL has a unique identifier or slug in the path (e.g. “company.com/careers/senior-engineer-12345” or “lever.co/company/abc-uuid”). Copy it verbatim from your search results. Use “” if you cannot confirm a direct posting URL â€” an empty string is better than a careers page URL.
+- matchReasons: array of 3-5 short strings (1-2 sentences each) explaining WHY this job fits the candidate — reference specific dimensions and the candidate's actual background
+- url: CRITICAL — must be the URL of THIS SPECIFIC job posting, not the company homepage or a generic careers/jobs listing page (e.g. "company.com/careers" is WRONG — that is a careers page, not a posting). A valid posting URL has a unique identifier or slug in the path (e.g. "company.com/careers/senior-engineer-12345" or "lever.co/company/abc-uuid"). Copy it verbatim from your search results. Use "" if you cannot confirm a direct posting URL — an empty string is better than a careers page URL.
 - posted: exact date as "Month DD, YYYY" (e.g. "May 10, 2026") or relative like "2 days ago". Never just a year. Use "" if unknown.
-- description: full job details â€” role responsibilities, required skills, nice-to-haves, team context. Aim for 6-8 sentences minimum.
+- description: full job details — role responsibilities, required skills, nice-to-haves, team context. Aim for 6-8 sentences minimum.
 
 [{"title":"","company":"","location":"","salary":"","experience":"","description":"","url":"","posted":"","fitScore":85,"matchReasons":["Experience Depth: ...","Transferable Skills: ...","Project Similarity: ..."]}]`;
 
@@ -403,7 +410,7 @@ Field rules:
     .join("\n\n")
     .trim();
 
-  // Parse JSON â€” strip code fences if present
+  // Parse JSON — strip code fences if present
   let jobs = [];
   try {
     const clean = raw.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim();
@@ -435,7 +442,7 @@ Field rules:
 
   // Save each new job as an individual document
   const savePromises = uniqueJobs.map(job =>
-    db.collection("jobs").add({
+    db.collection("users").doc(userId).collection("jobs").add({
       userId,
       digestId: digestRef.id,
       title:        job.title        || "",
@@ -451,7 +458,24 @@ Field rules:
       createdAt:    admin.firestore.FieldValue.serverTimestamp(),
     })
   );
-  await Promise.all(savePromises);
+  // Write new jobs to global jobs_cache (dedup index by URL, 30-day TTL)
+  const cacheWrites = uniqueJobs.filter(j => j.url).map(j => {
+    const hash = jobUrlHash(j.url);
+    if (!hash) return null;
+    return db.collection("jobs_cache").doc(hash).set({
+      title:       j.title       || "",
+      company:     j.company     || "",
+      location:    j.location    || "",
+      salary:      j.salary      || "",
+      description: j.description || "",
+      url:         j.url,
+      posted:      j.posted      || "",
+      cachedAt:    admin.firestore.FieldValue.serverTimestamp(),
+      expiresAt:   new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+    }, { merge: true });
+  }).filter(Boolean);
+  await Promise.all([...savePromises, ...cacheWrites]);
+
 
   // Increment denormalised counters in the root user doc (non-blocking)
   db.collection("users").doc(userId).update({
@@ -471,7 +495,7 @@ Field rules:
   // Track cost using Sonnet rates
   if (response.usage) {
     const { input_tokens, output_tokens } = response.usage;
-    await db.collection("activity").add({
+    await db.collection("platform_events").add({
       userId, view: "job_search",
       inputTokens:  input_tokens,
       outputTokens: output_tokens,
@@ -483,10 +507,10 @@ Field rules:
   return uniqueJobs;
 }
 
-// â”€â”€ Health check â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// â"€â"€ Health check â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 app.get("/", (req, res) => res.send("Backend is running"));
 
-// â”€â”€ Stats â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// â"€â"€ Stats â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 app.get("/stats/:userId", async (req, res) => {
   try {
     const userId   = req.params.userId;
@@ -494,7 +518,7 @@ app.get("/stats/:userId", async (req, res) => {
     const monthKey = new Date().toISOString().slice(0, 7);
 
     const [newJobsSnap, userDoc, usageDoc] = await Promise.all([
-      db.collection("jobs").where("userId", "==", userId)
+      db.collection("users").doc(userId).collection("jobs")
         .where("createdAt", ">", new Date(Date.now() - 24 * 60 * 60 * 1000)).get(),
       db.collection("users").doc(userId).get(),
       db.collection("users").doc(userId).collection("usage").doc(monthKey).get(),
@@ -515,11 +539,11 @@ app.get("/stats/:userId", async (req, res) => {
   }
 });
 
-// â”€â”€ Documents â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// â"€â"€ Documents â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 app.get("/documents/:userId/:type", async (req, res) => {
   const { userId, type } = req.params;
   try {
-    const snap = await db.collection("documents").where("userId", "==", userId).get();
+    const snap = await db.collection("users").doc(userId).collection("documents").get();
     const docs = sortByDate(snap.docs.filter(d => d.data().type === type))
       .slice(0, 50)
       .map(d => ({ id: d.id, ...d.data() }));
@@ -534,7 +558,7 @@ app.post("/documents/save", async (req, res) => {
   if (!userId || !type || !content)
     return res.status(400).json({ error: "userId, type, and content are required" });
   try {
-    const ref = await db.collection("documents").add({
+    const ref = await db.collection("users").doc(userId).collection("documents").add({
       userId, type, content,
       title:   title   || (type === "resume" ? "Resume" : "Cover Letter"),
       company: company || "",
@@ -550,19 +574,19 @@ app.post("/documents/save", async (req, res) => {
   }
 });
 
-app.delete("/documents/:docId", async (req, res) => {
+app.delete("/documents/:userId/:docId", async (req, res) => {
   try {
-    await db.collection("documents").doc(req.params.docId).delete();
+    await db.collection("users").doc(req.params.userId).collection("documents").doc(req.params.docId).delete();
     res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: "Failed to delete document" });
   }
 });
 
-// â”€â”€ Applications â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// â"€â"€ Applications â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 app.get("/applications/:userId", async (req, res) => {
   try {
-    const snap = await db.collection("applications").where("userId", "==", req.params.userId).get();
+    const snap = await db.collection("users").doc(req.params.userId).collection("applications").get();
     const applications = sortByDate(snap.docs).map(d => ({ id: d.id, ...d.data() }));
     res.json({ applications });
   } catch (err) {
@@ -584,11 +608,11 @@ app.post("/applications/save", async (req, res) => {
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     };
     if (id) {
-      await db.collection("applications").doc(id).set(data, { merge: true });
+      await db.collection("users").doc(userId).collection("applications").doc(id).set(data, { merge: true });
       res.json({ ok: true, id });
     } else {
       data.createdAt = admin.firestore.FieldValue.serverTimestamp();
-      const ref = await db.collection("applications").add(data);
+      const ref = await db.collection("users").doc(userId).collection("applications").add(data);
       // Increment denormalised counter for new applications (non-blocking)
       db.collection("users").doc(userId).update({
         "stats.applicationsSubmitted": admin.firestore.FieldValue.increment(1),
@@ -600,16 +624,16 @@ app.post("/applications/save", async (req, res) => {
   }
 });
 
-app.delete("/applications/:appId", async (req, res) => {
+app.delete("/applications/:userId/:appId", async (req, res) => {
   try {
-    await db.collection("applications").doc(req.params.appId).delete();
+    await db.collection("users").doc(req.params.userId).collection("applications").doc(req.params.appId).delete();
     res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: "Failed to delete application" });
   }
 });
 
-// â”€â”€ Knowledge Base â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// â"€â"€ Knowledge Base â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 app.get("/knowledge/:userId", async (req, res) => {
   try {
     const doc = await db.collection("users").doc(req.params.userId).collection("knowledge").doc("profile").get();
@@ -640,7 +664,7 @@ app.post("/knowledge/save", async (req, res) => {
   }
 });
 
-// â”€â”€ Preferences â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// â"€â"€ Preferences â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 app.get("/preferences/:userId", async (req, res) => {
   try {
     const doc = await db.collection("users").doc(req.params.userId).collection("preferences").doc("config").get();
@@ -687,7 +711,7 @@ app.post("/preferences/save", async (req, res) => {
   }
 });
 
-// â”€â”€ Parse resume â†’ structured fields â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// â"€â"€ Parse resume â†’ structured fields â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 app.post("/knowledge/parse-resume", async (req, res) => {
   const { resumeText } = req.body;
   if (!resumeText || !resumeText.trim())
@@ -700,16 +724,16 @@ app.post("/knowledge/parse-resume", async (req, res) => {
         model:      MODEL_HAIKU,
         max_tokens: 1024,
         messages: [{
-          role:    “user”,
-          content: `You are a resume parser. Extract structured information from the resume below and return ONLY a valid JSON object â€” no explanation, no markdown, no code fences, just the raw JSON.
+          role:    "user",
+          content: `You are a resume parser. Extract structured information from the resume below and return ONLY a valid JSON object — no explanation, no markdown, no code fences, just the raw JSON.
 
-Use these exact fields (use empty string “” for anything not found):
+Use these exact fields (use empty string "" for anything not found):
 {
-  “currentPosition”: “Most recent job title and company with dates, e.g. Senior Engineer at Acme Corp (2022â€”present)”,
-  “previousPositions”: “All previous roles, one per line, e.g.\\nSoftware Engineer at Startup Inc (2019â€”2022)\\nJunior Developer at Agency (2017â€”2019)”,
-  “skills”: “Comma-separated list of all technical skills, tools, languages, and frameworks found”,
-  “education”: “Degree, institution, and graduation year, e.g. BS Computer Science, University of Washington (2017)”,
-  “additionalContext”: “Notable projects, certifications, publications, awards, or anything else that stands out”
+  "currentPosition": "Most recent job title and company with dates, e.g. Senior Engineer at Acme Corp (2022—present)",
+  "previousPositions": "All previous roles, one per line, e.g.\\nSoftware Engineer at Startup Inc (2019—2022)\\nJunior Developer at Agency (2017—2019)",
+  "skills": "Comma-separated list of all technical skills, tools, languages, and frameworks found",
+  "education": "Degree, institution, and graduation year, e.g. BS Computer Science, University of Washington (2017)",
+  "additionalContext": "Notable projects, certifications, publications, awards, or anything else that stands out"
 }
 
 Resume:
@@ -720,11 +744,11 @@ ${resumeText.slice(0, 8000)}`,
         model:      MODEL_SONNET,
         max_tokens: 256,
         messages: [{
-          role:    “user”,
-          content: `Based on this resume, determine the most logical next role for this candidate â€” the role they are clearly working toward based on their career progression, seniority trajectory, and skills. Consider implicit signals like the types of companies they've worked at, the scope of their responsibilities, and the natural next step in their field.
+          role:    "user",
+          content: `Based on this resume, determine the most logical next role for this candidate — the role they are clearly working toward based on their career progression, seniority trajectory, and skills. Consider implicit signals like the types of companies they've worked at, the scope of their responsibilities, and the natural next step in their field.
 
-Return ONLY a valid JSON object â€” no explanation, no markdown, no code fences:
-{“targetRole”: “e.g. Staff Engineer or Head of Product at a growth-stage startup”}
+Return ONLY a valid JSON object — no explanation, no markdown, no code fences:
+{"targetRole": "e.g. Staff Engineer or Head of Product at a growth-stage startup"}
 
 Resume:
 ${resumeText.slice(0, 8000)}`,
@@ -732,18 +756,18 @@ ${resumeText.slice(0, 8000)}`,
       }),
     ]);
 
-    const haikuRaw     = haikusResponse.content.filter(b => b.type === “text”).map(b => b.text).join(“”).trim();
-    const haikuJsonStr = haikuRaw.replace(/^```(?:json)?\s*/i, “”).replace(/\s*```$/, “”).trim();
+    const haikuRaw     = haikusResponse.content.filter(b => b.type === "text").map(b => b.text).join("").trim();
+    const haikuJsonStr = haikuRaw.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim();
     const haikuMatch   = haikuJsonStr.match(/\{[\s\S]*\}/);
-    if (!haikuMatch) throw new Error(“No JSON found in response”);
+    if (!haikuMatch) throw new Error("No JSON found in response");
     const parsed = JSON.parse(haikuMatch[0]);
 
-    const sonnetRaw     = sonnetResponse.content.filter(b => b.type === “text”).map(b => b.text).join(“”).trim();
-    const sonnetJsonStr = sonnetRaw.replace(/^```(?:json)?\s*/i, “”).replace(/\s*```$/, “”).trim();
+    const sonnetRaw     = sonnetResponse.content.filter(b => b.type === "text").map(b => b.text).join("").trim();
+    const sonnetJsonStr = sonnetRaw.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim();
     const sonnetMatch   = sonnetJsonStr.match(/\{[\s\S]*\}/);
-    let targetRole = “”;
+    let targetRole = "";
     if (sonnetMatch) {
-      try { targetRole = JSON.parse(sonnetMatch[0]).targetRole || “”; } catch { /* use empty string */ }
+      try { targetRole = JSON.parse(sonnetMatch[0]).targetRole || ""; } catch { /* use empty string */ }
     }
 
     res.json({ ...parsed, targetRole });
@@ -753,7 +777,7 @@ ${resumeText.slice(0, 8000)}`,
   }
 });
 
-// â”€â”€ Digest â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// â"€â"€ Digest â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 app.get("/digest/:userId", async (req, res) => {
   try {
     const snap = await db.collection("digests").where("userId", "==", req.params.userId).get();
@@ -764,11 +788,10 @@ app.get("/digest/:userId", async (req, res) => {
   }
 });
 
-// â”€â”€ Jobs Found â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-// IMPORTANT: /jobs/detail/:jobId must come before /jobs/:userId
-app.get("/jobs/detail/:jobId", async (req, res) => {
+// â"€â"€ Jobs Found â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+app.get("/jobs/:userId/detail/:jobId", async (req, res) => {
   try {
-    const doc = await db.collection("jobs").doc(req.params.jobId).get();
+    const doc = await db.collection("users").doc(req.params.userId).collection("jobs").doc(req.params.jobId).get();
     if (!doc.exists) return res.status(404).json({ error: "Job not found" });
     res.json({ id: doc.id, ...doc.data() });
   } catch (err) {
@@ -776,11 +799,11 @@ app.get("/jobs/detail/:jobId", async (req, res) => {
   }
 });
 
-// â”€â”€ Per-job AI document generation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// â"€â"€ Per-job AI document generation â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 
 async function getJobAndResume(jobId, userId) {
   const [jobDoc, kbDoc] = await Promise.all([
-    db.collection("jobs").doc(jobId).get(),
+    db.collection("users").doc(userId).collection("jobs").doc(jobId).get(),
     db.collection("users").doc(userId).collection("knowledge").doc("profile").get(),
   ]);
   if (!jobDoc.exists) throw new Error("Job not found");
@@ -799,14 +822,14 @@ app.post("/jobs/:jobId/tailored-resume", async (req, res) => {
     const response = await anthropic.messages.create({
       model:      MODEL_SONNET,
       max_tokens: 3000,
-      system: `You are an expert resume writer. Output plain text only â€” no markdown, no ** bold **, no _ italic _, no special symbols, no HTML.
+      system: `You are an expert resume writer. Output plain text only — no markdown, no ** bold **, no _ italic _, no special symbols, no HTML.
 
-Formatting rules (follow exactly â€” every rule matters for parsing):
-- LINE 1: candidate's full name ONLY â€” nothing else on this line
-- LINE 2: email | phone | location (LinkedIn URL if available) â€” contact info ONLY, nothing else
+Formatting rules (follow exactly — every rule matters for parsing):
+- LINE 1: candidate's full name ONLY — nothing else on this line
+- LINE 2: email | phone | location (LinkedIn URL if available) — contact info ONLY, nothing else
 - LINE 3: blank line
 - Section headers in ALL CAPS on their own line: PROFESSIONAL SUMMARY, EXPERIENCE, EDUCATION, SKILLS
-- Each role on its own line: Job Title | Company Name | Month Year â€“ Month Year
+- Each role on its own line: Job Title | Company Name | Month Year â€" Month Year
 - Bullet points start with a hyphen and space: - like this
 - Blank line between sections
 - Single column, no tables, no columns`,
@@ -820,7 +843,7 @@ CONTENT RULES:
 - Naturally incorporate keywords from the job description where they honestly apply.
 
 CANDIDATE'S RESUME:
-${resume || "No resume on file â€” write a clean template with [PLACEHOLDER] for the candidate to fill in."}
+${resume || "No resume on file — write a clean template with [PLACEHOLDER] for the candidate to fill in."}
 
 JOB POSTING:
 Role: ${job.title || ""}
@@ -857,19 +880,19 @@ app.post("/jobs/:jobId/cover-letter", async (req, res) => {
         role: "user",
         content: `Write a professional cover letter for this job application.
 
-Search the web for "${job.company || ""} mission values culture" to find genuine details about the company â€” reference them specifically in the letter.
+Search the web for "${job.company || ""} mission values culture" to find genuine details about the company — reference them specifically in the letter.
 
 Guidelines:
-- 3â€“4 paragraphs, professional but warm tone
+- 3â€"4 paragraphs, professional but warm tone
 - Opening: name the specific role and a genuine reason for interest
-- Body: connect 2â€“3 specific experiences from the candidate's resume to the role's requirements
+- Body: connect 2â€"3 specific experiences from the candidate's resume to the role's requirements
 - Company paragraph: reference real mission/values/products from your search
 - Closing: clear call to action, no clichÃ©s
 
-Output the letter only â€” no subject line, no "Here is your cover letter" preamble.
+Output the letter only — no subject line, no "Here is your cover letter" preamble.
 
 CANDIDATE'S RESUME:
-${tailoredResume || "No resume on file â€” write a strong template the candidate can personalise."}
+${tailoredResume || "No resume on file — write a strong template the candidate can personalise."}
 
 JOB POSTING:
 Role: ${job.title || ""}
@@ -904,11 +927,11 @@ app.post("/jobs/:jobId/interview-prep", async (req, res) => {
         role: "user",
         content: `Prepare me for my interview at ${job.company || "this company"} for the ${job.title || "role"} position.
 
-1. TECHNICAL QUESTIONS (6â€“8) â€” specific to the tech stack and skills in the job description. For each, include a short note on how to approach the answer.
+1. TECHNICAL QUESTIONS (6â€"8) — specific to the tech stack and skills in the job description. For each, include a short note on how to approach the answer.
 
-2. BEHAVIORAL / SITUATIONAL QUESTIONS (5) â€” STAR method, tailored to what this role values.
+2. BEHAVIORAL / SITUATIONAL QUESTIONS (5) — STAR method, tailored to what this role values.
 
-3. QUESTIONS TO ASK THE INTERVIEWER (4) â€” thoughtful questions showing genuine interest.
+3. QUESTIONS TO ASK THE INTERVIEWER (4) — thoughtful questions showing genuine interest.
 
 ${resume ? `CANDIDATE BACKGROUND:\n${resume.slice(0, 1500)}` : ""}
 
@@ -935,7 +958,7 @@ app.post("/jobs/:jobId/network", async (req, res) => {
   try {
     await enforceFeatureLimit(userId, "networking");
     const [jobDoc, kbDoc] = await Promise.all([
-      db.collection("jobs").doc(req.params.jobId).get(),
+      db.collection("users").doc(userId).collection("jobs").doc(req.params.jobId).get(),
       db.collection("users").doc(userId).collection("knowledge").doc("profile").get(),
     ]);
     if (!jobDoc.exists) throw new Error("Job not found");
@@ -973,7 +996,7 @@ ${job.description ? `Description:\n${job.description.slice(0, 600)}` : ""}
 
 Based on your research, identify the 5 most strategic people for this candidate to contact. For each, write a personalized LinkedIn message (under 120 words) that:
 - Opens with a specific genuine hook (shared background, their work, or role context)
-- Does NOT say "I'm applying" â€” frames the outreach as seeking advice or insight
+- Does NOT say "I'm applying" — frames the outreach as seeking advice or insight
 - Ends with a single soft ask (brief call, insight, or introduction)
 - Feels human and specific, NOT like a template
 
@@ -1002,7 +1025,7 @@ Respond with ONLY a valid JSON object, no text before or after:
       const jsonMatch = rawText.match(/\{[\s\S]*\}/);
       networking = JSON.parse(jsonMatch ? jsonMatch[0] : rawText);
     } catch {
-      throw new Error("Could not parse networking results â€” please try again.");
+      throw new Error("Could not parse networking results — please try again.");
     }
 
     await jobDoc.ref.update({
@@ -1019,7 +1042,7 @@ Respond with ONLY a valid JSON object, no text before or after:
 
 app.get("/jobs/:userId", async (req, res) => {
   try {
-    const snap = await db.collection("jobs").where("userId", "==", req.params.userId).get();
+    const snap = await db.collection("users").doc(req.params.userId).collection("jobs").get();
     const jobs = sortByDate(snap.docs).slice(0, 50).map(d => ({ id: d.id, ...d.data() }));
     res.json({ jobs });
   } catch (err) {
@@ -1027,7 +1050,7 @@ app.get("/jobs/:userId", async (req, res) => {
   }
 });
 
-// â”€â”€ Manual search now â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// â"€â"€ Manual search now â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 app.post("/search/now/:userId", async (req, res) => {
   const { userId } = req.params;
   try {
@@ -1049,7 +1072,7 @@ app.post("/search/now/:userId", async (req, res) => {
   }
 });
 
-// â”€â”€ User / tier management â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// â"€â"€ User / tier management â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 app.get("/user/:userId", async (req, res) => {
   const { userId } = req.params;
   try {
@@ -1065,7 +1088,7 @@ app.get("/user/:userId", async (req, res) => {
   }
 });
 
-// Admin / Stripe-webhook endpoint â€” sets a user's tier.
+// Admin / Stripe-webhook endpoint — sets a user's tier.
 // Protect this with a shared secret before exposing to the internet.
 // When integrating Stripe: call this from your webhook handler after
 // a checkout.session.completed or customer.subscription.updated event.
@@ -1086,7 +1109,7 @@ app.get("/admin/stats/:userId", async (req, res) => {
 
     const [usersSnap, activitySnap] = await Promise.all([
       db.collection("users").get(),
-      db.collection("activity").get(),
+      db.collection("platform_events").get(),
     ]);
 
     const users         = usersSnap.docs.map(d => ({ id: d.id, ...d.data() }));
@@ -1155,7 +1178,7 @@ app.post("/user/tier", async (req, res) => {
   const { userId, tier, secret } = req.body;
   if (!userId || !tier) return res.status(400).json({ error: "userId and tier required" });
   if (!["free", "pro"].includes(tier)) return res.status(400).json({ error: "Invalid tier" });
-  // Simple shared-secret guard â€” set ADMIN_SECRET in your Cloud Functions env vars
+  // Simple shared-secret guard — set ADMIN_SECRET in your Cloud Functions env vars
   // to protect this endpoint until you have real Stripe auth in place.
   if (process.env.ADMIN_SECRET && secret !== process.env.ADMIN_SECRET) {
     return res.status(403).json({ error: "Forbidden" });
@@ -1171,7 +1194,7 @@ app.post("/user/tier", async (req, res) => {
   }
 });
 
-// â”€â”€ Stripe Checkout â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// â"€â"€ Stripe Checkout â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 app.post("/create-checkout-session", async (req, res) => {
   const { userId, userEmail, billingPeriod } = req.body;
   if (!userId) return res.status(400).json({ error: "userId required" });
@@ -1224,7 +1247,7 @@ app.post("/create-portal-session", async (req, res) => {
   }
 });
 
-// â”€â”€ Push Notification token management â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// â"€â"€ Push Notification token management â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 app.post("/notifications/token", async (req, res) => {
   const { userId, token } = req.body;
   if (!userId || !token) return res.status(400).json({ error: "userId and token required" });
@@ -1240,7 +1263,7 @@ app.post("/notifications/token", async (req, res) => {
   }
 });
 
-// â”€â”€ Target Companies (Watchlist) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// â"€â"€ Target Companies (Watchlist) â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 app.get("/target-companies/:userId", async (req, res) => {
   try {
     const doc = await db.collection("targetCompanies").doc(req.params.userId).get();
@@ -1268,10 +1291,9 @@ app.post("/target-companies/save", async (req, res) => {
   }
 });
 
-// IMPORTANT: /watchlist-jobs/detail/:jobId must come before /watchlist-jobs/:userId
-app.get("/watchlist-jobs/detail/:jobId", async (req, res) => {
+app.get("/watchlist-jobs/:userId/detail/:jobId", async (req, res) => {
   try {
-    const doc = await db.collection("watchlistJobs").doc(req.params.jobId).get();
+    const doc = await db.collection("users").doc(req.params.userId).collection("watchlistJobs").doc(req.params.jobId).get();
     if (!doc.exists) return res.status(404).json({ error: "Job not found" });
     res.json({ id: doc.id, ...doc.data() });
   } catch (err) {
@@ -1281,7 +1303,7 @@ app.get("/watchlist-jobs/detail/:jobId", async (req, res) => {
 
 app.get("/watchlist-jobs/:userId", async (req, res) => {
   try {
-    const snap = await db.collection("watchlistJobs").where("userId", "==", req.params.userId).get();
+    const snap = await db.collection("users").doc(req.params.userId).collection("watchlistJobs").get();
     const jobs = sortByDate(snap.docs).slice(0, 100).map(d => ({ id: d.id, ...d.data() }));
     res.json({ jobs });
   } catch (err) {
@@ -1297,7 +1319,7 @@ exports.api = functions
   })
   .https.onRequest(app);
 
-// â”€â”€ Push notification sender â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// â"€â"€ Push notification sender â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 async function sendPushNotification(userId, title, body) {
   try {
     const doc = await db.collection("fcmTokens").doc(userId).get();
@@ -1335,7 +1357,7 @@ async function sendPushNotification(userId, title, body) {
   }
 }
 
-// â”€â”€ Watchlist helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// â"€â"€ Watchlist helpers â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 function makeWatchlistFingerprint(company, title, url) {
   const jobId = extractJobId(url);
   if (jobId) return jobId;
@@ -1346,32 +1368,31 @@ function makeWatchlistFingerprint(company, title, url) {
 
 async function checkTargetCompany(userId, company) {
   // Get fingerprints of jobs already seen for this company
-  const seenSnap = await db.collection(“watchlistJobs”)
-    .where(“userId”, “==”, userId)
-    .where(“company”, “==”, company.name)
+  const seenSnap = await db.collection("users").doc(userId).collection("watchlistJobs")
+    .where("company", "==", company.name)
     .get();
   const seenFingerprints = new Set(
     seenSnap.docs.map(d => d.data().fingerprint).filter(Boolean)
   );
 
   // Resolve career page URL via web search if not stored
-  let careerPageUrl = company.url || “”;
+  let careerPageUrl = company.url || "";
   if (!careerPageUrl) {
     try {
       const urlRes = await anthropic.messages.create({
         model:      MODEL_SONNET,
         max_tokens: 256,
-        tools:      [{ type: “web_search_20250305”, name: “web_search”, max_uses: 1 }],
-        messages:   [{ role: “user”, content: `Find the official careers or jobs page URL for “${company.name}”. Return ONLY a JSON object, no explanation: {“url”:”https://...”}` }],
+        tools:      [{ type: "web_search_20250305", name: "web_search", max_uses: 1 }],
+        messages:   [{ role: "user", content: `Find the official careers or jobs page URL for "${company.name}". Return ONLY a JSON object, no explanation: {"url":"https://..."}` }],
       });
-      const urlRaw  = urlRes.content.filter(b => b.type === “text”).map(b => b.text).join(“”).trim();
+      const urlRaw  = urlRes.content.filter(b => b.type === "text").map(b => b.text).join("").trim();
       const urlMatch = urlRaw.match(/\{[\s\S]*\}/);
       if (urlMatch) {
-        const resolved = JSON.parse(urlMatch[0]).url || “”;
-        if (resolved.startsWith(“http”)) {
+        const resolved = JSON.parse(urlMatch[0]).url || "";
+        if (resolved.startsWith("http")) {
           careerPageUrl = resolved;
           // Persist resolved URL so future checks skip this lookup
-          const docRef = db.collection(“targetCompanies”).doc(userId);
+          const docRef = db.collection("targetCompanies").doc(userId);
           const snap   = await docRef.get();
           if (snap.exists) {
             const updated = (snap.data().companies || []).map(c =>
@@ -1388,8 +1409,8 @@ async function checkTargetCompany(userId, company) {
 
   const systemPrompt = `You are a job search agent monitoring a specific company's career page. Visit the URL provided and list all currently open positions.
 
-Return ONLY a raw JSON array â€” no markdown, no explanation:
-[{“title”:””,”location”:””,”url”:””,”salary”:””,”description”:””,”posted”:””}]
+Return ONLY a raw JSON array — no markdown, no explanation:
+[{"title":"","location":"","url":"","salary":"","description":"","posted":""}]
 
 Rules:
 - url: copy the DIRECT job posting URL verbatim from the page â€" it must link to THIS specific listing, not the company's generic careers page. Do NOT construct or guess URLs. If no direct posting link is visible, use "" (empty string).
@@ -1402,9 +1423,9 @@ Rules:
     const response = await anthropic.messages.create({
       model:      MODEL_SONNET,
       max_tokens: 3000,
-      tools:      [{ type: “web_search_20250305”, name: “web_search”, max_uses: 2 }],
+      tools:      [{ type: "web_search_20250305", name: "web_search", max_uses: 2 }],
       system:     systemPrompt,
-      messages:   [{ role: “user”, content: `Find all open jobs at ${company.name}. Career page: ${careerPageUrl || company.name + “ careers”}` }],
+      messages:   [{ role: "user", content: `Find all open jobs at ${company.name}. Career page: ${careerPageUrl || company.name + " careers"}` }],
     });
 
     const raw = response.content
@@ -1431,7 +1452,7 @@ Rules:
   if (newJobs.length > 0) {
     const saves = newJobs.map(job => {
       const fp = makeWatchlistFingerprint(company.name, job.title, job.url);
-      return db.collection("watchlistJobs").add({
+      return db.collection("users").doc(userId).collection("watchlistJobs").add({
         userId,
         company:    company.name,
         companyUrl: company.url,
@@ -1458,7 +1479,7 @@ Rules:
   return newJobs.length;
 }
 
-// â”€â”€ Schedule helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// â"€â"€ Schedule helpers â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 function getLocalHour(date, timezone) {
   try {
     const parts = new Intl.DateTimeFormat("en-US", {
@@ -1483,7 +1504,7 @@ function computeSearchHours(prefs) {
   return hours;
 }
 
-// â”€â”€ Job search â€” runs every hour, fires per each user's schedule â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// â"€â"€ Job search — runs every hour, fires per each user's schedule â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 exports.dailyJobSearch = onSchedule(
   { schedule: "0 * * * *", timeZone: "UTC" },
   async () => {
@@ -1531,7 +1552,7 @@ exports.dailyJobSearch = onSchedule(
   }
 );
 
-// â”€â”€ Daily watchlist check â€” 9am Pacific â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// â"€â"€ Daily watchlist check — 9am Pacific â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 
 // -- Account deletion trigger: wipe ALL user data when a Firebase Auth account is deleted --------
 // Fires automatically whether the account is deleted from the Firebase console,
@@ -1564,33 +1585,54 @@ exports.onUserDeleted = functions.auth.user().onDelete(async (user) => {
   }
 
   await Promise.all([
-    // 1. Recursively delete the entire uid-keyed user subtree.
-    //    Covers /users/{uid}/onboarding/state now, and every subcollection
-    //    added in future migrations automatically -- no edits needed here.
+    // 1. UID-keyed subtree (onboarding/state, and any future UID-keyed data).
     admin.firestore().recursiveDelete(db.collection("users").doc(uid)),
 
-    // 2. Email-keyed user doc + all subcollections (preferences, knowledge, usage).
-    //    recursiveDelete handles the full subtree in one call.
+    // 2. Email-keyed user subtree: preferences, knowledge, usage, jobs,
+    //    documents, applications, watchlistJobs -- all now subcollections.
+    //    recursiveDelete handles the entire tree in one call.
     admin.firestore().recursiveDelete(db.collection("users").doc(email)),
 
-    // 3. Remaining flat top-level collections not yet migrated.
+    // 3. Flat top-level docs keyed by email.
     db.collection("fcmTokens")      .doc(email).delete(),
     db.collection("targetCompanies").doc(email).delete(),
+    db.collection("chats")          .doc(email).delete(),
 
-    // 4. Collections that store userId as a field -- query + batch-delete.
-    deleteQuery(db.collection("jobs")          .where("userId", "==", email)),
-    deleteQuery(db.collection("applications")  .where("userId", "==", email)),
-    deleteQuery(db.collection("documents")     .where("userId", "==", email)),
-    deleteQuery(db.collection("digests")       .where("userId", "==", email)),
-    deleteQuery(db.collection("activity")      .where("userId", "==", email)),
-    deleteQuery(db.collection("watchlistJobs") .where("userId", "==", email)),
-    // chats: cover both doc-keyed-by-email and userId-field patterns
-    db.collection("chats").doc(email).delete(),
-    deleteQuery(db.collection("chats").where("userId", "==", email)),
+    // 4. Field-keyed collections not yet migrated to subcollections.
+    deleteQuery(db.collection("digests")        .where("userId", "==", email)),
+    deleteQuery(db.collection("platform_events").where("userId", "==", email)),
+    deleteQuery(db.collection("chats")          .where("userId", "==", email)),
   ]);
 
   console.log('[onUserDeleted] Wipe complete for ' + uid);
 });
+
+// ── Weekly jobs_cache cleanup ─────────────────────────────────────────────────────
+exports.weeklyJobCacheCleanup = onSchedule(
+  { schedule: "0 2 * * 0", timeZone: "UTC" },
+  async () => {
+    try {
+      const staleSnap = await db.collection("jobs_cache")
+        .where("expiresAt", "<", new Date())
+        .limit(500)
+        .get();
+      if (staleSnap.empty) {
+        console.log("[weeklyJobCacheCleanup] No stale entries found");
+        return;
+      }
+      let batch = db.batch();
+      let count = 0;
+      for (const doc of staleSnap.docs) {
+        batch.delete(doc.ref);
+        if (++count === 400) { await batch.commit(); batch = db.batch(); count = 0; }
+      }
+      if (count > 0) await batch.commit();
+      console.log("[weeklyJobCacheCleanup] Deleted " + staleSnap.size + " stale cache entries");
+    } catch (err) {
+      console.error("[weeklyJobCacheCleanup] Error:", err.message);
+    }
+  }
+);
 
 exports.dailyWatchlistCheck = onSchedule(
   { schedule: "0 9 * * *", timeZone: "America/Los_Angeles" },

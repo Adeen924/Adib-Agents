@@ -259,7 +259,7 @@ async function saveApplication() {
 }
 async function deleteApplication(id) {
   if (!confirm("Delete this application?")) return;
-  await fetch(`${BACKEND_URL}/applications/${id}`, { method: "DELETE" });
+  await fetch(`${BACKEND_URL}/applications/${encodeURIComponent(userId)}/${id}`, { method: "DELETE" });
   loadApplications();
 }
 
@@ -390,8 +390,8 @@ async function openJobDetail(jobId, source) {
 
   try {
     const endpoint = source === "watchlist"
-      ? `${BACKEND_URL}/watchlist-jobs/detail/${encodeURIComponent(jobId)}`
-      : `${BACKEND_URL}/jobs/detail/${encodeURIComponent(jobId)}`;
+      ? `${BACKEND_URL}/watchlist-jobs/${encodeURIComponent(userId)}/detail/${encodeURIComponent(jobId)}`
+      : `${BACKEND_URL}/jobs/${encodeURIComponent(userId)}/detail/${encodeURIComponent(jobId)}`;
     const res = await fetch(endpoint);
     const j   = await res.json();
     if (!res.ok) throw new Error(j.error || "Not found");
@@ -828,7 +828,7 @@ function filterDocuments() {
 
 async function deleteDocument(id, type) {
   if (!confirm("Delete this document?")) return;
-  await fetch(`${BACKEND_URL}/documents/${id}`, { method: "DELETE" });
+  await fetch(`${BACKEND_URL}/documents/${encodeURIComponent(userId)}/${id}`, { method: "DELETE" });
   loadDocuments(type);
 }
 
