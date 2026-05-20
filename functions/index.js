@@ -249,55 +249,56 @@ function makeJobFingerprint(job) {
   return `${co}::${ti}`;
 }
 
-// â"€â"€ Resolve direct company application URLs for aggregator-sourced jobs â"€â"€â"€â"€â"€â"€â"€
-// For jobs sourced from Indeed or LinkedIn, search for the same role on the
-// company's own careers page / ATS so users can apply directly.
 const AGGREGATOR_RE = /indeed\.com|linkedin\.com/i;
 
-async function resolveDirectUrls(jobs) {
-  const targets = jobs.filter(j => j.url && AGGREGATOR_RE.test(j.url));
-  if (targets.length === 0) return;
+// â"€â"€ Verify job URLs via Google lookup â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+// For every job found, does a Google-style search ("[title] [company] apply")
+// and uses the first verified result as the apply URL. Batched into a single
+// Sonnet call so cost stays flat regardless of how many jobs are returned.
+async function verifyJobUrls(jobs) {
+  if (jobs.length === 0) return;
 
-  await Promise.all(targets.map(async (job) => {
-    try {
-      const res = await anthropic.messages.create({
-        model:      MODEL_SONNET,
-        max_tokens: 300,
-        tools:      [{ type: "web_search_20250305", name: "web_search", max_uses: 2 }],
-        messages: [{
-          role:    "user",
-          content: `Find the direct application URL for this job on the company's ATS or careers page. Try these searches in order â€" stop as soon as you find a match:
+  const jobList = jobs
+    .map((j, i) => `${i + 1}. "${j.title}" at ${j.company}`)
+    .join("\n");
 
-1. site:hiring.cafe "${job.company}" "${job.title}"
-2. site:boards.greenhouse.io "${job.company}" "${job.title}"
-3. site:jobs.lever.co "${job.company}" "${job.title}"
-4. site:wellfound.com/jobs "${job.company}" "${job.title}"
-5. "${job.company}" "${job.title}" (site:greenhouse.io OR site:lever.co OR site:workday.com OR site:smartrecruiters.com OR site:icims.com) -site:indeed.com -site:linkedin.com
+  try {
+    const res = await anthropic.messages.create({
+      model:      MODEL_SONNET,
+      max_tokens: 1024,
+      tools:      [{ type: "web_search_20250305", name: "web_search", max_uses: jobs.length + 2 }],
+      messages: [{
+        role:    "user",
+        content: `For each job below, search Google for the direct application link using the query: "[job title] [company] apply".
+Take the first search result URL that goes directly to that specific job posting.
 
-Role: "${job.title}"
-Company: ${job.company}
+${jobList}
 
-Return ONLY valid JSON â€" no explanation, no markdown:
-{"directUrl":"https://..."}
+Return ONLY a JSON array in the same order as the list above:
+[{"directUrl":"https://..."},...]
 
 Rules:
-- URL must link to THIS specific posting (must have a unique job ID or slug â€" not just /careers or /jobs)
-- Do NOT return an Indeed or LinkedIn URL
-- Use "" if no specific direct posting URL is found`,
-        }],
-      });
-      const raw   = res.content.filter(b => b.type === "text").map(b => b.text).join("").trim();
-      const match = raw.match(/\{[\s\S]*?\}/);
-      if (match) {
-        const resolved = JSON.parse(match[0]).directUrl || "";
-        if (resolved.startsWith("http") && !AGGREGATOR_RE.test(resolved)) {
-          job.directUrl = resolved;
-        }
+- Each directUrl must open the specific job posting, not a careers homepage or job board search page
+- Do NOT return indeed.com or linkedin.com URLs
+- Use "" for any job where you cannot find a verified direct posting URL`,
+      }],
+    });
+
+    const raw   = res.content.filter(b => b.type === "text").map(b => b.text).join("").trim();
+    const match = raw.match(/\[[\s\S]*\]/);
+    if (!match) return;
+
+    const results = JSON.parse(match[0]);
+    results.forEach((r, i) => {
+      if (i >= jobs.length) return;
+      const url = (r.directUrl || "").trim();
+      if (url.startsWith("http") && !AGGREGATOR_RE.test(url)) {
+        jobs[i].directUrl = url;
       }
-    } catch (err) {
-      console.warn(`resolveDirectUrls: ${job.title} @ ${job.company}: ${err.message}`);
-    }
-  }));
+    });
+  } catch (err) {
+    console.warn("verifyJobUrls failed:", err.message);
+  }
 }
 
 // Build a specific, criteria-aware search query
@@ -518,8 +519,8 @@ Do NOT search indeed.com or linkedin.com under any circumstances. Only include a
     return true;
   });
 
-  // Attempt to sharpen any non-ATS company career page URLs to a specific posting
-  await resolveDirectUrls(uniqueJobs);
+  // Google-verify every job URL and store the confirmed direct link as directUrl
+  await verifyJobUrls(uniqueJobs);
 
   // Save search summary to digests
   const digestRef = await db.collection("digests").add({
