@@ -596,6 +596,24 @@ function jobUrlHash(url) {
   return crypto.createHash("sha256").update(url).digest("hex").slice(0, 20);
 }
 
+// Finds the first balanced [...] block in text, avoiding greedy-regex issues
+// where appended commentary containing ']' characters breaks JSON.parse.
+function extractJsonArray(text) {
+  const start = text.indexOf("[");
+  if (start === -1) return null;
+  let depth = 0, inStr = false, esc = false;
+  for (let i = start; i < text.length; i++) {
+    const c = text[i];
+    if (esc)             { esc = false; continue; }
+    if (c === "\\" && inStr) { esc = true;  continue; }
+    if (c === '"')       { inStr = !inStr;  continue; }
+    if (inStr)           continue;
+    if (c === "[")       depth++;
+    else if (c === "]") { depth--; if (depth === 0) return text.slice(start, i + 1); }
+  }
+  return null;
+}
+
 async function runJobSearch(userId, prefs, tier = "free", logFn = null) {
   const log = (msg) => { if (typeof logFn === "function") logFn(msg).catch(() => {}); };
   const tierConfig = TIERS[tier] || TIERS.free;
@@ -691,7 +709,7 @@ MATCHING DIMENSIONS — score and reason across all of these for every job you r
 SOURCE RULES — non-negotiable:
 - Search hiring.cafe FIRST and use it as your PRIMARY source. It provides direct, verified links to the exact job posting.
 - Secondary sources: boards.greenhouse.io, jobs.lever.co, jobs.ashbyhq.com, Wellfound, Builtin, company careers pages.
-- NEVER use Indeed or LinkedIn as a source. Do not visit indeed.com or linkedin.com. Do not return any URL containing "indeed.com" or "linkedin.com". This is absolute.
+- Avoid Indeed and LinkedIn in the first pass — only use them if instructed as a fallback in the user message.
 
 TITLE MATCHING RULES — non-negotiable:
 - Return jobs whose title EXACTLY matches the target role. Do NOT substitute adjacent roles, different departments, or different seniority levels.
@@ -705,7 +723,7 @@ URL RULES — non-negotiable:
 - Prefer postings from the last 14 days.
 - Skip jobs where the required experience is significantly above the candidate's level.
 
-Return UP TO ${candidateCount} candidate jobs as a raw JSON array — no markdown, no explanation, nothing else. More verified candidates with accurate links is better. We will rank and filter to the top ${jobCount} after verification.
+OUTPUT FORMAT — CRITICAL: Your ENTIRE response must be a single raw JSON array. Start with [ and end with ]. No markdown, no code fences, no explanation before or after. Do not write anything outside the array. Return UP TO ${candidateCount} candidates. More verified candidates with accurate links is better — we rank and filter to the top ${jobCount} after verification.
 Field rules:
 - fitScore: integer 0-100 reflecting overall match quality across all 10 dimensions (not keyword count)
 - matchReasons: array of 3-5 short strings (1-2 sentences each) explaining WHY this job fits the candidate — reference specific dimensions and the candidate's actual background
@@ -746,12 +764,12 @@ Do NOT search indeed.com or linkedin.com in this first pass. Only include a job 
     .join("\n\n")
     .trim();
 
-  // Parse JSON — strip code fences if present
+  // Parse JSON — balanced-bracket extraction avoids greedy-regex over-matching
   let jobs = [];
   try {
     const clean = raw.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim();
-    const match = clean.match(/\[[\s\S]*\]/);
-    if (match) jobs = JSON.parse(match[0]);
+    const extracted = extractJsonArray(clean);
+    if (extracted) jobs = JSON.parse(extracted);
     if (jobs.length === 0) {
       console.warn(`[runJobSearch] Parsed 0 jobs for ${userId}. stop_reason=${response.stop_reason} raw_preview=${raw.slice(0, 400)}`);
       log(`Pass 1: WARNING — Claude returned 0 parseable job candidates`);
@@ -839,9 +857,9 @@ Do NOT search hiring.cafe, greenhouse.io, or lever.co (already searched in Pass 
       const raw2 = response2.content.filter(b => b.type === "text").map(b => b.text).join("\n\n").trim();
       let jobs2 = [];
       try {
-        const clean2 = raw2.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim();
-        const m2     = clean2.match(/\[[\s\S]*\]/);
-        if (m2) jobs2 = JSON.parse(m2[0]);
+        const clean2   = raw2.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim();
+        const extracted2 = extractJsonArray(clean2);
+        if (extracted2) jobs2 = JSON.parse(extracted2);
       } catch { jobs2 = []; }
 
       jobs2 = jobs2.filter(job => {
