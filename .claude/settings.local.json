@@ -55,7 +55,11 @@
       "PowerShell(firebase deploy --only \"functions\" 2>&1)",
       "WebFetch(domain:firebase.google.com)",
       "WebSearch",
-      "Bash(npm install *)"
+      "Bash(npm install *)",
+      "Bash(Get-ChildItem -Path \"C:\\\\Users\\\\amazl\\\\Documents\\\\GitHub\\\\Adib-Agents\" -Recurse -Force)",
+      "Bash(Format-Table -AutoSize)",
+      "Bash(Out-String -Width 300)",
+      "Bash(node -e \"JSON.parse\\(require\\('fs'\\).readFileSync\\('firestore.indexes.json','utf8'\\)\\); console.log\\('Valid JSON'\\)\")"
     ]
   }
 }
