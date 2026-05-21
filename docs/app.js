@@ -755,18 +755,23 @@ async function searchNow() {
     panel.textContent = "Waiting for search to start…\n";
 
     const logDoc = firebase.firestore().collection("search_logs").doc(userId);
-    unsubLog = logDoc.onSnapshot(snap => {
-      if (!snap.exists) return;
-      const d = snap.data();
-      const lines = Array.isArray(d.log) ? d.log : [];
-      panel.textContent = lines.join("\n");
-      if (d.status === "failed" && d.error) {
-        panel.textContent += `\n\nFAILED: ${d.error}`;
-      } else if (d.status === "completed") {
-        panel.textContent += "\n\nSearch complete.";
+    unsubLog = logDoc.onSnapshot(
+      snap => {
+        if (!snap.exists) return;
+        const d = snap.data();
+        const lines = Array.isArray(d.log) ? d.log : [];
+        panel.textContent = lines.join("\n");
+        if (d.status === "failed" && d.error) {
+          panel.textContent += `\n\nFAILED: ${d.error}`;
+        } else if (d.status === "completed") {
+          panel.textContent += "\n\nSearch complete.";
+        }
+        panel.scrollTop = panel.scrollHeight;
+      },
+      err => {
+        panel.textContent = `Log stream error: ${err.message}\n(Check browser console for details)`;
       }
-      panel.scrollTop = panel.scrollHeight;
-    });
+    );
   }
 
   try {
