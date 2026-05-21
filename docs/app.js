@@ -1377,9 +1377,8 @@ async function loadNotificationSettings() {
   try {
     const res  = await fetch(`${BACKEND_URL}/preferences/${encodeURIComponent(userId)}`);
     const data = await res.json();
-    const p    = data.preferences || {};
-    if (p.notifEmail) document.getElementById("settingNotifEmail").value = p.notifEmail;
-    if (p.notifPhone) document.getElementById("settingNotifPhone").value = formatPhoneDisplay(p.notifPhone);
+    if (data.notifEmail) document.getElementById("settingNotifEmail").value = data.notifEmail;
+    if (data.notifPhone) document.getElementById("settingNotifPhone").value = formatPhoneDisplay(data.notifPhone);
   } catch { /* non-fatal */ }
 }
 
@@ -1387,11 +1386,10 @@ async function loadScheduleSettings() {
   try {
     const res  = await fetch(`${BACKEND_URL}/preferences/${encodeURIComponent(userId)}`);
     const data = await res.json();
-    const p    = data.preferences || {};
-    if (p.searchEnabled !== undefined) document.getElementById("settingSearchEnabled").checked = p.searchEnabled;
-    if (p.timesPerDay)  document.getElementById("settingTimesPerDay").value = p.timesPerDay;
-    if (p.startHour !== undefined) document.getElementById("settingStartHour").value = p.startHour;
-    if (p.timezone)     document.getElementById("settingTimezone").value = p.timezone;
+    if (data.searchEnabled !== undefined) document.getElementById("settingSearchEnabled").checked = data.searchEnabled;
+    if (data.searchTimesPerDay) document.getElementById("settingTimesPerDay").value = data.searchTimesPerDay;
+    if (data.searchStartHour !== undefined) document.getElementById("settingStartHour").value = data.searchStartHour;
+    if (data.notifTimezone)  document.getElementById("settingTimezone").value = data.notifTimezone;
   } catch { /* non-fatal */ }
 }
 
@@ -1399,7 +1397,7 @@ async function loadCustomSites() {
   try {
     const res  = await fetch(`${BACKEND_URL}/preferences/${encodeURIComponent(userId)}`);
     const data = await res.json();
-    const sites = data.preferences?.customSites || "";
+    const sites = data.customSites || "";
     // Stored as comma-separated; display one per line for the textarea
     document.getElementById("prefCustomSites").value = sites
       ? sites.split(",").map(s => s.trim()).filter(Boolean).join("\n")
@@ -2150,15 +2148,50 @@ async function loadAdminPanel() {
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || "Failed to load");
 
-    const fmt = (n) => `$${(n || 0).toFixed(4)}`;
+    const fmtCost   = (n) => `$${(n || 0).toFixed(4)}`;
+    const fmtTokens = (n) => n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n || 0);
 
-    const mostActiveRows = (data.mostActiveUsers || []).map(u => `
-      <tr>
-        <td style="max-width:220px;overflow:hidden;text-overflow:ellipsis">${escapeHtml(u.userId)}</td>
-        <td><span class="tier-badge${u.tier === "pro" ? " pro" : ""}">${u.tier.toUpperCase()}</span></td>
-        <td>${u.count}</td>
-        <td>${fmt(u.spending30d)}</td>
-      </tr>`).join("") || `<tr><td colspan="4" class="empty-table">No activity recorded yet.</td></tr>`;
+    // Per-user expandable rows
+    const userRows = (data.userBreakdown || []).map((u, i) => {
+      const tid = `admin-user-${i}`;
+      const tierClass = u.tier === "pro" ? " pro" : "";
+      const periods = [
+        { label: "Today",     d: u.today },
+        { label: "Yesterday", d: u.yesterday },
+        { label: "7 Days",    d: u.week },
+        { label: "30 Days",   d: u.month },
+      ];
+      const detailHtml = periods.map(p => `
+        <tr style="border-top:none">
+          <td style="font-size:0.8rem;color:var(--text-muted);padding:4px 8px">${p.label}</td>
+          <td style="font-size:0.8rem;padding:4px 8px">${fmtCost(p.d.cost)}</td>
+          <td style="font-size:0.8rem;padding:4px 8px">${fmtTokens(p.d.inputTokens)} in / ${fmtTokens(p.d.outputTokens)} out</td>
+          <td style="font-size:0.8rem;padding:4px 8px">${p.d.runs} run${p.d.runs === 1 ? "" : "s"}</td>
+        </tr>`).join("");
+      return `
+        <tr class="admin-user-row" style="cursor:pointer" onclick="(function(){var el=document.getElementById('${tid}');el.style.display=el.style.display==='none'?'':'none';})()">
+          <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(u.userId)}</td>
+          <td><span class="tier-badge${tierClass}">${u.tier.toUpperCase()}</span></td>
+          <td>${fmtCost(u.today.cost)}</td>
+          <td>${fmtCost(u.yesterday.cost)}</td>
+          <td>${fmtCost(u.week.cost)}</td>
+          <td>${fmtCost(u.month.cost)}</td>
+          <td style="color:var(--text-muted);font-size:0.75rem">▼</td>
+        </tr>
+        <tr id="${tid}" style="display:none">
+          <td colspan="7" style="padding:0;background:var(--surface)">
+            <table style="width:100%;border-collapse:collapse">
+              <thead><tr style="border-bottom:1px solid var(--border)">
+                <th style="padding:6px 8px;font-size:0.75rem;text-align:left;color:var(--text-muted)">Period</th>
+                <th style="padding:6px 8px;font-size:0.75rem;text-align:left;color:var(--text-muted)">Cost</th>
+                <th style="padding:6px 8px;font-size:0.75rem;text-align:left;color:var(--text-muted)">Tokens</th>
+                <th style="padding:6px 8px;font-size:0.75rem;text-align:left;color:var(--text-muted)">Runs</th>
+              </tr></thead>
+              <tbody>${detailHtml}</tbody>
+            </table>
+          </td>
+        </tr>`;
+    }).join("") || `<tr><td colspan="7" class="empty-table">No activity recorded yet.</td></tr>`;
 
     const inactivePaidRows = (data.inactivePaidUsers || []).map(u => `
       <tr>
@@ -2173,17 +2206,21 @@ async function loadAdminPanel() {
     body.innerHTML = `
       <div class="settings-section">
         <div class="settings-section-title">Platform Spending</div>
-        <div class="stats-grid" style="max-width:640px">
+        <div class="stats-grid" style="max-width:800px">
           <div class="stat-card">
-            <div class="stat-value" style="font-size:1.2rem">${fmt(data.spending?.["24h"])}</div>
-            <div class="stat-label">Last 24 Hours</div>
+            <div class="stat-value" style="font-size:1.2rem">${fmtCost(data.spending?.today)}</div>
+            <div class="stat-label">Today</div>
           </div>
           <div class="stat-card">
-            <div class="stat-value" style="font-size:1.2rem">${fmt(data.spending?.week)}</div>
+            <div class="stat-value" style="font-size:1.2rem">${fmtCost(data.spending?.yesterday)}</div>
+            <div class="stat-label">Yesterday</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-value" style="font-size:1.2rem">${fmtCost(data.spending?.week)}</div>
             <div class="stat-label">Last 7 Days</div>
           </div>
           <div class="stat-card">
-            <div class="stat-value" style="font-size:1.2rem">${fmt(data.spending?.month)}</div>
+            <div class="stat-value" style="font-size:1.2rem">${fmtCost(data.spending?.month)}</div>
             <div class="stat-label">Last 30 Days</div>
           </div>
         </div>
@@ -2212,11 +2249,11 @@ async function loadAdminPanel() {
       </div>
 
       <div class="settings-section">
-        <div class="settings-section-title">Most Active Users (30 days)</div>
+        <div class="settings-section-title">User Cost Breakdown <span style="font-size:0.75rem;font-weight:400;color:var(--text-muted)">(click any row to expand)</span></div>
         <div style="overflow-x:auto">
           <table class="app-table">
-            <thead><tr><th>User</th><th>Tier</th><th>Runs</th><th>Spending (30d)</th></tr></thead>
-            <tbody>${mostActiveRows}</tbody>
+            <thead><tr><th>User</th><th>Tier</th><th>Today</th><th>Yesterday</th><th>7 Days</th><th>30 Days</th><th></th></tr></thead>
+            <tbody>${userRows}</tbody>
           </table>
         </div>
       </div>

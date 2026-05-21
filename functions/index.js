@@ -1,17 +1,20 @@
 ﻿const functions = require("firebase-functions/v1");
 const { onSchedule } = require("firebase-functions/v2/scheduler");
-const express   = require("express");
-const cors      = require("cors");
+const express    = require("express");
+const cors       = require("cors");
 const { Anthropic } = require("@anthropic-ai/sdk");
-const admin     = require("firebase-admin");
-const Stripe    = require("stripe");
-const crypto    = require("crypto");
+const admin      = require("firebase-admin");
+const Stripe     = require("stripe");
+const crypto     = require("crypto");
+const nodemailer = require("nodemailer");
 
 admin.initializeApp();
 
 // Live site URL — used as the click-through destination in push notifications.
 // Update this if you move to a custom domain.
 const SITE_URL = "https://adeen924.github.io/Adib-Agents";
+// Sender address for job alert emails — update when you create the business Gmail
+const GMAIL_SENDER = process.env.GMAIL_SENDER || "adibmazloom@gmail.com";
 
 const app = express();
 app.use(cors({ origin: true }));
@@ -1019,11 +1022,12 @@ Do NOT search hiring.cafe, greenhouse.io, or lever.co (already searched in Pass 
     ...(finalJobs.length > 0 ? { "stats.jobsFound": admin.firestore.FieldValue.increment(finalJobs.length) } : {}),
   }).catch(() => {});
 
-  // Send push notification if new jobs were found
+  // Send push + email notification if new jobs were found
   if (finalJobs.length > 0) {
     const preview    = finalJobs.slice(0, 2).map(j => `${j.title} at ${j.company}`).join(" · ");
     const notifTitle = finalJobs.length === 1 ? "1 new job found" : `${finalJobs.length} new jobs found`;
     sendPushNotification(userId, notifTitle, preview).catch(() => {});
+    sendEmailNotification(userId, finalJobs).catch(() => {});
   }
 
   return finalJobs;
@@ -1911,10 +1915,17 @@ app.get("/admin/stats/:userId", async (req, res) => {
       return res.status(403).json({ error: "Forbidden" });
     }
 
-    const now         = Date.now();
-    const cutoff24h   = now - 24 * 60 * 60 * 1000;
-    const cutoffWeek  = now -  7 * 24 * 60 * 60 * 1000;
-    const cutoffMonth = now - 30 * 24 * 60 * 60 * 1000;
+    const now = Date.now();
+
+    // Calendar-day boundaries (UTC)
+    const todayStart = new Date(); todayStart.setUTCHours(0, 0, 0, 0);
+    const yesterdayStart = new Date(todayStart); yesterdayStart.setUTCDate(yesterdayStart.getUTCDate() - 1);
+    const todayMs     = todayStart.getTime();
+    const yesterdayMs = yesterdayStart.getTime();
+
+    // Rolling windows
+    const cutoff7d  = now -  7 * 24 * 60 * 60 * 1000;
+    const cutoff30d = now - 30 * 24 * 60 * 60 * 1000;
 
     const [usersSnap, activitySnap] = await Promise.all([
       db.collection("users").get(),
@@ -1926,37 +1937,49 @@ app.get("/admin/stats/:userId", async (req, res) => {
     const proTierCount  = users.filter(u => u.tier === "pro").length;
     const activity      = activitySnap.docs.map(d => d.data());
 
-    const computeSpend = (cutoff) => {
+    // Aggregate events in [fromMs, toMs) into per-user buckets
+    const computeRange = (fromMs, toMs) => {
       const byUser = {};
       for (const a of activity) {
-        if ((a.createdAt?.toMillis?.() || 0) <= cutoff) continue;
-        if (!byUser[a.userId]) byUser[a.userId] = { cost: 0, runs: 0 };
-        byUser[a.userId].cost += a.cost || 0;
-        byUser[a.userId].runs += 1;
+        const ts = a.createdAt?.toMillis?.() || 0;
+        if (ts <= fromMs || ts > toMs) continue;
+        if (!byUser[a.userId]) byUser[a.userId] = { cost: 0, inputTokens: 0, outputTokens: 0, runs: 0 };
+        byUser[a.userId].cost         += a.cost         || 0;
+        byUser[a.userId].inputTokens  += a.inputTokens  || 0;
+        byUser[a.userId].outputTokens += a.outputTokens || 0;
+        byUser[a.userId].runs         += 1;
       }
       return { total: Object.values(byUser).reduce((s, u) => s + u.cost, 0), byUser };
     };
 
-    const stats24h   = computeSpend(cutoff24h);
-    const statsWeek  = computeSpend(cutoffWeek);
-    const statsMonth = computeSpend(cutoffMonth);
+    const statsToday     = computeRange(todayMs, now);
+    const statsYesterday = computeRange(yesterdayMs, todayMs);
+    const stats7d        = computeRange(cutoff7d, now);
+    const stats30d       = computeRange(cutoff30d, now);
 
     const activeUserIds = new Set(
-      activity.filter(a => (a.createdAt?.toMillis?.() || 0) > cutoffWeek).map(a => a.userId)
+      activity.filter(a => (a.createdAt?.toMillis?.() || 0) > cutoff7d).map(a => a.userId)
     );
 
-    const activityCountMonth = {};
-    activity
-      .filter(a => (a.createdAt?.toMillis?.() || 0) > cutoffMonth)
-      .forEach(a => { activityCountMonth[a.userId] = (activityCountMonth[a.userId] || 0) + 1; });
-
-    const mostActiveUsers = Object.entries(activityCountMonth)
-      .sort(([, a], [, b]) => b - a)
-      .slice(0, 10)
-      .map(([uid, count]) => {
-        const u = users.find(x => x.id === uid) || {};
-        return { userId: uid, count, tier: u.tier || "free", spending30d: statsMonth.byUser[uid]?.cost || 0 };
-      });
+    // Per-user breakdown for every user with any activity in the last 30 days
+    const empty = () => ({ cost: 0, inputTokens: 0, outputTokens: 0, runs: 0 });
+    const allActiveUids = new Set([
+      ...Object.keys(statsToday.byUser),
+      ...Object.keys(statsYesterday.byUser),
+      ...Object.keys(stats7d.byUser),
+      ...Object.keys(stats30d.byUser),
+    ]);
+    const userBreakdown = Array.from(allActiveUids).map(uid => {
+      const u = users.find(x => x.id === uid) || {};
+      return {
+        userId:    uid,
+        tier:      u.tier || "free",
+        today:     statsToday.byUser[uid]     || empty(),
+        yesterday: statsYesterday.byUser[uid] || empty(),
+        week:      stats7d.byUser[uid]        || empty(),
+        month:     stats30d.byUser[uid]       || empty(),
+      };
+    }).sort((a, b) => b.month.cost - a.month.cost);
 
     const inactivePaidUsers = users
       .filter(u => u.tier === "pro" && !activeUserIds.has(u.id))
@@ -1973,8 +1996,13 @@ app.get("/admin/stats/:userId", async (req, res) => {
       freeTierCount,
       proTierCount,
       activeUsersWeek: activeUserIds.size,
-      spending: { "24h": stats24h.total, week: statsWeek.total, month: statsMonth.total },
-      mostActiveUsers,
+      spending: {
+        today:     statsToday.total,
+        yesterday: statsYesterday.total,
+        week:      stats7d.total,
+        month:     stats30d.total,
+      },
+      userBreakdown,
       inactivePaidUsers,
       inactiveFreeUsers,
     });
@@ -2124,7 +2152,7 @@ exports.api = functions
   .runWith({
     timeoutSeconds: 540,
     secrets: ["ANTHROPIC_API_KEY", "STRIPE_SECRET_KEY", "STRIPE_WEBHOOK_SECRET",
-              "STRIPE_PRO_PRICE_ID", "STRIPE_PRO_ANNUAL_PRICE_ID"],
+              "STRIPE_PRO_PRICE_ID", "STRIPE_PRO_ANNUAL_PRICE_ID", "GMAIL_APP_PASSWORD", "GMAIL_SENDER"],
   })
   .https.onRequest(app);
 
@@ -2166,7 +2194,66 @@ async function sendPushNotification(userId, title, body) {
   }
 }
 
-// â"€â"€ Watchlist helpers â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+// ── Email notification sender ─────────────────────────────────────────────────
+async function sendEmailNotification(userId, jobs) {
+  if (!process.env.GMAIL_APP_PASSWORD || process.env.GMAIL_APP_PASSWORD === "your-16-char-app-password-here") return;
+  try {
+    const prefDoc = await db.collection("users").doc(userId).collection("preferences").doc("config").get();
+    const notifEmail = prefDoc.exists ? (prefDoc.data().notifEmail || "") : "";
+    if (!notifEmail) return;
+
+    const count = jobs.length;
+    const jobCards = jobs.slice(0, 5).map(j => {
+      const meta = [j.company, j.location, j.salary].filter(Boolean).join(" · ");
+      const url  = j.directUrl || j.url || "";
+      return `
+        <div style="border:1px solid #e5e5e5;border-radius:8px;padding:16px;margin-bottom:12px">
+          <p style="font-size:1rem;font-weight:600;color:#111;margin:0 0 4px">${j.title || "Untitled"}</p>
+          <p style="font-size:0.85rem;color:#666;margin:0 0 12px">${meta}</p>
+          ${url ? `<a href="${url}" style="display:inline-block;background:#d4af37;color:#0d0d0d;font-weight:700;text-decoration:none;padding:7px 14px;border-radius:6px;font-size:0.82rem">View job →</a>` : ""}
+        </div>`;
+    }).join("");
+
+    const moreNote = count > 5 ? `<p style="color:#666;font-size:0.85rem">+ ${count - 5} more — log in to see all</p>` : "";
+
+    const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"></head><body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f5f5f5;margin:0;padding:20px">
+      <div style="max-width:600px;margin:0 auto;background:white;border-radius:12px;overflow:hidden">
+        <div style="background:#0d0d0d;padding:24px 32px">
+          <p style="color:#d4af37;margin:0;font-size:1.1rem;font-weight:700">✦ CareerCopilot</p>
+          <p style="color:#fff;margin:6px 0 0;font-size:1.4rem;font-weight:700">${count} new job${count === 1 ? "" : "s"} found</p>
+        </div>
+        <div style="padding:28px 32px">
+          <p style="color:#444;margin:0 0 20px">Your AI agent found new matches. Here${count === 1 ? " it is" : " are the top picks"}:</p>
+          ${jobCards}
+          ${moreNote}
+          <p style="margin-top:24px">
+            <a href="${SITE_URL}/dashboard.html" style="display:inline-block;background:#d4af37;color:#0d0d0d;font-weight:700;text-decoration:none;padding:10px 20px;border-radius:8px">Open dashboard →</a>
+          </p>
+        </div>
+        <div style="padding:16px 32px;background:#f9f9f9;font-size:0.75rem;color:#999">
+          You're receiving this because you enabled job alerts on CareerCopilot.<br>
+          To stop, remove your email in Profile → Notification Contact.
+        </div>
+      </div>
+    </body></html>`;
+
+    const transporter = nodemailer.createTransport({
+      service: "gmail",
+      auth: { user: GMAIL_SENDER, pass: process.env.GMAIL_APP_PASSWORD },
+    });
+
+    await transporter.sendMail({
+      from: `"CareerCopilot" <${GMAIL_SENDER}>`,
+      to:   notifEmail,
+      subject: `${count} new job${count === 1 ? "" : "s"} found for you`,
+      html,
+    });
+  } catch (err) {
+    console.error(`sendEmailNotification failed for ${userId}:`, err.message);
+  }
+}
+
+// ── Watchlist helpers ─────────────────────────────────────────────────────────────────────────────────────────────────────────────
 function makeWatchlistFingerprint(company, title, url) {
   const jobId = extractJobId(url);
   if (jobId) return jobId;

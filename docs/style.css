@@ -67,6 +67,7 @@ body {
 input[type="email"],
 input[type="password"],
 input[type="text"],
+input[type="tel"],
 textarea {
   background: var(--surface-2);
   border: 1px solid var(--border);
