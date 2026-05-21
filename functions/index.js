@@ -433,7 +433,7 @@ async function verifyViaWebSearch(jobs) {
     const res = await anthropic.messages.create({
       model:      MODEL_SONNET,
       max_tokens: 2048,
-      tools:      [{ type: "web_search_20250305", name: "web_search", max_uses: jobs.length * 2 + 2 }],
+      tools:      [{ type: "web_search_20250305", name: "web_search", max_uses: Math.min(jobs.length + 1, 4) }],
       messages: [{
         role:    "user",
         content: `For each job below, search using MULTIPLE queries and collect ALL candidate apply-page URLs you find. Do NOT stop after the first result — compare several candidates per job before deciding.
@@ -786,6 +786,7 @@ Do NOT search indeed.com or linkedin.com under any circumstances. Only include a
 
   log(`Verifying ${uniqueJobs.length} URLs via ATS APIs → HTTP → web search…`);
   await verifyJobUrls(uniqueJobs);
+  log(`URL verification complete`);
 
   const verifiedJobs = uniqueJobs.filter(j => j.urlVerified);
   console.log(`[runJobSearch] Pass 1: ${uniqueJobs.length} candidates, ${verifiedJobs.length} verified for ${userId}`);
@@ -2043,7 +2044,7 @@ app.get("/watchlist-jobs/:userId", async (req, res) => {
 
 exports.api = functions
   .runWith({
-    timeoutSeconds: 300,
+    timeoutSeconds: 540,
     secrets: ["ANTHROPIC_API_KEY", "STRIPE_SECRET_KEY", "STRIPE_WEBHOOK_SECRET",
               "STRIPE_PRO_PRICE_ID", "STRIPE_PRO_ANNUAL_PRICE_ID"],
   })
