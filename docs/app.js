@@ -747,31 +747,27 @@ async function searchNow() {
   const body = document.getElementById("digestBody");
   body.innerHTML = '<div class="panel-loading">Searching for jobs — this may take a minute…</div>';
 
-  let unsubLog = null;
+  let pollTimer = null;
 
   if (userRole === "admin") {
     const panel = getOrCreateAdminLogPanel();
     panel.style.display = "";
-    panel.textContent = "Waiting for search to start…\n";
+    panel.textContent = "Starting search…";
 
-    const logDoc = firebase.firestore().collection("search_logs").doc(userId);
-    unsubLog = logDoc.onSnapshot(
-      snap => {
-        if (!snap.exists) return;
-        const d = snap.data();
+    pollTimer = setInterval(async () => {
+      try {
+        const r = await fetch(`${BACKEND_URL}/search/logs/${encodeURIComponent(userId)}`);
+        if (!r.ok) return;
+        const d = await r.json();
         const lines = Array.isArray(d.log) ? d.log : [];
-        panel.textContent = lines.join("\n");
-        if (d.status === "failed" && d.error) {
-          panel.textContent += `\n\nFAILED: ${d.error}`;
-        } else if (d.status === "completed") {
-          panel.textContent += "\n\nSearch complete.";
-        }
+        if (lines.length === 0) return;
+        let text = lines.join("\n");
+        if (d.status === "failed" && d.error) text += `\n\nFAILED: ${d.error}`;
+        else if (d.status === "completed")    text += "\n\nDone.";
+        panel.textContent = text;
         panel.scrollTop = panel.scrollHeight;
-      },
-      err => {
-        panel.textContent = `Log stream error: ${err.message}\n(Check browser console for details)`;
-      }
-    );
+      } catch { /* ignore transient poll errors */ }
+    }, 2000);
   }
 
   try {
@@ -784,7 +780,7 @@ async function searchNow() {
   } finally {
     btn.disabled = false;
     btn.textContent = "🔍 Search Now";
-    if (unsubLog) unsubLog();
+    if (pollTimer) clearInterval(pollTimer);
   }
 }
 

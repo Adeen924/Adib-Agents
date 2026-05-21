@@ -1784,6 +1784,24 @@ app.post("/search/now/:userId", async (req, res) => {
   }
 });
 
+// ── Admin search log polling ───────────────────────────────────────────────────
+// Frontend polls this every 2s instead of using Firestore onSnapshot directly,
+// avoiding client-side auth/rules issues entirely.
+app.get("/search/logs/:userId", async (req, res) => {
+  const { userId } = req.params;
+  try {
+    const userDoc = await db.collection("users").doc(userId).get();
+    if (!userDoc.exists || userDoc.data().role !== "admin") {
+      return res.status(403).json({ error: "Forbidden" });
+    }
+    const logDoc = await db.collection("search_logs").doc(userId).get();
+    if (!logDoc.exists) return res.json({ status: "none", log: [] });
+    res.json(logDoc.data());
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // â"€â"€ User / tier management â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 app.get("/user/:userId", async (req, res) => {
   const { userId } = req.params;
