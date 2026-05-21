@@ -817,6 +817,19 @@ function fitScoreBadge(score) {
   return `<span class="fit-score ${cls}">${n}% fit</span>`;
 }
 
+function jobFoundLabel(createdAt) {
+  const secs = createdAt?._seconds ?? createdAt?.seconds;
+  if (!secs) return "";
+  const d     = new Date(secs * 1000);
+  const now   = new Date();
+  const isToday = d.toDateString() === now.toDateString();
+  const time  = d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+  const label = isToday
+    ? `Today, ${time}`
+    : d.toLocaleDateString("en-US", { month: "short", day: "numeric" }) + `, ${time}`;
+  return `<div style="font-size:11px;color:var(--text-muted,#888);margin-bottom:6px;letter-spacing:0.02em">Found ${label}</div>`;
+}
+
 function jobCard(j, source) {
   const safeId     = escapeAttr(j.id);
   const safeSource = source === "watchlist" ? "watchlist" : "";
@@ -825,6 +838,7 @@ function jobCard(j, source) {
     : "";
   return `
   <div class="job-card" onclick="openJobDetail('${safeId}', '${safeSource}')">
+    ${jobFoundLabel(j.createdAt)}
     <div class="job-card-top">
       <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px">
         <div>

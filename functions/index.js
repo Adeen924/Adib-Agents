@@ -1725,15 +1725,19 @@ app.get("/jobs/:userId", async (req, res) => {
 app.post("/search/now/:userId", async (req, res) => {
   const { userId } = req.params;
   try {
-    const [prefDoc, tier] = await Promise.all([
+    const [prefDoc, tier, userDoc] = await Promise.all([
       db.collection("users").doc(userId).collection("preferences").doc("config").get(),
       getUserTier(userId),
+      db.collection("users").doc(userId).get(),
     ]);
     if (!prefDoc.exists) {
       return res.status(400).json({ error: "No preferences saved yet. Please set your preferences first." });
     }
     await ensureUser(userId);
-    await enforceFeatureLimit(userId, "searches_manual");
+    const role = userDoc.exists ? (userDoc.data().role || "customer") : "customer";
+    if (role !== "admin") {
+      await enforceFeatureLimit(userId, "searches_manual");
+    }
     const prefs = prefDoc.data();
     const jobs = await runJobSearch(userId, prefs, tier);
     res.json({ ok: true, jobCount: jobs.length, tier });
