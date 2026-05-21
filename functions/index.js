@@ -97,7 +97,7 @@ const MODEL_SONNET = "claude-sonnet-4-6";
 const MODEL_HAIKU  = "claude-haiku-4-5-20251001";
 // Job searching and URL verification use Haiku — structured extraction doesn't need Sonnet's
 // reasoning depth, and it's 3.75× cheaper while still supporting web_search_20250305.
-const MODEL_SEARCH = MODEL_HAIKU;
+const MODEL_SEARCH = MODEL_SONNET;
 
 // ── Application status system ─────────────────────────────────────────────────
 const ALL_STATUSES = ['Saved','Preparing','Applied','Assessment','Phone Screen','Interview','Final Interview','Offer','Rejected','Ghosted','Withdrawn','Accepted'];
@@ -110,8 +110,8 @@ const TIERS = {
   free: {
     label:               "Free",
     maxSearchesPerDay:   1,
-    webSearchesPerQuery: 5,
-    maxOutputTokens:     3000,
+    webSearchesPerQuery: 6,
+    maxOutputTokens:     6000,
     customSites:         false,
     maxTargetCompanies:  3,
     jobsPerSearch:       5,
@@ -120,8 +120,8 @@ const TIERS = {
   pro: {
     label:               "Pro",
     maxSearchesPerDay:   4,
-    webSearchesPerQuery: 7,
-    maxOutputTokens:     5000,
+    webSearchesPerQuery: 8,
+    maxOutputTokens:     8000,
     customSites:         true,
     maxTargetCompanies:  50,
     jobsPerSearch:       5,
@@ -728,7 +728,7 @@ Search in this order (complete ALL of them):
 4. site:wellfound.com ${query}
 5. site:builtin.com ${query}
 
-Do NOT search indeed.com or linkedin.com under any circumstances. Only include a job if the URL opens directly to that specific posting.`;
+Do NOT search indeed.com or linkedin.com in this first pass. Only include a job if the URL opens directly to that specific posting.`;
 
   log(`Pass 1: Asking Claude to find up to ${candidateCount} candidates (${tierConfig.webSearchesPerQuery} web searches)…`);
   const response = await anthropic.messages.create({
@@ -802,7 +802,7 @@ Do NOT search indeed.com or linkedin.com under any circumstances. Only include a
       userId, view: "job_search",
       inputTokens:  input_tokens,
       outputTokens: output_tokens,
-      cost: (input_tokens * INPUT_COST_HAIKU) + (output_tokens * OUTPUT_COST_HAIKU),
+      cost: (input_tokens * INPUT_COST_SONNET) + (output_tokens * OUTPUT_COST_SONNET),
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
     }).catch(() => {});
   }
@@ -821,9 +821,10 @@ Search in this order (complete ALL of them):
 1. site:jobs.ashbyhq.com ${query}
 2. site:builtin.com ${query}
 3. site:wellfound.com ${query}
-4. ${query} job opening
+4. site:linkedin.com/jobs ${query}
+5. site:indeed.com ${query}
 
-Do NOT search indeed.com, linkedin.com, hiring.cafe, greenhouse.io, or lever.co (already searched). Only include a job if the URL opens directly to that specific posting.`;
+Do NOT search hiring.cafe, greenhouse.io, or lever.co (already searched in Pass 1). Only include a job if the URL opens directly to that specific posting.`;
 
     try {
       const response2 = await anthropic.messages.create({
@@ -845,7 +846,6 @@ Do NOT search indeed.com, linkedin.com, hiring.cafe, greenhouse.io, or lever.co 
 
       jobs2 = jobs2.filter(job => {
         if (!job.url || !job.url.startsWith("http")) return false;
-        if (BANNED_DOMAINS.test(job.url)) return false;
         const fp = makeJobFingerprint(job);
         if (seenFingerprints.has(fp)) return false;
         seenFingerprints.add(fp);
@@ -868,7 +868,7 @@ Do NOT search indeed.com, linkedin.com, hiring.cafe, greenhouse.io, or lever.co 
           userId, view: "job_search_pass2",
           inputTokens:  input_tokens,
           outputTokens: output_tokens,
-          cost: (input_tokens * INPUT_COST_HAIKU) + (output_tokens * OUTPUT_COST_HAIKU),
+          cost: (input_tokens * INPUT_COST_SONNET) + (output_tokens * OUTPUT_COST_SONNET),
           createdAt: admin.firestore.FieldValue.serverTimestamp(),
         }).catch(() => {});
       }
