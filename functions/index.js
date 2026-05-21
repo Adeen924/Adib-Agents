@@ -95,6 +95,9 @@ const OUTPUT_COST = OUTPUT_COST_SONNET;
 
 const MODEL_SONNET = "claude-sonnet-4-6";
 const MODEL_HAIKU  = "claude-haiku-4-5-20251001";
+// Job searching and URL verification use Haiku — structured extraction doesn't need Sonnet's
+// reasoning depth, and it's 3.75× cheaper while still supporting web_search_20250305.
+const MODEL_SEARCH = MODEL_HAIKU;
 
 // ── Application status system ─────────────────────────────────────────────────
 const ALL_STATUSES = ['Saved','Preparing','Applied','Assessment','Phone Screen','Interview','Final Interview','Offer','Rejected','Ghosted','Withdrawn','Accepted'];
@@ -107,8 +110,8 @@ const TIERS = {
   free: {
     label:               "Free",
     maxSearchesPerDay:   1,
-    webSearchesPerQuery: 6,
-    maxOutputTokens:     7000,
+    webSearchesPerQuery: 5,
+    maxOutputTokens:     3000,
     customSites:         false,
     maxTargetCompanies:  3,
     jobsPerSearch:       5,
@@ -117,8 +120,8 @@ const TIERS = {
   pro: {
     label:               "Pro",
     maxSearchesPerDay:   4,
-    webSearchesPerQuery: 10,
-    maxOutputTokens:     10000,
+    webSearchesPerQuery: 7,
+    maxOutputTokens:     5000,
     customSites:         true,
     maxTargetCompanies:  50,
     jobsPerSearch:       5,
@@ -431,7 +434,7 @@ async function verifyViaWebSearch(jobs) {
   const jobList = jobs.map((j, i) => `${i + 1}. "${j.title}" at ${j.company}`).join("\n");
   try {
     const res = await anthropic.messages.create({
-      model:      MODEL_SONNET,
+      model:      MODEL_SEARCH,
       max_tokens: 2048,
       tools:      [{ type: "web_search_20250305", name: "web_search", max_uses: Math.min(jobs.length + 1, 4) }],
       messages: [{
@@ -663,7 +666,7 @@ async function runJobSearch(userId, prefs, tier = "free", logFn = null) {
 
   const jobCount      = tierConfig.jobsPerSearch || 5;
   // Request more candidates than needed so we can rank and pick the best after verification
-  const candidateCount = Math.max(jobCount * CANDIDATE_MULTIPLIER, 12);
+  const candidateCount = Math.max(jobCount * 2, 8);
 
   const systemPrompt = `You are an intelligent job matching agent. Search job boards broadly, find real current postings, and evaluate each one across multiple dimensions to surface the best matches for this specific candidate.
 
@@ -710,7 +713,7 @@ Field rules:
 - atsProvider: the ATS platform if identifiable from the URL or page — "greenhouse" | "lever" | "ashby" | "workday" | "smartrecruiters" | "icims" | "bamboohr" | "hiringcafe" | "" if unknown.
 - atsSlug: if the ATS is Greenhouse, Lever, or Ashby, extract the company slug from the URL (e.g. from boards.greenhouse.io/SLUG/jobs/... the slug is SLUG). Use "" if unknown.
 - posted: exact date as "Month DD, YYYY" (e.g. "May 10, 2026") or relative like "2 days ago". Never just a year. Use "" if unknown.
-- description: full job details — role responsibilities, required skills, nice-to-haves, team context. Aim for 6-8 sentences minimum.
+- description: role summary covering key responsibilities and top 3 required skills. 3-4 sentences max.
 
 [{"title":"","company":"","location":"","salary":"","experience":"","description":"","url":"","atsProvider":"","atsSlug":"","posted":"","fitScore":85,"matchReasons":["Experience Depth: ...","Transferable Skills: ...","Project Similarity: ..."]}]`;
 
@@ -729,8 +732,8 @@ Do NOT search indeed.com or linkedin.com under any circumstances. Only include a
 
   log(`Pass 1: Asking Claude to find up to ${candidateCount} candidates (${tierConfig.webSearchesPerQuery} web searches)…`);
   const response = await anthropic.messages.create({
-    model:      MODEL_SONNET,
-    max_tokens: Math.max(tierConfig.maxOutputTokens, 4000),
+    model:      MODEL_SEARCH,
+    max_tokens: tierConfig.maxOutputTokens,
     tools:      [{ type: "web_search_20250305", name: "web_search", max_uses: tierConfig.webSearchesPerQuery }],
     system:     systemPrompt,
     messages:   [{ role: "user", content: userQuery }],
@@ -799,7 +802,7 @@ Do NOT search indeed.com or linkedin.com under any circumstances. Only include a
       userId, view: "job_search",
       inputTokens:  input_tokens,
       outputTokens: output_tokens,
-      cost: (input_tokens * INPUT_COST_SONNET) + (output_tokens * OUTPUT_COST_SONNET),
+      cost: (input_tokens * INPUT_COST_HAIKU) + (output_tokens * OUTPUT_COST_HAIKU),
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
     }).catch(() => {});
   }
@@ -824,8 +827,8 @@ Do NOT search indeed.com, linkedin.com, hiring.cafe, greenhouse.io, or lever.co 
 
     try {
       const response2 = await anthropic.messages.create({
-        model:      MODEL_SONNET,
-        max_tokens: Math.max(tierConfig.maxOutputTokens, 4000),
+        model:      MODEL_SEARCH,
+        max_tokens: tierConfig.maxOutputTokens,
         tools:      [{ type: "web_search_20250305", name: "web_search", max_uses: tierConfig.webSearchesPerQuery }],
         system:     systemPrompt,
         messages:   [{ role: "user", content: secondPassQuery }],
@@ -865,7 +868,7 @@ Do NOT search indeed.com, linkedin.com, hiring.cafe, greenhouse.io, or lever.co 
           userId, view: "job_search_pass2",
           inputTokens:  input_tokens,
           outputTokens: output_tokens,
-          cost: (input_tokens * INPUT_COST_SONNET) + (output_tokens * OUTPUT_COST_SONNET),
+          cost: (input_tokens * INPUT_COST_HAIKU) + (output_tokens * OUTPUT_COST_HAIKU),
           createdAt: admin.firestore.FieldValue.serverTimestamp(),
         }).catch(() => {});
       }

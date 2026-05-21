@@ -51,7 +51,8 @@
       "Bash(node -e ' *)",
       "Bash(python3)",
       "PowerShell(Get-ChildItem -Path \"C:\\\\Users\\\\amazl\\\\Documents\\\\GitHub\\\\Adib-Agents\\\\backend\" -Recurse | Where-Object {$_.PSIsContainer} | Select-Object -ExpandProperty Name | Sort-Object | Get-Unique)",
-      "Bash(node --check docs/app.js)"
+      "Bash(node --check docs/app.js)",
+      "PowerShell(firebase deploy --only \"functions\" 2>&1)"
     ]
   }
 }
