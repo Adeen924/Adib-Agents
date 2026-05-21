@@ -914,11 +914,11 @@ async function openJobDetail(jobId, source) {
     document.getElementById("jobDetailCompany").textContent = [j.company, j.location].filter(Boolean).join(" · ");
 
     const urlEl = document.getElementById("jobDetailUrl");
-    if (j.url && j.url.startsWith("http")) {
-      urlEl.href = j.url; urlEl.style.display = "";
-    } else {
-      urlEl.style.display = "none";
-    }
+    const headerUrl = (j.directUrl && j.directUrl.startsWith("http")) ? j.directUrl
+                    : (j.url       && j.url.startsWith("http"))        ? j.url
+                    : null;
+    if (headerUrl) { urlEl.href = headerUrl; urlEl.style.display = ""; }
+    else           { urlEl.style.display = "none"; }
 
     currentJob = j;
 
@@ -1197,6 +1197,7 @@ async function networkForRole() {
           <div class="nc-step">Drafting personalized messages…</div>
         </div>
       </div>`;
+    document.getElementById("jd-ai-sections")?.prepend(section);
 
     let stepIdx = 0;
     const stepTimer = setInterval(() => {
