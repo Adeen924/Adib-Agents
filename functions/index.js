@@ -636,6 +636,9 @@ async function runJobSearch(userId, prefs, tier = "free", logFn = null) {
   const log = (msg) => { if (typeof logFn === "function") logFn(msg).catch(() => {}); };
   const tierConfig = TIERS[tier] || TIERS.free;
 
+  const jobCount       = tierConfig.jobsPerSearch || 5;
+  const candidateCount = Math.max(jobCount * CANDIDATE_MULTIPLIER, jobCount * 2);
+
   const query     = buildSearchQuery(prefs);
   const jobBoards = buildJobBoardsContext(prefs, tierConfig);
   log(`Search query: "${query}"`);
@@ -660,20 +663,21 @@ async function runJobSearch(userId, prefs, tier = "free", logFn = null) {
     }
   } catch { /* non-fatal */ }
 
-  // Fetch last 7 days of jobs to build deduplication fingerprints
+  // Load all of the user's previously found jobs to build deduplication fingerprints.
+  // seenFingerprints covers every job ever found so duplicates never resurface.
+  // recentJobs (7-day window) is kept separately just for the Claude prompt hint.
   let recentJobs = [];
   let seenFingerprints = new Set();
   try {
     const sevenDaysAgo = new Date();
     sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
-    const recentSnap = await db.collection("users").doc(userId).collection("jobs").get();
-    recentJobs = recentSnap.docs
-      .map(d => d.data())
-      .filter(j => {
-        const ts = j.createdAt?.toDate?.();
-        return !ts || ts > sevenDaysAgo;
-      });
-    seenFingerprints = new Set(recentJobs.map(makeJobFingerprint));
+    const allJobsSnap = await db.collection("users").doc(userId).collection("jobs").get();
+    const allPriorJobs = allJobsSnap.docs.map(d => d.data());
+    seenFingerprints = new Set(allPriorJobs.map(makeJobFingerprint));
+    recentJobs = allPriorJobs.filter(j => {
+      const ts = j.createdAt?.toDate?.();
+      return !ts || ts > sevenDaysAgo;
+    });
   } catch { /* non-fatal */ }
 
   // ── Cache-first lookup ──────────────────────────────────────────────────────
@@ -754,10 +758,6 @@ async function runJobSearch(userId, prefs, tier = "free", logFn = null) {
         recentJobs.slice(0, 20).map(j => `- ${j.company}: ${j.title}`).join("\n")
       }\n`
     : "";
-
-  const jobCount      = tierConfig.jobsPerSearch || 5;
-  // Request more candidates than needed so we can rank and pick the best after verification
-  const candidateCount = Math.max(jobCount * CANDIDATE_MULTIPLIER, jobCount * 2);
 
   const systemPrompt = `You are an intelligent job matching agent. Search job boards broadly, find real current postings, and evaluate each one across multiple dimensions to surface the best matches for this specific candidate.
 
@@ -1010,7 +1010,10 @@ Do NOT search hiring.cafe, greenhouse.io, or lever.co (already searched in Pass 
       expiresAt:   new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
     }, { merge: true });
   }).filter(Boolean);
-  await Promise.all([...savePromises, ...cacheWrites]);
+  // Save user's jobs first — this must succeed.
+  await Promise.all(savePromises);
+  // Cache writes are best-effort — a failure here must never kill the search.
+  Promise.all(cacheWrites).catch(err => console.warn("[jobs_cache] Write failed:", err.message));
 
   // Increment denormalised counters in the root user doc (non-blocking)
   db.collection("users").doc(userId).update({
