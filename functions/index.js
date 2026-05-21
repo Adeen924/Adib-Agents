@@ -514,6 +514,7 @@ const CONFIDENCE_THRESHOLD    = 0.70;
 const MIN_RESULT_TARGET       = 3;   // trigger second search pass if verified count is below this
 const PREFERRED_RESULT_TARGET = 5;   // preferred verified jobs per completed search
 const CANDIDATE_MULTIPLIER    = 3;   // request this many × more candidates than jobsPerSearch
+const MIN_CACHE_SERVE         = 3;   // min cache hits needed to skip live search entirely
 
 // 5-stage verification pipeline per job:
 // Stage 1–2: Collect candidates from ATS public APIs (Greenhouse/Lever/Ashby)
@@ -718,17 +719,17 @@ async function runJobSearch(userId, prefs, tier = "free", logFn = null) {
       if (seenFingerprints.has(fp)) continue;
       seenFingerprints.add(fp);
 
-      cacheHits.push({ ...job, urlVerified: true, applyUrlConfidence: 0.85 });
+      cacheHits.push({ ...job, directUrl: job.directUrl || job.url, urlVerified: true, applyUrlConfidence: 0.85 });
       if (cacheHits.length >= jobCount) break;
     }
 
-    log(`Cache: ${cacheHits.length}/${cacheSnap.size} entries matched (need ${jobCount})`);
-    if (cacheHits.length >= jobCount) {
+    log(`Cache: ${cacheHits.length}/${cacheSnap.size} entries matched (need ${MIN_CACHE_SERVE} to skip live search)`);
+    if (cacheHits.length >= MIN_CACHE_SERVE) {
       cacheHit = true;
       allVerifiedJobs = cacheHits;
-      log(`Cache HIT — skipping live Claude search, using ${cacheHits.length} cached jobs`);
+      log(`Cache HIT — skipping live search, serving ${cacheHits.length} cached job(s)`);
     } else if (cacheHits.length > 0) {
-      log(`Cache PARTIAL — ${cacheHits.length} cached job(s) found, live search will fill the rest`);
+      log(`Cache PARTIAL — ${cacheHits.length} cached job(s) found (need ${MIN_CACHE_SERVE}), proceeding to live search`);
       allVerifiedJobs = cacheHits;
     }
   } catch (cacheErr) {
@@ -758,6 +759,58 @@ async function runJobSearch(userId, prefs, tier = "free", logFn = null) {
         recentJobs.slice(0, 20).map(j => `- ${j.company}: ${j.title}`).join("\n")
       }\n`
     : "";
+
+  // Re-score cached jobs against THIS user's resume so fitScore is personalised, not inherited
+  // from whoever triggered the original cache entry. Uses Haiku — cheap, fast.
+  if (allVerifiedJobs.length > 0 && candidateProfile) {
+    try {
+      const jobList = allVerifiedJobs.map((j, i) =>
+        `JOB ${i}:\nTitle: ${j.title}\nCompany: ${j.company}\nLocation: ${j.location}\n${j.salary ? `Salary: ${j.salary}\n` : ""}Description: ${(j.description || "").slice(0, 600)}`
+      ).join("\n\n");
+
+      const scoreRes = await anthropic.messages.create({
+        model:      MODEL_HAIKU,
+        max_tokens: 1024,
+        messages: [{
+          role:    "user",
+          content: `Score these job listings for this specific candidate. Return ONLY a raw JSON array — no markdown, no explanation.
+
+CANDIDATE PROFILE:
+${candidateProfile}
+
+REQUIRED CRITERIA:
+${criteria || "No specific criteria."}
+
+JOBS TO SCORE:
+${jobList}
+
+Return exactly ${allVerifiedJobs.length} objects in the same order:
+[{"fitScore":85,"matchReasons":["Experience Depth: ...","Transferable Skills: ...","Project Similarity: ..."]}]
+
+fitScore: integer 0–100 reflecting overall match quality.
+matchReasons: 3–5 short strings referencing this candidate's specific background — not generic phrases.`,
+        }],
+      });
+
+      trackCost(userId, "cache_score", scoreRes.usage, true);
+      const scoreRaw = extractJsonArray(scoreRes.content[0]?.text || "");
+      if (scoreRaw) {
+        const parsed = JSON.parse(scoreRaw);
+        parsed.forEach((s, i) => {
+          if (allVerifiedJobs[i] && typeof s.fitScore === "number") {
+            allVerifiedJobs[i] = {
+              ...allVerifiedJobs[i],
+              fitScore:     s.fitScore,
+              matchReasons: Array.isArray(s.matchReasons) ? s.matchReasons : [],
+            };
+          }
+        });
+        log(`Cache: Re-scored ${parsed.length} job(s) against user profile`);
+      }
+    } catch (scoreErr) {
+      log(`Cache: Score pass skipped (${scoreErr.message}) — using stored scores`);
+    }
+  }
 
   const systemPrompt = `You are an intelligent job matching agent. Search job boards broadly, find real current postings, and evaluate each one across multiple dimensions to surface the best matches for this specific candidate.
 
@@ -1004,6 +1057,7 @@ Do NOT search hiring.cafe, greenhouse.io, or lever.co (already searched in Pass 
       location:    j.location    || "",
       salary:      j.salary      || "",
       description: j.description || "",
+      directUrl:   j.directUrl || j.url,
       url:         j.directUrl || j.url,
       posted:      j.posted      || "",
       cachedAt:    admin.firestore.FieldValue.serverTimestamp(),
@@ -2046,6 +2100,7 @@ app.get("/admin/user-detail/:targetUserId", async (req, res) => {
       job_search:       "search",
       job_search_pass2: "search",
       search_verify:    "search",
+      cache_score:      "search",
       resume:           "resume",
       cover_letter:     "cover_letter",
       interview_prep:   "interview_prep",

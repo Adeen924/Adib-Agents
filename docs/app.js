@@ -975,7 +975,7 @@ async function openJobDetail(jobId, source) {
             </a>
             <div class="jd-url-preview">${escapeHtml(j.directUrl)}</div>
           </div>
-          ${j.url && j.url.startsWith("http") ? `
+          ${j.url && j.url.startsWith("http") && j.url !== j.directUrl ? `
           <div>
             <a href="${escapeHtml(j.url)}" target="_blank" rel="noopener" class="btn btn-ghost" style="display:inline-flex;font-size:0.82rem">
               Also on ${/indeed\.com/i.test(j.url) ? "Indeed" : /linkedin\.com/i.test(j.url) ? "LinkedIn" : "aggregator"} ↗
