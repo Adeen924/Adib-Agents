@@ -1,0 +1,74 @@
+{
+  "indexes": [
+    {
+      "collectionGroup": "company_watch_index",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "nextScanAt", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "company_watch_index",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "activeWatchers", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "company_jobs",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "active",     "order": "ASCENDING" },
+        { "fieldPath": "lastSeenAt", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "company_jobs",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "firstSeenAt", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "company_jobs",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "companyId",   "order": "ASCENDING" },
+        { "fieldPath": "active",      "order": "ASCENDING" },
+        { "fieldPath": "firstSeenAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "watchlistSubscriptions",
+      "queryScope": "COLLECTION_GROUP",
+      "fields": [
+        { "fieldPath": "companyId", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "jobs_cache",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "titleKeywords", "arrayConfig": "CONTAINS" },
+        { "fieldPath": "expiresAt",     "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "jobs_cache",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "titleKeywords", "arrayConfig": "CONTAINS" },
+        { "fieldPath": "remote",        "order": "ASCENDING" },
+        { "fieldPath": "expiresAt",     "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "jobs",
+      "queryScope": "COLLECTION_GROUP",
+      "fields": [
+        { "fieldPath": "createdAt", "order": "ASCENDING" }
+      ]
+    }
+  ],
+  "fieldOverrides": []
+}

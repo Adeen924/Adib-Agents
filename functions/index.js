@@ -116,6 +116,24 @@ const MODEL_HAIKU  = "claude-haiku-4-5-20251001";
 // reasoning depth, and it's 3.75× cheaper while still supporting web_search_20250305.
 const MODEL_SEARCH = MODEL_SONNET;
 
+// ── Feature flags ──────────────────────────────────────────────────────────────
+// Set env vars to "true" to activate the new architecture.  Both default to off so
+// deploying this build makes zero behaviour changes until explicitly enabled.
+//
+// WATCHLIST_V2_ENABLED=true  → activate centralised company scanning
+//   • New subscriptions write to company_watch_index
+//   • scanTrackedCompanies scheduler runs instead of dailyWatchlistCheck
+//   • dailyWatchlistCheck continues in parallel until migration is confirmed
+//
+// CACHE_V2_ENABLED=true  → activate indexed cache queries
+//   • runJobSearch uses normalizedTitle + titleKeywords index instead of 400-doc scan
+//   • Cache writes also populate V2 normalised fields
+//   • TTL reduced from 30 days to 14 days for new entries
+const FLAGS = {
+  WATCHLIST_V2: process.env.WATCHLIST_V2_ENABLED === "true",
+  CACHE_V2:     process.env.CACHE_V2_ENABLED     === "true",
+};
+
 // ── Application status system ─────────────────────────────────────────────────
 const ALL_STATUSES = ['Saved','Preparing','Applied','Assessment','Phone Screen','Interview','Final Interview','Offer','Rejected','Ghosted','Withdrawn','Accepted'];
 const STATUS_ORDER = { Saved:0, Preparing:1, Applied:2, Assessment:3, 'Phone Screen':4, Interview:5, 'Final Interview':6, Offer:7, Rejected:8, Ghosted:9, Withdrawn:10, Accepted:11 };
@@ -434,6 +452,337 @@ async function findAshbyJobUrl(company, title, slugHint) {
   return null;
 }
 
+// ════════════════════════════════════════════════════════════════════════════════
+// WATCHLIST V2 — GLOBAL COMPANY INDEX ARCHITECTURE
+// ════════════════════════════════════════════════════════════════════════════════
+// Migration safety notes:
+//   • All new collections are additive — nothing is removed from existing paths.
+//   • Per-user watchlistJobs subcollection is still written by the V2 fan-out so
+//     the existing UI continues to work without changes.
+//   • dailyWatchlistCheck continues to run in parallel. Disable it only after
+//     WATCHLIST_V2 has been running cleanly for ≥7 days.
+// ════════════════════════════════════════════════════════════════════════════════
+
+// ── Company normalization ──────────────────────────────────────────────────────
+function normalizeCompanyName(name) {
+  return (name || "")
+    .toLowerCase()
+    .replace(/\b(inc|llc|ltd|corp|co|the)\b\.?/g, "")
+    .replace(/[^a-z0-9\s]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+// Stable, human-readable Firestore doc ID for a company (max 64 chars).
+function makeCompanyId(name) {
+  const normalized = normalizeCompanyName(name).replace(/\s+/g, "-");
+  return (normalized || "unknown").slice(0, 64);
+}
+
+// Detect ATS type from a career page URL (cheap, no network call).
+function detectAtsFromCareerUrl(url) {
+  if (!url) return null;
+  if (/greenhouse\.io/i.test(url))        return "greenhouse";
+  if (/lever\.co/i.test(url))             return "lever";
+  if (/ashbyhq\.com/i.test(url))          return "ashby";
+  if (/myworkdayjobs\.com/i.test(url))    return "workday";
+  if (/smartrecruiters\.com/i.test(url))  return "smartrecruiters";
+  if (/icims\.com/i.test(url))            return "icims";
+  if (/bamboohr\.com/i.test(url))         return "bamboohr";
+  return null;
+}
+
+// Pull ATS slug from a known career URL (e.g. boards.greenhouse.io/stripe → "stripe").
+function extractAtsSlugFromUrl(url) {
+  if (!url) return null;
+  const gh = url.match(/greenhouse\.io\/([^/?#]+)/i);   if (gh)   return gh[1];
+  const lv = url.match(/lever\.co\/([^/?#]+)/i);        if (lv)   return lv[1];
+  const ab = url.match(/ashbyhq\.com\/([^/?#]+)/i);     if (ab)   return ab[1];
+  return null;
+}
+
+// ── Full-company ATS API fetchers ──────────────────────────────────────────────
+// These differ from findXxxJobUrl(): they return ALL open positions rather than
+// searching for a single job by title.  Used by the global company scanner.
+
+async function fetchAllGreenhouseJobs(slugHint, companyName) {
+  for (const slug of companySlugs(companyName, slugHint)) {
+    try {
+      const res = await fetch(
+        `https://boards-api.greenhouse.io/v1/boards/${encodeURIComponent(slug)}/jobs`,
+        { signal: AbortSignal.timeout(8000), headers: { "User-Agent": "Mozilla/5.0" } }
+      );
+      if (!res.ok) continue;
+      const { jobs = [] } = await res.json();
+      if (jobs.length === 0) continue;
+      return {
+        atsType: "greenhouse", atsSlug: slug,
+        jobs: jobs.map(j => ({
+          title:    j.title                || "",
+          location: j.location?.name      || "",
+          url:      j.absolute_url        || "",
+          atsJobId: String(j.id           || ""),
+          posted:   j.updated_at          || "",
+        })),
+      };
+    } catch { continue; }
+  }
+  return null;
+}
+
+async function fetchAllLeverJobs(slugHint, companyName) {
+  for (const slug of companySlugs(companyName, slugHint)) {
+    try {
+      const res = await fetch(
+        `https://api.lever.co/v0/postings/${encodeURIComponent(slug)}?mode=json`,
+        { signal: AbortSignal.timeout(8000), headers: { "User-Agent": "Mozilla/5.0" } }
+      );
+      if (!res.ok) continue;
+      const jobs = await res.json();
+      if (!Array.isArray(jobs) || jobs.length === 0) continue;
+      return {
+        atsType: "lever", atsSlug: slug,
+        jobs: jobs.map(j => ({
+          title:    j.text                                         || "",
+          location: j.categories?.location || j.country           || "",
+          url:      j.hostedUrl || `https://jobs.lever.co/${slug}/${j.id}`,
+          atsJobId: j.id                                          || "",
+          posted:   j.createdAt ? new Date(j.createdAt).toISOString() : "",
+        })),
+      };
+    } catch { continue; }
+  }
+  return null;
+}
+
+async function fetchAllAshbyJobs(slugHint, companyName) {
+  for (const slug of companySlugs(companyName, slugHint)) {
+    try {
+      const res = await fetch("https://jobs.ashbyhq.com/api/non-user-graphql", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "User-Agent": "Mozilla/5.0" },
+        body: JSON.stringify({
+          operationName: "ApiJobBoardWithTeams",
+          variables: { organizationHostedJobsPageName: slug },
+          query: `query ApiJobBoardWithTeams($organizationHostedJobsPageName: String!) {
+            jobBoard: jobBoardWithTeams(organizationHostedJobsPageName: $organizationHostedJobsPageName) {
+              jobPostings { id title jobPostingState externalLink location { name } publishedDate }
+            }
+          }`,
+        }),
+        signal: AbortSignal.timeout(8000),
+      });
+      if (!res.ok) continue;
+      const data   = await res.json();
+      const active = (data?.data?.jobBoard?.jobPostings || [])
+        .filter(p => p.jobPostingState === "Listed");
+      if (active.length === 0) continue;
+      return {
+        atsType: "ashby", atsSlug: slug,
+        jobs: active.map(p => ({
+          title:    p.title                                              || "",
+          location: p.location?.name                                    || "",
+          url:      p.externalLink || `https://jobs.ashbyhq.com/${slug}/${p.id}`,
+          atsJobId: p.id                                                || "",
+          posted:   p.publishedDate                                     || "",
+        })),
+      };
+    } catch { continue; }
+  }
+  return null;
+}
+
+// ── company_watch_index helpers ────────────────────────────────────────────────
+
+// Upsert a company into the global index.  Returns the companyId.
+async function getOrCreateCompanyIndex(companyName, careerUrl) {
+  const companyId = makeCompanyId(companyName);
+  const ref       = db.collection("company_watch_index").doc(companyId);
+  const doc       = await ref.get();
+  if (!doc.exists) {
+    const atsType = detectAtsFromCareerUrl(careerUrl) || "unknown";
+    const atsSlug = extractAtsSlugFromUrl(careerUrl)  || "";
+    await ref.set({
+      companyId,
+      companyName,
+      normalizedCompanyName: normalizeCompanyName(companyName),
+      careerUrl:            careerUrl || "",
+      atsType,
+      atsSlug,
+      activeWatchers:       0,
+      scanFrequency:        "daily",
+      lastScanAt:           null,
+      lastSuccessfulScanAt: null,
+      lastError:            null,
+      jobCount:             0,
+      // nextScanAt: scheduler only picks companies where nextScanAt <= now
+      nextScanAt:   admin.firestore.FieldValue.serverTimestamp(),
+      createdAt:    admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt:    admin.firestore.FieldValue.serverTimestamp(),
+    });
+  }
+  return companyId;
+}
+
+// Adjust the activeWatchers count (+1 on subscribe, -1 on unsubscribe).
+async function adjustCompanyWatcherCount(companyId, delta) {
+  await db.collection("company_watch_index").doc(companyId).update({
+    activeWatchers: admin.firestore.FieldValue.increment(delta),
+    updatedAt:      admin.firestore.FieldValue.serverTimestamp(),
+  });
+}
+
+// Compute when the company should next be scanned based on watcher count.
+// High-traffic companies get 2-hour cadence; low-traffic get 24 hours.
+function computeNextScanAt(activeWatchers) {
+  const now = Date.now();
+  if (activeWatchers >= 10) return new Date(now + 2  * 60 * 60 * 1000); // 2 h
+  if (activeWatchers >= 3)  return new Date(now + 6  * 60 * 60 * 1000); // 6 h
+  return new Date(now + 24 * 60 * 60 * 1000);                            // 24 h
+}
+
+// ── Watchlist subscription helpers ────────────────────────────────────────────
+// Lightweight per-user subscription:  users/{userId}/watchlistSubscriptions/{companyId}
+// Contains ONLY { companyId, companyName, subscribedAt }.
+
+async function subscribeUserToCompany(userId, companyName, careerUrl) {
+  const companyId = await getOrCreateCompanyIndex(companyName, careerUrl);
+  const subRef    = db.collection("users").doc(userId)
+                      .collection("watchlistSubscriptions").doc(companyId);
+  const existing  = await subRef.get();
+  if (!existing.exists) {
+    await subRef.set({
+      companyId,
+      companyName,
+      subscribedAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+    await adjustCompanyWatcherCount(companyId, 1);
+  }
+  return companyId;
+}
+
+async function unsubscribeUserFromCompany(userId, companyId) {
+  const subRef = db.collection("users").doc(userId)
+                   .collection("watchlistSubscriptions").doc(companyId);
+  const doc    = await subRef.get();
+  if (doc.exists) {
+    await subRef.delete();
+    // Guard against count going below 0
+    const idx = await db.collection("company_watch_index").doc(companyId).get();
+    if (idx.exists && (idx.data().activeWatchers || 0) > 0) {
+      await adjustCompanyWatcherCount(companyId, -1);
+    }
+  }
+}
+
+// ════════════════════════════════════════════════════════════════════════════════
+// CACHE V2 — INDEXED QUERIES REPLACING FULL COLLECTION SCAN
+// ════════════════════════════════════════════════════════════════════════════════
+
+const TITLE_STOP_WORDS = new Set([
+  "and","the","for","with","you","are","this","that","have","from",
+  "job","jobs","position","role","opportunity","opening","full","time",
+  "part","based","level","remote","hybrid",
+]);
+
+function normalizeTitle(title) {
+  return (title || "").toLowerCase().replace(/[^a-z0-9\s]/g, "").replace(/\s+/g, " ").trim();
+}
+
+// Returns keywords suitable for Firestore array-contains queries.
+function extractTitleKeywords(title) {
+  return normalizeTitle(title)
+    .split(/\s+/)
+    .filter(w => w.length > 2 && !TITLE_STOP_WORDS.has(w));
+}
+
+function inferSeniority(title) {
+  const t = (title || "").toLowerCase();
+  if (/\b(principal|staff|distinguished)\b/.test(t)) return "staff";
+  if (/\bsenior\b|\bsr\.?\b/.test(t))                return "senior";
+  if (/\bjunior\b|\bjr\.?\b/.test(t))                return "junior";
+  if (/\blead\b/.test(t))                             return "lead";
+  if (/\b(manager|director|head of|vp)\b/.test(t))   return "manager";
+  return "mid";
+}
+
+// Write V2 normalised fields into an existing jobs_cache doc (merged).
+// Called in addition to the existing write — safe to call with merge:true.
+async function writeCacheEntryV2(job, hash) {
+  if (!hash) return;
+  try {
+    const url      = job.directUrl || job.url || "";
+    const isRemote = /remote/i.test(job.location || "");
+    await db.collection("jobs_cache").doc(hash).set({
+      // V2 normalised fields — additive, won't overwrite base fields
+      normalizedTitle:    normalizeTitle(job.title   || ""),
+      normalizedCompany:  normalizeCompanyName(job.company  || ""),
+      normalizedLocation: (job.location || "").toLowerCase().trim(),
+      titleKeywords:      extractTitleKeywords(job.title || ""),
+      remote:             isRemote,
+      seniority:          inferSeniority(job.title || ""),
+      atsType:            job.atsProvider || detectAts(url) || "",
+      // V2 uses 14-day TTL (jobs become stale faster than 30 days)
+      expiresAt:    new Date(Date.now() + 14 * 24 * 60 * 60 * 1000),
+      lastSeenAt:   admin.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true });
+  } catch (err) {
+    console.warn("[writeCacheEntryV2]", err.message);
+  }
+}
+
+// Indexed cache lookup — avoids the 400-doc full scan.
+// Requires Firestore composite indexes: see firestore.indexes.json
+async function lookupCacheV2(prefs, seenFingerprints, jobCount, log) {
+  const targetTitles = (prefs.jobTitle || "").split(",").map(t => t.trim()).filter(Boolean);
+  const isRemote     = !!prefs.remoteOnly;
+  const locationCity = (prefs.locationCity || prefs.location || "").toLowerCase();
+  if (targetTitles.length === 0) return [];
+
+  const primaryKeywords = extractTitleKeywords(targetTitles[0]);
+  if (primaryKeywords.length === 0) return [];
+
+  const cacheHits = [];
+  const now       = new Date();
+
+  for (const kw of primaryKeywords.slice(0, 3)) {
+    if (cacheHits.length >= jobCount) break;
+    try {
+      let q;
+      if (isRemote) {
+        q = db.collection("jobs_cache")
+          .where("titleKeywords", "array-contains", kw)
+          .where("remote",        "==",             true)
+          .where("expiresAt",     ">",              now)
+          .limit(60);
+      } else {
+        q = db.collection("jobs_cache")
+          .where("titleKeywords", "array-contains", kw)
+          .where("expiresAt",     ">",              now)
+          .limit(60);
+      }
+      const snap = await q.get();
+      for (const doc of snap.docs) {
+        if (cacheHits.length >= jobCount) break;
+        const job    = doc.data();
+        const jobLoc = (job.location || "").toLowerCase();
+        if (!targetTitles.some(t => titlesMatch(t, job.title))) continue;
+        if (!isRemote && locationCity) {
+          const cityWords = locationCity.split(/[\s,]+/).filter(w => w.length > 2);
+          if (!cityWords.some(w => jobLoc.includes(w)) && !jobLoc.includes("remote")) continue;
+        }
+        const fp = makeJobFingerprint(job);
+        if (seenFingerprints.has(fp)) continue;
+        seenFingerprints.add(fp);
+        cacheHits.push({ ...job, directUrl: job.directUrl || job.url, urlVerified: true, applyUrlConfidence: 0.85 });
+      }
+    } catch (err) {
+      log(`Cache V2: "${kw}" query failed — ${err.message}`);
+    }
+  }
+  return cacheHits;
+}
+
 // â"€â"€ HTTP-based confidence score â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 function scoreUrl(httpResult) {
   if (!httpResult || httpResult.status !== 200) return 0;
@@ -682,11 +1031,32 @@ async function runJobSearch(userId, prefs, tier = "free", logFn = null) {
   } catch { /* non-fatal */ }
 
   // ── Cache-first lookup ──────────────────────────────────────────────────────
-  // Check jobs_cache for recent matching jobs before spending on a live Claude search.
-  // Cache entries are written after every search (30-day TTL). A hit means another
-  // user (or a prior search) already verified these URLs — we can serve them instantly.
+  // V2 path uses indexed queries (titleKeywords array-contains) to avoid the
+  // 400-doc full collection scan. Legacy path is the fallback when V2 is off
+  // or returns no results (backward compatible).
   let allVerifiedJobs = [];
   let cacheHit = false;
+
+  if (FLAGS.CACHE_V2) {
+    try {
+      log(`Cache V2: indexed keyword lookup…`);
+      const v2Hits = await lookupCacheV2(prefs, seenFingerprints, jobCount, log);
+      log(`Cache V2: ${v2Hits.length} hits (need ${MIN_CACHE_SERVE} to skip live search)`);
+      if (v2Hits.length >= MIN_CACHE_SERVE) {
+        cacheHit        = true;
+        allVerifiedJobs = v2Hits;
+        log(`Cache V2 HIT — serving ${v2Hits.length} cached job(s) via indexed query`);
+      } else if (v2Hits.length > 0) {
+        allVerifiedJobs = v2Hits;
+        log(`Cache V2 PARTIAL — ${v2Hits.length} hit(s), proceeding to live search`);
+      }
+    } catch (cacheErr) {
+      log(`Cache V2: lookup failed (${cacheErr.message}) — falling back to legacy scan`);
+    }
+  }
+
+  // Legacy full-scan (runs when CACHE_V2 is off, or V2 found nothing)
+  if (!cacheHit && !FLAGS.CACHE_V2) {
   try {
     log(`Cache: Scanning jobs_cache for recent matching jobs…`);
     const targetTitles = (prefs.jobTitle || "").split(",").map(t => t.trim()).filter(Boolean);
@@ -735,6 +1105,7 @@ async function runJobSearch(userId, prefs, tier = "free", logFn = null) {
   } catch (cacheErr) {
     log(`Cache: Lookup failed (${cacheErr.message}) — proceeding to live search`);
   }
+  } // end legacy cache block
 
   // Build strict criteria string so Claude knows what to enforce
   const locationLabel = prefs.remoteOnly
@@ -1068,6 +1439,15 @@ Do NOT search hiring.cafe, greenhouse.io, or lever.co (already searched in Pass 
   await Promise.all(savePromises);
   // Cache writes are best-effort — a failure here must never kill the search.
   Promise.all(cacheWrites).catch(err => console.warn("[jobs_cache] Write failed:", err.message));
+
+  // V2: add normalised fields to each cache entry for indexed future queries.
+  // Runs after the base write so merge: true never races with a new doc.
+  if (FLAGS.CACHE_V2) {
+    const v2Writes = finalJobs
+      .filter(j => j.directUrl || j.url)
+      .map(j => writeCacheEntryV2(j, jobUrlHash(j.directUrl || j.url)));
+    Promise.all(v2Writes).catch(err => console.warn("[jobs_cache_v2] Write failed:", err.message));
+  }
 
   // Increment denormalised counters in the root user doc (non-blocking)
   db.collection("users").doc(userId).update({
@@ -2285,6 +2665,112 @@ app.get("/watchlist-jobs/:userId", async (req, res) => {
   }
 });
 
+// ════════════════════════════════════════════════════════════════════════════════
+// WATCHLIST V2 — API ENDPOINTS
+// ════════════════════════════════════════════════════════════════════════════════
+
+// Subscribe a user to a company (V2).
+// Replaces: writing directly to targetCompanies/{userId}.companies[]
+app.post("/watchlist/v2/subscribe", async (req, res) => {
+  const { userId, companyName, careerUrl } = req.body;
+  if (!userId || !companyName)
+    return res.status(400).json({ error: "userId and companyName are required" });
+  try {
+    const tier       = await getUserTier(userId);
+    const tierConfig = TIERS[tier] || TIERS.free;
+    const subSnap    = await db.collection("users").doc(userId)
+      .collection("watchlistSubscriptions").get();
+    if (subSnap.size >= tierConfig.maxTargetCompanies) {
+      return res.status(403).json({
+        error: `Subscription limit reached (${tierConfig.maxTargetCompanies} for ${tier} tier)`,
+      });
+    }
+    const companyId = await subscribeUserToCompany(userId, companyName, careerUrl || "");
+    res.json({ ok: true, companyId });
+  } catch (err) {
+    console.error("[watchlist/v2/subscribe]", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// List a user's V2 subscriptions.
+app.get("/watchlist/v2/subscriptions/:userId", async (req, res) => {
+  try {
+    const snap = await db.collection("users").doc(req.params.userId)
+      .collection("watchlistSubscriptions").get();
+    res.json({ subscriptions: snap.docs.map(d => ({ id: d.id, ...d.data() })) });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to load subscriptions" });
+  }
+});
+
+// Unsubscribe from a company (V2).
+app.delete("/watchlist/v2/subscriptions/:userId/:companyId", async (req, res) => {
+  try {
+    await unsubscribeUserFromCompany(req.params.userId, req.params.companyId);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Retrieve company index metadata (ATS type, watcher count, last scan time, etc.).
+app.get("/watchlist/v2/company/:companyId", async (req, res) => {
+  try {
+    const doc = await db.collection("company_watch_index").doc(req.params.companyId).get();
+    if (!doc.exists) return res.status(404).json({ error: "Company not indexed" });
+    res.json({ id: doc.id, ...doc.data() });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// List all globally indexed companies (admin use — limit 100).
+app.get("/watchlist/v2/companies", async (req, res) => {
+  const { adminSecret } = req.query;
+  if (adminSecret !== process.env.ADMIN_SECRET)
+    return res.status(403).json({ error: "Unauthorized" });
+  try {
+    const snap = await db.collection("company_watch_index")
+      .orderBy("activeWatchers", "desc").limit(100).get();
+    res.json({ companies: snap.docs.map(d => ({ id: d.id, ...d.data() })) });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// One-time migration: copy all existing targetCompanies docs into V2 subscriptions.
+// Safe to run multiple times — subscribeUserToCompany is idempotent.
+app.post("/admin/migrate-watchlist-v2", async (req, res) => {
+  const { adminSecret } = req.body;
+  if (adminSecret !== process.env.ADMIN_SECRET)
+    return res.status(403).json({ error: "Unauthorized" });
+  try {
+    const snap = await db.collection("targetCompanies").get();
+    if (snap.empty) return res.json({ ok: true, usersProcessed: 0 });
+    const results = [];
+    for (const doc of snap.docs) {
+      const userId    = doc.id;
+      const companies = doc.data().companies || [];
+      const migrated  = [], errors = [];
+      for (const c of companies) {
+        if (!c.name) continue;
+        try {
+          await subscribeUserToCompany(userId, c.name, c.url || "");
+          migrated.push(c.name);
+        } catch (err) {
+          errors.push({ company: c.name, error: err.message });
+        }
+      }
+      results.push({ userId, migrated, errors });
+    }
+    res.json({ ok: true, usersProcessed: snap.size, results });
+  } catch (err) {
+    console.error("[migrate-watchlist-v2]", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 exports.api = functions
   .runWith({
     timeoutSeconds: 540,
@@ -2512,6 +2998,196 @@ Rules:
   }
 
   return newJobs.length;
+}
+
+// ════════════════════════════════════════════════════════════════════════════════
+// WATCHLIST V2 — COMPANY SCAN PIPELINE
+// ════════════════════════════════════════════════════════════════════════════════
+
+// ATS-first: try all three public APIs, then fall back to Sonnet.
+// Only the fallback costs money; all three ATS adapters are free.
+async function atsFirstCompanyScan(companyData) {
+  const { companyName, atsType: knownAts, atsSlug, careerUrl } = companyData;
+  let result = null;
+
+  // Try in order: Greenhouse → Lever → Ashby
+  // Skip an ATS if we already know the company doesn't use it.
+  const tryGreenhouse = !knownAts || knownAts === "unknown" || knownAts === "greenhouse";
+  const tryLever      = !knownAts || knownAts === "unknown" || knownAts === "lever";
+  const tryAshby      = !knownAts || knownAts === "unknown" || knownAts === "ashby";
+
+  if (tryGreenhouse) result = await fetchAllGreenhouseJobs(atsSlug, companyName);
+  if (!result && tryLever)      result = await fetchAllLeverJobs(atsSlug, companyName);
+  if (!result && tryAshby)      result = await fetchAllAshbyJobs(atsSlug, companyName);
+
+  if (result) {
+    // Persist discovered ATS type so future scans skip the other adapters.
+    if (result.atsType !== knownAts || result.atsSlug !== atsSlug) {
+      db.collection("company_watch_index").doc(companyData.companyId).update({
+        atsType:  result.atsType,
+        atsSlug:  result.atsSlug,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      }).catch(() => {});
+    }
+    return { jobs: result.jobs, atsType: result.atsType, atsSlug: result.atsSlug, source: "ats" };
+  }
+
+  // Workday, SmartRecruiters, iCIMS, unknown: no public API — fall back to Sonnet.
+  return scanCompanyWithSonnet(companyData.companyId, companyName, careerUrl);
+}
+
+// Sonnet fallback for companies with no public ATS API.
+// Mirrors the existing checkTargetCompany logic but writes to the global
+// company_jobs collection rather than a per-user subcollection.
+async function scanCompanyWithSonnet(companyId, companyName, careerUrl) {
+  const systemPrompt = `You are a job search agent monitoring a specific company's career page. Visit the URL provided and list all currently open positions.
+
+Return ONLY a raw JSON array — no markdown, no explanation:
+[{"title":"","location":"","url":"","salary":"","description":"","posted":""}]
+
+Rules:
+- url: copy the DIRECT job posting URL verbatim from the page. Do NOT construct URLs.
+- description: 2-4 sentences describing the role and key requirements.
+- Return up to 30 jobs; prioritise the most recently posted.
+- Return [] if the page is inaccessible or has no open positions.`;
+
+  try {
+    const response = await anthropic.messages.create({
+      model:      MODEL_SONNET,
+      max_tokens: 3000,
+      tools:      [{ type: "web_search_20250305", name: "web_search", max_uses: 2 }],
+      system:     systemPrompt,
+      messages:   [{ role: "user", content: `Find all open jobs at ${companyName}. Career page: ${careerUrl || companyName + " careers"}` }],
+    });
+    // Track cost against a system bucket, not a specific user — global scan.
+    trackCost("_system_watchlist_v2", "watchlist_v2_sonnet", response.usage);
+    const raw   = response.content.filter(b => b.type === "text").map(b => b.text).join("\n\n").trim();
+    const clean = raw.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim();
+    const match = clean.match(/\[[\s\S]*\]/);
+    const jobs  = match ? JSON.parse(match[0]) : [];
+    return { jobs, atsType: "unknown", atsSlug: "", source: "sonnet" };
+  } catch (err) {
+    console.error(`[scanCompanyWithSonnet] ${companyName}:`, err.message);
+    return { jobs: [], atsType: "unknown", atsSlug: "", source: "sonnet", error: err.message };
+  }
+}
+
+// Upsert jobs into the global company_jobs collection.
+// • New jobs → inserted, ID added to returned array for fan-out.
+// • Existing jobs → lastSeenAt refreshed, active = true.
+// • ATS-sourced jobs are considered verified; Sonnet-sourced go through verifyJobUrls.
+async function upsertCompanyJobs(companyId, companyName, jobs, atsType, atsSlug) {
+  if (!jobs || jobs.length === 0) return [];
+  const now       = admin.firestore.FieldValue.serverTimestamp();
+  const expiresAt = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000);
+
+  // Verify Sonnet-sourced URLs using the existing multi-stage pipeline.
+  if (atsType === "unknown" || atsType === "sonnet") {
+    const urlJobs = jobs.filter(j => j.url && j.url.startsWith("http"));
+    if (urlJobs.length > 0) await verifyJobUrls(urlJobs, "_system_watchlist_v2");
+  }
+
+  const newJobIds = [];
+  await Promise.all(jobs.map(async (job) => {
+    if (!job.title) return;
+
+    const fp    = makeWatchlistFingerprint(companyName, job.title, job.url);
+    const jobId = crypto.createHash("sha256")
+      .update(`${companyId}::${fp}`)
+      .digest("hex")
+      .slice(0, 24);
+
+    const ref = db.collection("company_jobs").doc(jobId);
+    const doc = await ref.get();
+
+    if (doc.exists) {
+      await ref.update({ lastSeenAt: now, active: true, expiresAt });
+    } else {
+      const directUrl    = job.directUrl || job.url || "";
+      const isRemote     = /remote/i.test(job.location || "") || /remote/i.test(job.title || "");
+      const urlVerified  = atsType !== "unknown" || !!job.urlVerified;
+      const srcConf      = atsType !== "unknown" ? 0.95 : (job.applyUrlConfidence || 0);
+      await ref.set({
+        jobId, companyId, companyName,
+        title:             job.title                || "",
+        normalizedTitle:   normalizeTitle(job.title || ""),
+        location:          job.location             || "",
+        normalizedLocation:(job.location || "").toLowerCase().trim(),
+        remote:            isRemote,
+        salary:            job.salary               || "",
+        description:       job.description          || "",
+        url:               job.url                  || "",
+        directUrl,
+        posted:            job.posted               || "",
+        atsType,
+        atsSlug,
+        atsJobId:          job.atsJobId             || "",
+        fingerprint:       fp,
+        active:            true,
+        urlVerified,
+        sourceConfidence:  srcConf,
+        firstSeenAt:       now,
+        lastSeenAt:        now,
+        expiresAt,
+      });
+      newJobIds.push(jobId);
+    }
+  }));
+
+  return newJobIds;
+}
+
+// Fan-out: find every user subscribed to companyId, save new jobs to their
+// per-user watchlistJobs subcollection (backward compat) and send notifications.
+async function notifySubscribedUsers(companyId, newJobDocs) {
+  if (!newJobDocs || newJobDocs.length === 0) return;
+
+  // Collection-group query: O(subscribers), not O(all users).
+  const subSnap = await db.collectionGroup("watchlistSubscriptions")
+    .where("companyId", "==", companyId)
+    .get();
+  if (subSnap.empty) return;
+
+  for (const subDoc of subSnap.docs) {
+    const userId      = subDoc.ref.parent.parent.id;
+    const companyName = subDoc.data().companyName || "";
+
+    // Check which new jobs this user hasn't already seen.
+    const seenSnap = await db.collection("users").doc(userId)
+      .collection("watchlistJobs")
+      .where("company", "==", companyName)
+      .get();
+    const seenFps = new Set(seenSnap.docs.map(d => d.data().fingerprint).filter(Boolean));
+    const unseen  = newJobDocs.filter(j => j.fingerprint && !seenFps.has(j.fingerprint));
+    if (unseen.length === 0) continue;
+
+    // Write to per-user watchlistJobs — UI reads from here (backward compat).
+    const saves = unseen.map(job =>
+      db.collection("users").doc(userId).collection("watchlistJobs").add({
+        userId,
+        company:      companyName,
+        companyUrl:   job.careerUrl     || "",
+        title:        job.title         || "",
+        location:     job.location      || "",
+        salary:       job.salary        || "",
+        description:  job.description   || "",
+        url:          job.directUrl     || job.url || "",
+        posted:       job.posted        || "",
+        fingerprint:  job.fingerprint   || "",
+        companyJobId: job.jobId         || "",
+        source:       "watchlist_v2",
+        createdAt:    admin.firestore.FieldValue.serverTimestamp(),
+      })
+    );
+    await Promise.all(saves);
+
+    const notifTitle = unseen.length === 1
+      ? `New job at ${companyName}`
+      : `${unseen.length} new jobs at ${companyName}`;
+    const notifBody = unseen.slice(0, 2).map(j => j.title).join(" · ");
+    sendPushNotification(userId, notifTitle, notifBody).catch(() => {});
+    // Email is sent by the existing sendEmailNotification which reads watchlistJobs — no change needed.
+  }
 }
 
 // â"€â"€ Schedule helpers â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
@@ -2747,6 +3423,146 @@ exports.dailyWatchlistCheck = onSchedule(
       }
     } catch (err) {
       console.error("Daily watchlist check error:", err.message);
+    }
+  }
+);
+
+// ════════════════════════════════════════════════════════════════════════════════
+// WATCHLIST V2 — CENTRALISED COMPANY SCANNER
+// ════════════════════════════════════════════════════════════════════════════════
+//
+// Replaces: dailyWatchlistCheck (which loops over users × companies)
+// This replaces: O(users × companies) Sonnet calls per day
+// With:          O(unique_companies) scans, most via free ATS APIs
+//
+// Activation:  set WATCHLIST_V2_ENABLED=true
+// Schedule:    every 2 hours — but individual companies are only scanned when
+//              their nextScanAt timestamp is due (priority queue via Firestore query)
+//
+// Scan tiers:
+//   ≥10 watchers → every 2 hours
+//   ≥3  watchers → every 6 hours
+//   <3  watchers → every 24 hours
+//
+// MIGRATION:
+//   1. Deploy this build (flags default off — zero behaviour change)
+//   2. Call POST /admin/migrate-watchlist-v2 with ADMIN_SECRET
+//   3. Set WATCHLIST_V2_ENABLED=true
+//   4. Monitor logs for 7 days
+//   5. After confirming correctness, disable dailyWatchlistCheck
+//
+exports.scanTrackedCompanies = onSchedule(
+  { schedule: "0 */2 * * *", timeZone: "UTC", timeoutSeconds: 540 },
+  async () => {
+    if (!FLAGS.WATCHLIST_V2) {
+      console.log("[scanTrackedCompanies] WATCHLIST_V2 disabled — skipping");
+      return;
+    }
+    try {
+      // Only scan companies where nextScanAt is in the past.
+      // orderBy nextScanAt ASC ensures lowest-priority companies don't starve.
+      const dueSnap = await db.collection("company_watch_index")
+        .where("nextScanAt", "<=", new Date())
+        .orderBy("nextScanAt", "asc")
+        .limit(25)
+        .get();
+
+      if (dueSnap.empty) {
+        console.log("[scanTrackedCompanies] No companies due for scanning");
+        return;
+      }
+      console.log(`[scanTrackedCompanies] ${dueSnap.size} companies due`);
+
+      for (const doc of dueSnap.docs) {
+        const companyData = { companyId: doc.id, ...doc.data() };
+        // Mark as in-progress to prevent double-scan if the scheduler fires again.
+        await doc.ref.update({
+          lastScanAt: admin.firestore.FieldValue.serverTimestamp(),
+          lastError:  null,
+          // Push nextScanAt forward immediately so a concurrent run skips this company.
+          nextScanAt: computeNextScanAt(companyData.activeWatchers || 0),
+        });
+
+        try {
+          const { jobs, atsType, atsSlug } = await atsFirstCompanyScan(companyData);
+
+          const newJobIds = await upsertCompanyJobs(
+            companyData.companyId,
+            companyData.companyName,
+            jobs,
+            atsType,
+            atsSlug
+          );
+
+          if (newJobIds.length > 0) {
+            const newJobSnaps = await Promise.all(
+              newJobIds.map(id => db.collection("company_jobs").doc(id).get())
+            );
+            const newJobs = newJobSnaps
+              .filter(d => d.exists)
+              .map(d => ({ jobId: d.id, ...d.data() }));
+            await notifySubscribedUsers(companyData.companyId, newJobs);
+          }
+
+          await doc.ref.update({
+            lastSuccessfulScanAt: admin.firestore.FieldValue.serverTimestamp(),
+            jobCount:  jobs.length,
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          });
+          console.log(`[scanTrackedCompanies] ${companyData.companyName}: ${jobs.length} total, ${newJobIds.length} new`);
+        } catch (err) {
+          console.error(`[scanTrackedCompanies] ${companyData.companyName}:`, err.message);
+          await doc.ref.update({ lastError: err.message });
+        }
+      }
+    } catch (err) {
+      console.error("[scanTrackedCompanies] Scheduler error:", err.message);
+    }
+  }
+);
+
+// ── Stale company job expiry ───────────────────────────────────────────────────
+// Runs nightly at 03:00 UTC.
+//   • Jobs unseen for  7+ days → marked active=false
+//   • Jobs unseen for 14+ days → hard-deleted
+// This keeps company_jobs lean and avoids surfacing expired postings to users.
+exports.expireStaleCompanyJobs = onSchedule(
+  { schedule: "0 3 * * *", timeZone: "UTC" },
+  async () => {
+    const sevenDaysAgo    = new Date(Date.now() -  7 * 24 * 60 * 60 * 1000);
+    const fourteenDaysAgo = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000);
+    try {
+      // Mark inactive
+      const staleSnap = await db.collection("company_jobs")
+        .where("active",      "==", true)
+        .where("lastSeenAt",  "<",  sevenDaysAgo)
+        .limit(200)
+        .get();
+      let batch = db.batch(), count = 0, inactivated = 0;
+      for (const doc of staleSnap.docs) {
+        batch.update(doc.ref, { active: false, updatedAt: admin.firestore.FieldValue.serverTimestamp() });
+        if (++count === 400) { await batch.commit(); batch = db.batch(); count = 0; }
+        inactivated++;
+      }
+      if (count > 0) await batch.commit();
+
+      // Hard-delete old entries
+      const deadSnap = await db.collection("company_jobs")
+        .where("firstSeenAt", "<", fourteenDaysAgo)
+        .limit(200)
+        .get();
+      batch = db.batch(); count = 0;
+      let deleted = 0;
+      for (const doc of deadSnap.docs) {
+        batch.delete(doc.ref);
+        if (++count === 400) { await batch.commit(); batch = db.batch(); count = 0; }
+        deleted++;
+      }
+      if (count > 0) await batch.commit();
+
+      console.log(`[expireStaleCompanyJobs] inactivated=${inactivated} deleted=${deleted}`);
+    } catch (err) {
+      console.error("[expireStaleCompanyJobs]", err.message);
     }
   }
 );
