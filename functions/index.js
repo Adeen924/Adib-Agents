@@ -110,21 +110,21 @@ const TIERS = {
   free: {
     label:               "Free",
     maxSearchesPerDay:   1,
-    webSearchesPerQuery: 6,
-    maxOutputTokens:     6000,
+    webSearchesPerQuery: 3,
+    maxOutputTokens:     3000,
     customSites:         false,
     maxTargetCompanies:  3,
-    jobsPerSearch:       5,
+    jobsPerSearch:       2,
     manualSearch:        false, // scheduled only — no Search Now button
   },
   pro: {
     label:               "Pro",
     maxSearchesPerDay:   4,
-    webSearchesPerQuery: 8,
-    maxOutputTokens:     8000,
+    webSearchesPerQuery: 9,
+    maxOutputTokens:     10000,
     customSites:         true,
     maxTargetCompanies:  50,
-    jobsPerSearch:       5,
+    jobsPerSearch:       3,
     manualSearch:        true,
   },
 };
@@ -658,6 +658,61 @@ async function runJobSearch(userId, prefs, tier = "free", logFn = null) {
     seenFingerprints = new Set(recentJobs.map(makeJobFingerprint));
   } catch { /* non-fatal */ }
 
+  // ── Cache-first lookup ──────────────────────────────────────────────────────
+  // Check jobs_cache for recent matching jobs before spending on a live Claude search.
+  // Cache entries are written after every search (30-day TTL). A hit means another
+  // user (or a prior search) already verified these URLs — we can serve them instantly.
+  let allVerifiedJobs = [];
+  let cacheHit = false;
+  try {
+    log(`Cache: Scanning jobs_cache for recent matching jobs…`);
+    const targetTitles = (prefs.jobTitle || "").split(",").map(t => t.trim()).filter(Boolean);
+    const locationCity = (prefs.locationCity || prefs.location || "").toLowerCase();
+    const isRemote     = !!prefs.remoteOnly;
+
+    const cacheSnap = await db.collection("jobs_cache")
+      .where("expiresAt", ">", new Date())
+      .limit(400)
+      .get();
+
+    const cacheHits = [];
+    for (const doc of cacheSnap.docs) {
+      const job    = doc.data();
+      const jobLoc = (job.location || "").toLowerCase();
+
+      // Title must match one of the user's target titles
+      if (targetTitles.length > 0 && !targetTitles.some(t => titlesMatch(t, job.title))) continue;
+
+      // Location: remote-only searches require remote; others check city words
+      if (isRemote) {
+        if (!jobLoc.includes("remote")) continue;
+      } else if (locationCity) {
+        const cityWords = locationCity.split(/[\s,]+/).filter(w => w.length > 2);
+        if (!cityWords.some(w => jobLoc.includes(w)) && !jobLoc.includes("remote")) continue;
+      }
+
+      // Skip jobs this user has already seen
+      const fp = makeJobFingerprint(job);
+      if (seenFingerprints.has(fp)) continue;
+      seenFingerprints.add(fp);
+
+      cacheHits.push({ ...job, urlVerified: true, applyUrlConfidence: 0.85 });
+      if (cacheHits.length >= jobCount) break;
+    }
+
+    log(`Cache: ${cacheHits.length}/${cacheSnap.size} entries matched (need ${jobCount})`);
+    if (cacheHits.length >= jobCount) {
+      cacheHit = true;
+      allVerifiedJobs = cacheHits;
+      log(`Cache HIT — skipping live Claude search, using ${cacheHits.length} cached jobs`);
+    } else if (cacheHits.length > 0) {
+      log(`Cache PARTIAL — ${cacheHits.length} cached job(s) found, live search will fill the rest`);
+      allVerifiedJobs = cacheHits;
+    }
+  } catch (cacheErr) {
+    log(`Cache: Lookup failed (${cacheErr.message}) — proceeding to live search`);
+  }
+
   // Build strict criteria string so Claude knows what to enforce
   const locationLabel = prefs.remoteOnly
     ? "Remote only"
@@ -684,7 +739,7 @@ async function runJobSearch(userId, prefs, tier = "free", logFn = null) {
 
   const jobCount      = tierConfig.jobsPerSearch || 5;
   // Request more candidates than needed so we can rank and pick the best after verification
-  const candidateCount = Math.max(jobCount * 2, 8);
+  const candidateCount = Math.max(jobCount * CANDIDATE_MULTIPLIER, jobCount * 2);
 
   const systemPrompt = `You are an intelligent job matching agent. Search job boards broadly, find real current postings, and evaluate each one across multiple dimensions to surface the best matches for this specific candidate.
 
@@ -731,7 +786,7 @@ Field rules:
 - atsProvider: the ATS platform if identifiable from the URL or page — "greenhouse" | "lever" | "ashby" | "workday" | "smartrecruiters" | "icims" | "bamboohr" | "hiringcafe" | "" if unknown.
 - atsSlug: if the ATS is Greenhouse, Lever, or Ashby, extract the company slug from the URL (e.g. from boards.greenhouse.io/SLUG/jobs/... the slug is SLUG). Use "" if unknown.
 - posted: exact date as "Month DD, YYYY" (e.g. "May 10, 2026") or relative like "2 days ago". Never just a year. Use "" if unknown.
-- description: role summary covering key responsibilities and top 3 required skills. 3-4 sentences max.
+- description: role summary covering key responsibilities and top 3 required skills. 6-8 sentences minimum.
 
 [{"title":"","company":"","location":"","salary":"","experience":"","description":"","url":"","atsProvider":"","atsSlug":"","posted":"","fitScore":85,"matchReasons":["Experience Depth: ...","Transferable Skills: ...","Project Similarity: ..."]}]`;
 
@@ -748,6 +803,7 @@ Search in this order (complete ALL of them):
 
 Do NOT search indeed.com or linkedin.com in this first pass. Only include a job if the URL opens directly to that specific posting.`;
 
+  if (!cacheHit) {
   log(`Pass 1: Asking Claude to find up to ${candidateCount} candidates (${tierConfig.webSearchesPerQuery} web searches)…`);
   const response = await anthropic.messages.create({
     model:      MODEL_SEARCH,
@@ -827,7 +883,7 @@ Do NOT search indeed.com or linkedin.com in this first pass. Only include a job 
 
   // Second search pass when the first pass finds fewer than MIN_RESULT_TARGET verified jobs.
   // Uses different source sites to avoid redundant searches.
-  let allVerifiedJobs = [...verifiedJobs];
+  allVerifiedJobs = [...(allVerifiedJobs || []), ...verifiedJobs];
   if (verifiedJobs.length < MIN_RESULT_TARGET) {
     log(`Pass 2: Only ${verifiedJobs.length} verified (need ${MIN_RESULT_TARGET}+) — searching Ashby, Builtin, Wellfound…`);
     const alreadyFound = allVerifiedJobs.map(j => `- ${j.company}: ${j.title}`).join("\n");
@@ -895,6 +951,7 @@ Do NOT search hiring.cafe, greenhouse.io, or lever.co (already searched in Pass 
       log(`Pass 2: ERROR — ${err.message}`);
     }
   }
+  } // end if (!cacheHit)
 
   // Rank all verified jobs: composite score = applyUrlConfidence (50%) + fitScore (50%)
   allVerifiedJobs.sort((a, b) => {
