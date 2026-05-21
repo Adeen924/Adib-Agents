@@ -2151,45 +2151,19 @@ async function loadAdminPanel() {
     const fmtCost   = (n) => `$${(n || 0).toFixed(4)}`;
     const fmtTokens = (n) => n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n || 0);
 
-    // Per-user expandable rows
-    const userRows = (data.userBreakdown || []).map((u, i) => {
-      const tid = `admin-user-${i}`;
+    // Per-user rows — clicking opens full detail view
+    const userRows = (data.userBreakdown || []).map(u => {
       const tierClass = u.tier === "pro" ? " pro" : "";
-      const periods = [
-        { label: "Today",     d: u.today },
-        { label: "Yesterday", d: u.yesterday },
-        { label: "7 Days",    d: u.week },
-        { label: "30 Days",   d: u.month },
-      ];
-      const detailHtml = periods.map(p => `
-        <tr style="border-top:none">
-          <td style="font-size:0.8rem;color:var(--text-muted);padding:4px 8px">${p.label}</td>
-          <td style="font-size:0.8rem;padding:4px 8px">${fmtCost(p.d.cost)}</td>
-          <td style="font-size:0.8rem;padding:4px 8px">${fmtTokens(p.d.inputTokens)} in / ${fmtTokens(p.d.outputTokens)} out</td>
-          <td style="font-size:0.8rem;padding:4px 8px">${p.d.runs} run${p.d.runs === 1 ? "" : "s"}</td>
-        </tr>`).join("");
+      const eid = encodeURIComponent(u.userId);
       return `
-        <tr class="admin-user-row" style="cursor:pointer" onclick="(function(){var el=document.getElementById('${tid}');el.style.display=el.style.display==='none'?'':'none';})()">
-          <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(u.userId)}</td>
+        <tr style="cursor:pointer" onclick="loadAdminUserDetail('${eid}')">
+          <td style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(u.userId)}</td>
           <td><span class="tier-badge${tierClass}">${u.tier.toUpperCase()}</span></td>
           <td>${fmtCost(u.today.cost)}</td>
           <td>${fmtCost(u.yesterday.cost)}</td>
           <td>${fmtCost(u.week.cost)}</td>
           <td>${fmtCost(u.month.cost)}</td>
-          <td style="color:var(--text-muted);font-size:0.75rem">▼</td>
-        </tr>
-        <tr id="${tid}" style="display:none">
-          <td colspan="7" style="padding:0;background:var(--surface)">
-            <table style="width:100%;border-collapse:collapse">
-              <thead><tr style="border-bottom:1px solid var(--border)">
-                <th style="padding:6px 8px;font-size:0.75rem;text-align:left;color:var(--text-muted)">Period</th>
-                <th style="padding:6px 8px;font-size:0.75rem;text-align:left;color:var(--text-muted)">Cost</th>
-                <th style="padding:6px 8px;font-size:0.75rem;text-align:left;color:var(--text-muted)">Tokens</th>
-                <th style="padding:6px 8px;font-size:0.75rem;text-align:left;color:var(--text-muted)">Runs</th>
-              </tr></thead>
-              <tbody>${detailHtml}</tbody>
-            </table>
-          </td>
+          <td style="color:var(--text-muted);font-size:0.75rem">→</td>
         </tr>`;
     }).join("") || `<tr><td colspan="7" class="empty-table">No activity recorded yet.</td></tr>`;
 
@@ -2279,6 +2253,95 @@ async function loadAdminPanel() {
       </div>`;
   } catch (err) {
     body.innerHTML = `<div class="panel-loading" style="padding:28px">Failed to load admin stats: ${escapeHtml(err.message)}</div>`;
+  }
+}
+
+// ── Admin user detail view ────────────────────────────────────────────────────
+async function loadAdminUserDetail(encodedTargetId) {
+  const targetId = decodeURIComponent(encodedTargetId);
+  const body = document.getElementById("adminBody");
+  body.innerHTML = '<div class="panel-loading" style="padding:28px">Loading user detail…</div>';
+  try {
+    const res  = await fetch(`${BACKEND_URL}/admin/user-detail/${encodeURIComponent(targetId)}?adminId=${encodeURIComponent(userId)}`);
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "Failed to load");
+
+    const u         = data.user || {};
+    const bd        = data.breakdown || {};
+    const tierClass = u.tier === "pro" ? " pro" : "";
+
+    const fmtCost   = (n) => `$${(n || 0).toFixed(4)}`;
+    const fmtTokens = (n) => n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n || 0);
+
+    const FEATURES = [
+      { key: "search",        label: "Searches"       },
+      { key: "resume",        label: "Resumes"        },
+      { key: "cover_letter",  label: "Cover Letters"  },
+      { key: "interview_prep",label: "Interview Prep" },
+      { key: "linkedin",      label: "LinkedIn"       },
+      { key: "watchlist",     label: "Watchlist"      },
+    ];
+
+    const periods = [
+      { key: "today",     label: "Today"     },
+      { key: "yesterday", label: "Yesterday" },
+      { key: "week",      label: "7 Days"    },
+      { key: "month",     label: "30 Days"   },
+    ];
+
+    // Summary cost cards
+    const summaryCards = periods.map(p => {
+      const total = FEATURES.reduce((s, f) => s + ((bd[p.key]?.[f.key]?.cost) || 0), 0);
+      return `<div class="stat-card">
+        <div class="stat-value" style="font-size:1.1rem">${fmtCost(total)}</div>
+        <div class="stat-label">${p.label}</div>
+      </div>`;
+    }).join("");
+
+    // Feature breakdown table — rows = features, cols = time periods
+    const featureRows = FEATURES.map(f => {
+      const cells = periods.map(p => {
+        const d = bd[p.key]?.[f.key] || {};
+        if (!d.count && !d.cost) return `<td style="color:var(--text-muted);font-size:0.82rem">—</td>`;
+        return `<td>
+          <div style="font-size:0.88rem;font-weight:600">${fmtCost(d.cost)}</div>
+          <div style="font-size:0.75rem;color:var(--text-muted)">${d.count} req · ${fmtTokens(d.inputTokens)}↑ ${fmtTokens(d.outputTokens)}↓</div>
+        </td>`;
+      }).join("");
+      return `<tr><td style="font-weight:600;white-space:nowrap">${f.label}</td>${cells}</tr>`;
+    }).join("");
+
+    body.innerHTML = `
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:20px">
+        <button class="btn" style="padding:6px 14px;font-size:0.82rem" onclick="loadAdminPanel()">← Back</button>
+        <span style="font-size:0.9rem;color:var(--text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:400px">${escapeHtml(targetId)}</span>
+        <span class="tier-badge${tierClass}">${(u.tier || "free").toUpperCase()}</span>
+      </div>
+
+      <div class="settings-section">
+        <div class="settings-section-title">Spending Summary</div>
+        <div class="stats-grid" style="max-width:800px">${summaryCards}</div>
+      </div>
+
+      <div class="settings-section">
+        <div class="settings-section-title">Cost &amp; Usage by Feature</div>
+        <p style="font-size:0.8rem;color:var(--text-muted);margin:0 0 14px">Each cell shows cost / request count / tokens in↑ out↓</p>
+        <div style="overflow-x:auto">
+          <table class="app-table">
+            <thead><tr>
+              <th>Feature</th>
+              ${periods.map(p => `<th>${p.label}</th>`).join("")}
+            </tr></thead>
+            <tbody>${featureRows}</tbody>
+          </table>
+        </div>
+      </div>`;
+  } catch (err) {
+    body.innerHTML = `
+      <div style="padding:12px 0 20px">
+        <button class="btn" style="padding:6px 14px;font-size:0.82rem" onclick="loadAdminPanel()">← Back</button>
+      </div>
+      <div class="panel-loading">Failed to load user detail: ${escapeHtml(err.message)}</div>`;
   }
 }
 

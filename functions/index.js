@@ -96,6 +96,20 @@ const OUTPUT_COST_HAIKU  = 4    / 1_000_000;
 const INPUT_COST  = INPUT_COST_SONNET;
 const OUTPUT_COST = OUTPUT_COST_SONNET;
 
+// Lightweight helper — call after every anthropic.messages.create()
+function trackCost(userId, view, usage, isHaiku = false) {
+  if (!usage || !userId) return;
+  const ic = isHaiku ? INPUT_COST_HAIKU  : INPUT_COST_SONNET;
+  const oc = isHaiku ? OUTPUT_COST_HAIKU : OUTPUT_COST_SONNET;
+  db.collection("platform_events").add({
+    userId, view,
+    inputTokens:  usage.input_tokens  || 0,
+    outputTokens: usage.output_tokens || 0,
+    cost: ((usage.input_tokens || 0) * ic) + ((usage.output_tokens || 0) * oc),
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+  }).catch(() => {});
+}
+
 const MODEL_SONNET = "claude-sonnet-4-6";
 const MODEL_HAIKU  = "claude-haiku-4-5-20251001";
 // Job searching and URL verification use Haiku — structured extraction doesn't need Sonnet's
@@ -432,7 +446,7 @@ function scoreUrl(httpResult) {
 }
 
 // â"€â"€ Web-search fallback for still-unverified jobs (batched, single Sonnet call) â"€â"€
-async function verifyViaWebSearch(jobs) {
+async function verifyViaWebSearch(jobs, userId) {
   if (jobs.length === 0) return;
   const jobList = jobs.map((j, i) => `${i + 1}. "${j.title}" at ${j.company}`).join("\n");
   try {
@@ -457,6 +471,7 @@ Rules:
 - Use {"candidates":[]} if no verified direct link is found`,
       }],
     });
+    trackCost(userId, "search_verify", res.usage);
     const raw    = res.content.filter(b => b.type === "text").map(b => b.text).join("").trim();
     const m      = raw.match(/\[[\s\S]*\]/);
     if (!m) return;
@@ -505,7 +520,7 @@ const CANDIDATE_MULTIPLIER    = 3;   // request this many × more candidates tha
 // Stage 3:   HTTP-verify AI-provided source URL as an additional candidate
 // Stage 4:   Score each candidate by confidence × title similarity
 // Stage 5:   Select best candidate; fall through to web-search if still unverified
-async function verifyJobUrls(jobs) {
+async function verifyJobUrls(jobs, userId) {
   await Promise.all(jobs.map(async (job) => {
     const atsHint  = (job.atsProvider || "").toLowerCase();
     const candidates = [];  // { url, rawConf, ats, titleScore }
@@ -547,7 +562,7 @@ async function verifyJobUrls(jobs) {
   }));
 
   // Final fallback: batch web-search with multi-candidate comparison for anything still unverified
-  await verifyViaWebSearch(jobs.filter(j => !j.urlVerified));
+  await verifyViaWebSearch(jobs.filter(j => !j.urlVerified), userId);
 }
 
 // Build a specific, criteria-aware search query
@@ -865,24 +880,14 @@ Do NOT search indeed.com or linkedin.com in this first pass. Only include a job 
   log(`Pass 1: ${uniqueJobs.length} unique candidates after dedup (${jobs.length - uniqueJobs.length} skipped)`);
 
   log(`Verifying ${uniqueJobs.length} URLs via ATS APIs → HTTP → web search…`);
-  await verifyJobUrls(uniqueJobs);
+  await verifyJobUrls(uniqueJobs, userId);
   log(`URL verification complete`);
 
   const verifiedJobs = uniqueJobs.filter(j => j.urlVerified);
   console.log(`[runJobSearch] Pass 1: ${uniqueJobs.length} candidates, ${verifiedJobs.length} verified for ${userId}`);
   log(`Pass 1: ${verifiedJobs.length}/${uniqueJobs.length} URLs verified`);
 
-  // Track cost for first pass
-  if (response.usage) {
-    const { input_tokens, output_tokens } = response.usage;
-    db.collection("platform_events").add({
-      userId, view: "job_search",
-      inputTokens:  input_tokens,
-      outputTokens: output_tokens,
-      cost: (input_tokens * INPUT_COST_SONNET) + (output_tokens * OUTPUT_COST_SONNET),
-      createdAt: admin.firestore.FieldValue.serverTimestamp(),
-    }).catch(() => {});
-  }
+  trackCost(userId, "job_search", response.usage);
 
   // Second search pass when the first pass finds fewer than MIN_RESULT_TARGET verified jobs.
   // Uses different source sites to avoid redundant searches.
@@ -932,23 +937,14 @@ Do NOT search hiring.cafe, greenhouse.io, or lever.co (already searched in Pass 
 
       if (jobs2.length > 0) {
         log(`Pass 2: Verifying ${jobs2.length} URLs…`);
-        await verifyJobUrls(jobs2);
+        await verifyJobUrls(jobs2, userId);
         const verified2 = jobs2.filter(j => j.urlVerified);
         allVerifiedJobs = [...allVerifiedJobs, ...verified2];
         console.log(`[runJobSearch] Pass 2: ${jobs2.length} candidates, ${verified2.length} verified for ${userId}`);
         log(`Pass 2: ${verified2.length}/${jobs2.length} URLs verified`);
       }
 
-      if (response2.usage) {
-        const { input_tokens, output_tokens } = response2.usage;
-        db.collection("platform_events").add({
-          userId, view: "job_search_pass2",
-          inputTokens:  input_tokens,
-          outputTokens: output_tokens,
-          cost: (input_tokens * INPUT_COST_SONNET) + (output_tokens * OUTPUT_COST_SONNET),
-          createdAt: admin.firestore.FieldValue.serverTimestamp(),
-        }).catch(() => {});
-      }
+      trackCost(userId, "job_search_pass2", response2.usage);
     } catch (err) {
       console.warn(`[runJobSearch] Pass 2 failed for ${userId}:`, err.message);
       log(`Pass 2: ERROR — ${err.message}`);
@@ -1623,6 +1619,7 @@ ${job.description ? `Description:\n${job.description}` : ""}`,
     });
 
     const text = response.content.filter(b => b.type === "text").map(b => b.text).join("").trim();
+    trackCost(userId, "resume", response.usage);
     await jobDoc.ref.update({
       tailoredResume:   text,
       tailoredResumeAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -1672,6 +1669,7 @@ ${job.description ? `Description:\n${job.description}` : ""}`,
     });
 
     const text = response.content.filter(b => b.type === "text").map(b => b.text).join("").trim();
+    trackCost(userId, "cover_letter", response.usage);
     await jobDoc.ref.update({
       coverLetter:   text,
       coverLetterAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -1711,6 +1709,7 @@ ${job.description || ""}`,
     });
 
     const text = response.content.filter(b => b.type === "text").map(b => b.text).join("").trim();
+    trackCost(userId, "interview_prep", response.usage, true);
     await jobDoc.ref.update({
       interviewPrep:   text,
       interviewPrepAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -1790,6 +1789,7 @@ Respond with ONLY a valid JSON object, no text before or after:
     });
 
     const rawText = response.content.filter(b => b.type === "text").map(b => b.text).join("").trim();
+    trackCost(userId, "linkedin", response.usage);
     let networking;
     try {
       const jsonMatch = rawText.match(/\{[\s\S]*\}/);
@@ -2011,6 +2011,85 @@ app.get("/admin/stats/:userId", async (req, res) => {
     res.status(500).json({ error: "Failed to load admin stats" });
   }
 });
+// -- Admin user detail endpoint --
+app.get("/admin/user-detail/:targetUserId", async (req, res) => {
+  const { adminId } = req.query;
+  try {
+    const adminDoc = await db.collection("users").doc(adminId).get();
+    if (!adminDoc.exists || adminDoc.data().role !== "admin") {
+      return res.status(403).json({ error: "Forbidden" });
+    }
+
+    const targetId = req.params.targetUserId;
+    const now = Date.now();
+
+    const todayStart = new Date(); todayStart.setUTCHours(0, 0, 0, 0);
+    const yesterdayStart = new Date(todayStart); yesterdayStart.setUTCDate(yesterdayStart.getUTCDate() - 1);
+    const todayMs     = todayStart.getTime();
+    const yesterdayMs = yesterdayStart.getTime();
+    const cutoff7d    = now -  7 * 24 * 60 * 60 * 1000;
+    const cutoff30d   = now - 30 * 24 * 60 * 60 * 1000;
+
+    const [userDoc, eventsSnap] = await Promise.all([
+      db.collection("users").doc(targetId).get(),
+      db.collection("platform_events").where("userId", "==", targetId).get(),
+    ]);
+
+    const user   = userDoc.exists ? { id: targetId, ...userDoc.data() } : { id: targetId };
+    const events = eventsSnap.docs.map(d => d.data());
+
+    // Map individual event views to display feature names
+    const VIEW_TO_FEATURE = {
+      job_search:       "search",
+      job_search_pass2: "search",
+      search_verify:    "search",
+      resume:           "resume",
+      cover_letter:     "cover_letter",
+      interview_prep:   "interview_prep",
+      linkedin:         "linkedin",
+      watchlist_url:    "watchlist",
+      watchlist_scan:   "watchlist",
+    };
+    const FEATURES = ["search", "resume", "cover_letter", "interview_prep", "linkedin", "watchlist"];
+
+    const emptyFeatures = () => Object.fromEntries(
+      FEATURES.map(f => [f, { cost: 0, inputTokens: 0, outputTokens: 0, count: 0 }])
+    );
+
+    const computeBreakdown = (fromMs, toMs) => {
+      const feat = emptyFeatures();
+      for (const e of events) {
+        const ts = e.createdAt?.toMillis?.() || 0;
+        if (ts <= fromMs || ts > toMs) continue;
+        const f = VIEW_TO_FEATURE[e.view];
+        if (!f) continue;
+        feat[f].cost         += e.cost         || 0;
+        feat[f].inputTokens  += e.inputTokens  || 0;
+        feat[f].outputTokens += e.outputTokens || 0;
+        feat[f].count        += 1;
+      }
+      return feat;
+    };
+
+    res.json({
+      user: {
+        userId:    targetId,
+        tier:      user.tier      || "free",
+        createdAt: user.createdAt || null,
+      },
+      breakdown: {
+        today:     computeBreakdown(todayMs,     now),
+        yesterday: computeBreakdown(yesterdayMs, todayMs),
+        week:      computeBreakdown(cutoff7d,    now),
+        month:     computeBreakdown(cutoff30d,   now),
+      },
+    });
+  } catch (err) {
+    console.error("Admin user detail error:", err);
+    res.status(500).json({ error: "Failed to load user detail" });
+  }
+});
+
 app.post("/user/tier", async (req, res) => {
   const { userId, tier, secret } = req.body;
   if (!userId || !tier) return res.status(400).json({ error: "userId and tier required" });
@@ -2281,6 +2360,7 @@ async function checkTargetCompany(userId, company) {
         tools:      [{ type: "web_search_20250305", name: "web_search", max_uses: 1 }],
         messages:   [{ role: "user", content: `Find the official careers or jobs page URL for "${company.name}". Return ONLY a JSON object, no explanation: {"url":"https://..."}` }],
       });
+      trackCost(userId, "watchlist_url", urlRes.usage);
       const urlRaw  = urlRes.content.filter(b => b.type === "text").map(b => b.text).join("").trim();
       const urlMatch = urlRaw.match(/\{[\s\S]*\}/);
       if (urlMatch) {
@@ -2324,6 +2404,7 @@ Rules:
       messages:   [{ role: "user", content: `Find all open jobs at ${company.name}. Career page: ${careerPageUrl || company.name + " careers"}` }],
     });
 
+    trackCost(userId, "watchlist_scan", response.usage);
     const raw = response.content
       .filter(b => b.type === "text")
       .map(b => b.text)
