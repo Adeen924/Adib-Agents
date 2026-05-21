@@ -107,8 +107,8 @@ const TIERS = {
   free: {
     label:               "Free",
     maxSearchesPerDay:   1,
-    webSearchesPerQuery: 3,
-    maxOutputTokens:     4000,
+    webSearchesPerQuery: 6,
+    maxOutputTokens:     7000,
     customSites:         false,
     maxTargetCompanies:  3,
     jobsPerSearch:       5,
@@ -117,8 +117,8 @@ const TIERS = {
   pro: {
     label:               "Pro",
     maxSearchesPerDay:   4,
-    webSearchesPerQuery: 5,
-    maxOutputTokens:     4000,
+    webSearchesPerQuery: 10,
+    maxOutputTokens:     10000,
     customSites:         true,
     maxTargetCompanies:  50,
     jobsPerSearch:       5,
@@ -314,15 +314,31 @@ async function fetchUrlStatus(url, hops = 0) {
 }
 
 // â"€â"€ Fuzzy title matching â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
-function titlesMatch(a, b) {
+// Returns 0–1 similarity. Penalises seniority/level differences (I vs II, Senior vs Junior, etc.)
+// so that "Thermal Engineer I" never matches "Thermal Engineer II" or "Senior Thermal Engineer".
+function titleSimilarityScore(a, b) {
+  if (!a || !b) return 0;
   const norm = s => String(s).toLowerCase().replace(/[^a-z0-9\s]/g, "").replace(/\s+/g, " ").trim();
   const na = norm(a), nb = norm(b);
-  if (na === nb) return true;
-  if (na.includes(nb) || nb.includes(na)) return true;
+  if (na === nb) return 1.0;
+  // Detect seniority tokens. If present and different between titles, reject the match.
+  const levelRe = /\b(i{1,3}|iv|v{1,2}|[1-6]|junior|mid|senior|staff|principal|lead|associate|director|head)\b/g;
+  const levelsA = (na.match(levelRe) || []).sort().join("|");
+  const levelsB = (nb.match(levelRe) || []).sort().join("|");
+  if ((levelsA || levelsB) && levelsA !== levelsB) return 0.25;
+  if (na.includes(nb) || nb.includes(na)) return 0.90;
   const wa = na.split(" ").filter(w => w.length > 2);
   const wb = new Set(nb.split(" ").filter(w => w.length > 2));
+  if (wa.length === 0 || wb.size === 0) return 0;
   const common = wa.filter(w => wb.has(w));
-  return wa.length > 0 && wb.size > 0 && (common.length / Math.max(wa.length, wb.size)) >= 0.6;
+  const ratio  = common.length / Math.max(wa.length, wb.size);
+  if (ratio >= 0.80) return 0.80;
+  if (ratio >= 0.60) return 0.65;
+  return 0;
+}
+
+function titlesMatch(a, b) {
+  return titleSimilarityScore(a, b) >= 0.65;
 }
 
 // â"€â"€ Company slug candidates for ATS API lookups â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
@@ -348,7 +364,7 @@ async function findGreenhouseJobUrl(company, title, slugHint) {
       if (!res.ok) continue;
       const { jobs = [] } = await res.json();
       const match = jobs.find(j => titlesMatch(j.title, title));
-      if (match) return { url: match.absolute_url, confidence: 0.95, ats: "greenhouse" };
+      if (match) return { url: match.absolute_url, confidence: 0.95, ats: "greenhouse", matchedTitle: match.title };
     } catch { continue; }
   }
   return null;
@@ -365,7 +381,7 @@ async function findLeverJobUrl(company, title, slugHint) {
       const jobs = await res.json();
       if (!Array.isArray(jobs)) continue;
       const match = jobs.find(j => titlesMatch(j.text || "", title));
-      if (match) return { url: match.hostedUrl || `https://jobs.lever.co/${slug}/${match.id}`, confidence: 0.95, ats: "lever" };
+      if (match) return { url: match.hostedUrl || `https://jobs.lever.co/${slug}/${match.id}`, confidence: 0.95, ats: "lever", matchedTitle: match.text || "" };
     } catch { continue; }
   }
   return null;
@@ -392,7 +408,7 @@ async function findAshbyJobUrl(company, title, slugHint) {
       const data = await res.json();
       const active = (data?.data?.jobBoard?.jobPostings || []).filter(p => p.jobPostingState === "Listed");
       const match  = active.find(p => titlesMatch(p.title, title));
-      if (match) return { url: match.externalLink || `https://jobs.ashbyhq.com/${slug}/${match.id}`, confidence: 0.95, ats: "ashby" };
+      if (match) return { url: match.externalLink || `https://jobs.ashbyhq.com/${slug}/${match.id}`, confidence: 0.95, ats: "ashby", matchedTitle: match.title };
     } catch { continue; }
   }
   return null;
@@ -416,36 +432,51 @@ async function verifyViaWebSearch(jobs) {
   try {
     const res = await anthropic.messages.create({
       model:      MODEL_SONNET,
-      max_tokens: 1024,
-      tools:      [{ type: "web_search_20250305", name: "web_search", max_uses: jobs.length + 1 }],
+      max_tokens: 2048,
+      tools:      [{ type: "web_search_20250305", name: "web_search", max_uses: jobs.length * 2 + 2 }],
       messages: [{
         role:    "user",
-        content: `Search Google for each job below using the query "[job title] [company] apply" and return the FIRST result that is a direct job application page.
+        content: `For each job below, search using MULTIPLE queries and collect ALL candidate apply-page URLs you find. Do NOT stop after the first result — compare several candidates per job before deciding.
 
 ${jobList}
 
-Return ONLY a JSON array in the same order:
-[{"applyUrl":"https://..."},...]
+Return ONLY a JSON array in the same order as the input:
+[{"candidates":[{"url":"https://...","pageTitle":"exact job title shown on that page"},...]}]
 
 Rules:
-- Never return indeed.com or linkedin.com URLs
-- URL must open the specific posting with an Apply button (not a careers homepage)
-- Use "" if no verified direct link is found`,
+- NEVER return indeed.com or linkedin.com URLs
+- Each URL must open the specific posting (not a generic /careers page)
+- Include up to 3 candidates per job ordered best-first
+- The pageTitle must EXACTLY match the target job title — do NOT accept adjacent roles, different seniority, or different departments
+- Use {"candidates":[]} if no verified direct link is found`,
       }],
     });
-    const raw   = res.content.filter(b => b.type === "text").map(b => b.text).join("").trim();
-    const match = raw.match(/\[[\s\S]*\]/);
-    if (!match) return;
-    const results = JSON.parse(match[0]);
+    const raw    = res.content.filter(b => b.type === "text").map(b => b.text).join("").trim();
+    const m      = raw.match(/\[[\s\S]*\]/);
+    if (!m) return;
+    const results = JSON.parse(m[0]);
+
     await Promise.all(results.map(async (r, i) => {
       if (i >= jobs.length) return;
-      const url = (r.applyUrl || "").trim();
-      if (!url.startsWith("http") || AGGREGATOR_RE.test(url)) return;
-      const http = await fetchUrlStatus(url);
-      if (http.status === 200 && isSpecificJobUrl(http.finalUrl)) {
-        jobs[i].directUrl          = http.finalUrl;
-        jobs[i].applyUrlConfidence = 0.70;
-        jobs[i].atsProvider        = detectAts(http.finalUrl) || "web";
+      const candidates = Array.isArray(r.candidates) ? r.candidates : [];
+
+      let bestUrl = null, bestConf = 0, bestAts = "";
+      for (const cand of candidates) {
+        const url = (cand.url || "").trim();
+        if (!url.startsWith("http") || AGGREGATOR_RE.test(url)) continue;
+        // Reject candidates whose page title doesn't closely match the target
+        const titleScore = titleSimilarityScore(jobs[i].title, cand.pageTitle || "");
+        if (titleScore < 0.65) continue;
+        const http = await fetchUrlStatus(url);
+        if (http.status !== 200 || !isSpecificJobUrl(http.finalUrl)) continue;
+        const urlScore = scoreUrl(http);
+        const conf = Math.min(0.85, 0.60 + urlScore * 0.15 + titleScore * 0.10);
+        if (conf > bestConf) { bestConf = conf; bestUrl = http.finalUrl; bestAts = detectAts(http.finalUrl) || "web"; }
+      }
+      if (bestUrl && bestConf >= CONFIDENCE_THRESHOLD) {
+        jobs[i].directUrl          = bestUrl;
+        jobs[i].applyUrlConfidence = bestConf;
+        jobs[i].atsProvider        = bestAts;
         jobs[i].urlVerified        = true;
       }
     }));
@@ -458,33 +489,50 @@ Rules:
 // Step 1 â€" ATS public APIs (Greenhouse/Lever/Ashby)  â†' highest confidence, no AI cost
 // Step 2 â€" HTTP-verify the source URL                â†' medium confidence
 // Step 3 â€" Web-search fallback (batch, one Sonnet call) â†' last resort
-const CONFIDENCE_THRESHOLD = 0.70;
+const CONFIDENCE_THRESHOLD    = 0.70;
+const MIN_RESULT_TARGET       = 3;   // trigger second search pass if verified count is below this
+const PREFERRED_RESULT_TARGET = 5;   // preferred verified jobs per completed search
+const CANDIDATE_MULTIPLIER    = 3;   // request this many × more candidates than jobsPerSearch
 
+// 5-stage verification pipeline per job:
+// Stage 1–2: Collect candidates from ATS public APIs (Greenhouse/Lever/Ashby)
+// Stage 3:   HTTP-verify AI-provided source URL as an additional candidate
+// Stage 4:   Score each candidate by confidence × title similarity
+// Stage 5:   Select best candidate; fall through to web-search if still unverified
 async function verifyJobUrls(jobs) {
   await Promise.all(jobs.map(async (job) => {
-    let bestUrl = null, bestConf = 0, bestAts = "";
-    const atsHint = (job.atsProvider || "").toLowerCase();
+    const atsHint  = (job.atsProvider || "").toLowerCase();
+    const candidates = [];  // { url, rawConf, ats, titleScore }
 
-    // Step 1 â€" run applicable ATS API lookups in parallel
+    // Stages 1–2: ATS public API lookups (parallel)
     const atsLookups = await Promise.all([
       (!atsHint || atsHint === "greenhouse") ? findGreenhouseJobUrl(job.company, job.title, job.atsSlug) : null,
       (!atsHint || atsHint === "lever")      ? findLeverJobUrl(job.company, job.title, job.atsSlug)      : null,
       (!atsHint || atsHint === "ashby")      ? findAshbyJobUrl(job.company, job.title, job.atsSlug)      : null,
     ]);
     for (const r of atsLookups) {
-      if (r && r.confidence > bestConf) { bestUrl = r.url; bestConf = r.confidence; bestAts = r.ats; }
+      if (r) {
+        const ts = titleSimilarityScore(job.title, r.matchedTitle || job.title);
+        candidates.push({ url: r.url, rawConf: r.confidence, ats: r.ats, titleScore: ts });
+      }
     }
 
-    // Step 2 â€" HTTP-verify AI-provided source URL if ATS lookup didnâ€™t succeed
-    if (bestConf < CONFIDENCE_THRESHOLD && job.url && job.url.startsWith("http") && !AGGREGATOR_RE.test(job.url)) {
+    // Stage 3: HTTP-verify AI-provided source URL as an additional candidate
+    if (job.url && job.url.startsWith("http") && !AGGREGATOR_RE.test(job.url)) {
       const http = await fetchUrlStatus(job.url);
       const s    = scoreUrl(http);
-      if (s > bestConf) { bestUrl = http.finalUrl; bestConf = s; bestAts = detectAts(http.finalUrl) || ""; }
+      if (s > 0) candidates.push({ url: http.finalUrl, rawConf: s, ats: detectAts(http.finalUrl) || "", titleScore: 1.0 });
     }
 
-    if (bestUrl && bestConf >= CONFIDENCE_THRESHOLD) {
+    // Stage 4–5: Rank candidates by rawConf × titleScore penalty, select best
+    let bestUrl = null, bestRawConf = 0, bestAts = "";
+    for (const c of candidates) {
+      const ranked = c.rawConf * Math.max(0.30, c.titleScore);
+      if (ranked > bestRawConf) { bestRawConf = ranked; bestUrl = c.url; bestAts = c.ats; }
+    }
+    if (bestUrl && bestRawConf >= CONFIDENCE_THRESHOLD) {
       job.directUrl          = bestUrl;
-      job.applyUrlConfidence = bestConf;
+      job.applyUrlConfidence = bestRawConf;
       job.atsProvider        = bestAts;
       job.urlVerified        = true;
     } else {
@@ -492,7 +540,7 @@ async function verifyJobUrls(jobs) {
     }
   }));
 
-  // Step 3 â€" batch web-search for anything still unverified
+  // Final fallback: batch web-search with multi-candidate comparison for anything still unverified
   await verifyViaWebSearch(jobs.filter(j => !j.urlVerified));
 }
 
@@ -611,9 +659,13 @@ async function runJobSearch(userId, prefs, tier = "free") {
       }\n`
     : "";
 
-  const jobCount = tierConfig.jobsPerSearch || 5;
+  const jobCount      = tierConfig.jobsPerSearch || 5;
+  // Request more candidates than needed so we can rank and pick the best after verification
+  const candidateCount = Math.max(jobCount * CANDIDATE_MULTIPLIER, 12);
 
-  const systemPrompt = `You are an intelligent job matching agent. Search job boards, find real current postings, and evaluate each one across multiple dimensions to surface the best matches for this specific candidate.
+  const systemPrompt = `You are an intelligent job matching agent. Search job boards broadly, find real current postings, and evaluate each one across multiple dimensions to surface the best matches for this specific candidate.
+
+IMPORTANT: This is a background accuracy-first search. Your goal is to find as many REAL, VERIFIED candidates as possible so the ranking pipeline can select the best ones. Do NOT stop early. Explore all sources completely.
 
 ${candidateProfile ? `CANDIDATE PROFILE:\n${candidateProfile}\n` : ""}
 REQUIRED CRITERIA (hard filters — reject any job that does not match ALL of these):
@@ -633,17 +685,22 @@ MATCHING DIMENSIONS — score and reason across all of these for every job you r
 
 SOURCE RULES — non-negotiable:
 - Search hiring.cafe FIRST and use it as your PRIMARY source. It provides direct, verified links to the exact job posting.
-- Secondary sources (only if hiring.cafe does not have enough results): boards.greenhouse.io, jobs.lever.co, Wellfound, Builtin, company careers pages.
+- Secondary sources: boards.greenhouse.io, jobs.lever.co, jobs.ashbyhq.com, Wellfound, Builtin, company careers pages.
 - NEVER use Indeed or LinkedIn as a source. Do not visit indeed.com or linkedin.com. Do not return any URL containing "indeed.com" or "linkedin.com". This is absolute.
+
+TITLE MATCHING RULES — non-negotiable:
+- Return jobs whose title EXACTLY matches the target role. Do NOT substitute adjacent roles, different departments, or different seniority levels.
+- "Engineer I" and "Engineer II" are DIFFERENT roles — never substitute one for the other.
+- "Senior X" and "X" are DIFFERENT roles — only return "Senior X" if the target includes "Senior".
 
 URL RULES — non-negotiable:
 - Every job you return MUST have a URL that opens directly to that specific posting. Before including a job, verify the URL actually leads to the individual listing — not the company homepage, not a /careers page, not a search results page.
 - A valid URL contains a unique job identifier or slug (e.g. hiring.cafe/jobs/12345, boards.greenhouse.io/company/jobs/67890, jobs.lever.co/company/uuid, company.com/careers/role-name-id).
-- If you cannot find a verified direct URL for a role, DO NOT include it. Return fewer than ${jobCount} jobs rather than include even one with a bad, unverified, or generic URL.
+- If you cannot find a verified direct URL for a role, DO NOT include it. Return fewer jobs rather than include even one with a bad, unverified, or generic URL.
 - Prefer postings from the last 14 days.
 - Skip jobs where the required experience is significantly above the candidate's level.
 
-Return UP TO ${jobCount} jobs as a raw JSON array — no markdown, no explanation, nothing else. Fewer high-quality results with accurate links is better than ${jobCount} results with bad links.
+Return UP TO ${candidateCount} candidate jobs as a raw JSON array — no markdown, no explanation, nothing else. More verified candidates with accurate links is better. We will rank and filter to the top ${jobCount} after verification.
 Field rules:
 - fitScore: integer 0-100 reflecting overall match quality across all 10 dimensions (not keyword count)
 - matchReasons: array of 3-5 short strings (1-2 sentences each) explaining WHY this job fits the candidate — reference specific dimensions and the candidate's actual background
@@ -655,19 +712,22 @@ Field rules:
 
 [{"title":"","company":"","location":"","salary":"","experience":"","description":"","url":"","atsProvider":"","atsSlug":"","posted":"","fitScore":85,"matchReasons":["Experience Depth: ...","Transferable Skills: ...","Project Similarity: ..."]}]`;
 
-  const userQuery = `Find up to ${jobCount} job listings for: ${query}
+  const userQuery = `Find up to ${candidateCount} job listing CANDIDATES for: ${query}
 
-Run your web searches in this exact order and stop adding jobs once you have ${jobCount} with verified direct URLs:
+IMPORTANT: Do NOT stop early. Search ALL sources below completely. We need a large pool of candidates to rank and filter from. Continue until all sources are exhausted or you have ${candidateCount} candidates.
+
+Search in this order (complete ALL of them):
 1. site:hiring.cafe ${query}
 2. site:boards.greenhouse.io ${query}
 3. site:jobs.lever.co ${query}
 4. site:wellfound.com ${query}
+5. site:builtin.com ${query}
 
 Do NOT search indeed.com or linkedin.com under any circumstances. Only include a job if the URL opens directly to that specific posting.`;
 
   const response = await anthropic.messages.create({
     model:      MODEL_SONNET,
-    max_tokens: Math.max(tierConfig.maxOutputTokens, 2500),
+    max_tokens: Math.max(tierConfig.maxOutputTokens, 4000),
     tools:      [{ type: "web_search_20250305", name: "web_search", max_uses: tierConfig.webSearchesPerQuery }],
     system:     systemPrompt,
     messages:   [{ role: "user", content: userQuery }],
@@ -716,22 +776,109 @@ Do NOT search indeed.com or linkedin.com under any circumstances. Only include a
     return true;
   });
 
-  // Verify every job URL through the ATS API → HTTP → web-search pipeline
+  // Verify every job URL through the 5-stage ATS → HTTP → web-search pipeline
   await verifyJobUrls(uniqueJobs);
 
-  // Only keep jobs that have a verified direct apply URL
   const verifiedJobs = uniqueJobs.filter(j => j.urlVerified);
-  console.log(`[runJobSearch] ${uniqueJobs.length} found, ${verifiedJobs.length} verified for ${userId}`);
+  console.log(`[runJobSearch] Pass 1: ${uniqueJobs.length} candidates, ${verifiedJobs.length} verified for ${userId}`);
+
+  // Track cost for first pass
+  if (response.usage) {
+    const { input_tokens, output_tokens } = response.usage;
+    db.collection("platform_events").add({
+      userId, view: "job_search",
+      inputTokens:  input_tokens,
+      outputTokens: output_tokens,
+      cost: (input_tokens * INPUT_COST_SONNET) + (output_tokens * OUTPUT_COST_SONNET),
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    }).catch(() => {});
+  }
+
+  // Second search pass when the first pass finds fewer than MIN_RESULT_TARGET verified jobs.
+  // Uses different source sites to avoid redundant searches.
+  let allVerifiedJobs = [...verifiedJobs];
+  if (verifiedJobs.length < MIN_RESULT_TARGET) {
+    const alreadyFound = allVerifiedJobs.map(j => `- ${j.company}: ${j.title}`).join("\n");
+    const secondPassQuery = `Find up to ${candidateCount} MORE job listing CANDIDATES for: ${query}
+
+IMPORTANT: This is a second search pass to find additional candidates. Use DIFFERENT sources. Search all sources completely — do NOT stop early.
+${alreadyFound ? `Already found (skip these):\n${alreadyFound}\n` : ""}${seenSection}
+Search in this order (complete ALL of them):
+1. site:jobs.ashbyhq.com ${query}
+2. site:builtin.com ${query}
+3. site:wellfound.com ${query}
+4. ${query} job opening
+
+Do NOT search indeed.com, linkedin.com, hiring.cafe, greenhouse.io, or lever.co (already searched). Only include a job if the URL opens directly to that specific posting.`;
+
+    try {
+      const response2 = await anthropic.messages.create({
+        model:      MODEL_SONNET,
+        max_tokens: Math.max(tierConfig.maxOutputTokens, 4000),
+        tools:      [{ type: "web_search_20250305", name: "web_search", max_uses: tierConfig.webSearchesPerQuery }],
+        system:     systemPrompt,
+        messages:   [{ role: "user", content: secondPassQuery }],
+      });
+
+      const raw2 = response2.content.filter(b => b.type === "text").map(b => b.text).join("\n\n").trim();
+      let jobs2 = [];
+      try {
+        const clean2 = raw2.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim();
+        const m2     = clean2.match(/\[[\s\S]*\]/);
+        if (m2) jobs2 = JSON.parse(m2[0]);
+      } catch { jobs2 = []; }
+
+      jobs2 = jobs2.filter(job => {
+        if (!job.url || !job.url.startsWith("http")) return false;
+        if (BANNED_DOMAINS.test(job.url)) return false;
+        const fp = makeJobFingerprint(job);
+        if (seenFingerprints.has(fp)) return false;
+        seenFingerprints.add(fp);
+        return true;
+      });
+
+      if (jobs2.length > 0) {
+        await verifyJobUrls(jobs2);
+        const verified2 = jobs2.filter(j => j.urlVerified);
+        allVerifiedJobs = [...allVerifiedJobs, ...verified2];
+        console.log(`[runJobSearch] Pass 2: ${jobs2.length} candidates, ${verified2.length} verified for ${userId}`);
+      }
+
+      if (response2.usage) {
+        const { input_tokens, output_tokens } = response2.usage;
+        db.collection("platform_events").add({
+          userId, view: "job_search_pass2",
+          inputTokens:  input_tokens,
+          outputTokens: output_tokens,
+          cost: (input_tokens * INPUT_COST_SONNET) + (output_tokens * OUTPUT_COST_SONNET),
+          createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        }).catch(() => {});
+      }
+    } catch (err) {
+      console.warn(`[runJobSearch] Pass 2 failed for ${userId}:`, err.message);
+    }
+  }
+
+  // Rank all verified jobs: composite score = applyUrlConfidence (50%) + fitScore (50%)
+  allVerifiedJobs.sort((a, b) => {
+    const sa = (a.applyUrlConfidence || 0) * 0.50 + (typeof a.fitScore === "number" ? a.fitScore / 100 : 0.50) * 0.50;
+    const sb = (b.applyUrlConfidence || 0) * 0.50 + (typeof b.fitScore === "number" ? b.fitScore / 100 : 0.50) * 0.50;
+    return sb - sa;
+  });
+
+  // Keep only the top-ranked jobs up to jobCount
+  const finalJobs = allVerifiedJobs.slice(0, jobCount);
+  console.log(`[runJobSearch] ${allVerifiedJobs.length} total verified → keeping top ${finalJobs.length} for ${userId}`);
 
   // Save search summary to digests
   const digestRef = await db.collection("digests").add({
     userId, query,
-    jobCount:  verifiedJobs.length,
+    jobCount:  finalJobs.length,
     createdAt: admin.firestore.FieldValue.serverTimestamp(),
   });
 
-  // Save each verified job as an individual document
-  const savePromises = verifiedJobs.map(job =>
+  // Save each final job as an individual document
+  const savePromises = finalJobs.map(job =>
     db.collection("users").doc(userId).collection("jobs").add({
       userId,
       digestId:          digestRef.id,
@@ -754,7 +901,7 @@ Do NOT search indeed.com or linkedin.com under any circumstances. Only include a
     })
   );
   // Write to global jobs_cache (dedup index by URL, 30-day TTL)
-  const cacheWrites = verifiedJobs.filter(j => j.directUrl || j.url).map(j => {
+  const cacheWrites = finalJobs.filter(j => j.directUrl || j.url).map(j => {
     const hash = jobUrlHash(j.directUrl || j.url);
     if (!hash) return null;
     return db.collection("jobs_cache").doc(hash).set({
@@ -774,29 +921,17 @@ Do NOT search indeed.com or linkedin.com under any circumstances. Only include a
   // Increment denormalised counters in the root user doc (non-blocking)
   db.collection("users").doc(userId).update({
     "stats.searchesRun": admin.firestore.FieldValue.increment(1),
-    ...(verifiedJobs.length > 0 ? { "stats.jobsFound": admin.firestore.FieldValue.increment(verifiedJobs.length) } : {}),
+    ...(finalJobs.length > 0 ? { "stats.jobsFound": admin.firestore.FieldValue.increment(finalJobs.length) } : {}),
   }).catch(() => {});
 
   // Send push notification if new jobs were found
-  if (verifiedJobs.length > 0) {
-    const preview    = verifiedJobs.slice(0, 2).map(j => `${j.title} at ${j.company}`).join(" · ");
-    const notifTitle = verifiedJobs.length === 1 ? "1 new job found" : `${verifiedJobs.length} new jobs found`;
+  if (finalJobs.length > 0) {
+    const preview    = finalJobs.slice(0, 2).map(j => `${j.title} at ${j.company}`).join(" · ");
+    const notifTitle = finalJobs.length === 1 ? "1 new job found" : `${finalJobs.length} new jobs found`;
     sendPushNotification(userId, notifTitle, preview).catch(() => {});
   }
 
-  // Track cost using Sonnet rates
-  if (response.usage) {
-    const { input_tokens, output_tokens } = response.usage;
-    await db.collection("platform_events").add({
-      userId, view: "job_search",
-      inputTokens:  input_tokens,
-      outputTokens: output_tokens,
-      cost: (input_tokens * INPUT_COST_SONNET) + (output_tokens * OUTPUT_COST_SONNET),
-      createdAt: admin.firestore.FieldValue.serverTimestamp(),
-    });
-  }
-
-  return verifiedJobs;
+  return finalJobs;
 }
 
 // â"€â"€ Health check â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
