@@ -2231,7 +2231,7 @@ exports.api = functions
   .runWith({
     timeoutSeconds: 540,
     secrets: ["ANTHROPIC_API_KEY", "STRIPE_SECRET_KEY", "STRIPE_WEBHOOK_SECRET",
-              "STRIPE_PRO_PRICE_ID", "STRIPE_PRO_ANNUAL_PRICE_ID", "GMAIL_APP_PASSWORD", "GMAIL_SENDER"],
+              "STRIPE_PRO_PRICE_ID", "STRIPE_PRO_ANNUAL_PRICE_ID"],
   })
   .https.onRequest(app);
 
