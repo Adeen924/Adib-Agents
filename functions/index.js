@@ -593,11 +593,13 @@ function jobUrlHash(url) {
   return crypto.createHash("sha256").update(url).digest("hex").slice(0, 20);
 }
 
-async function runJobSearch(userId, prefs, tier = "free") {
+async function runJobSearch(userId, prefs, tier = "free", logFn = null) {
+  const log = (msg) => { if (typeof logFn === "function") logFn(msg).catch(() => {}); };
   const tierConfig = TIERS[tier] || TIERS.free;
 
   const query     = buildSearchQuery(prefs);
   const jobBoards = buildJobBoardsContext(prefs, tierConfig);
+  log(`Search query: "${query}"`);
 
   // Fetch full knowledge base for multi-dimensional matching
   let resumeSnippet = "";
@@ -725,6 +727,7 @@ Search in this order (complete ALL of them):
 
 Do NOT search indeed.com or linkedin.com under any circumstances. Only include a job if the URL opens directly to that specific posting.`;
 
+  log(`Pass 1: Asking Claude to find up to ${candidateCount} candidates (${tierConfig.webSearchesPerQuery} web searches)…`);
   const response = await anthropic.messages.create({
     model:      MODEL_SONNET,
     max_tokens: Math.max(tierConfig.maxOutputTokens, 4000),
@@ -732,6 +735,7 @@ Do NOT search indeed.com or linkedin.com under any circumstances. Only include a
     system:     systemPrompt,
     messages:   [{ role: "user", content: userQuery }],
   });
+  log(`Pass 1: Claude finished (stop_reason: ${response.stop_reason}, searches used: ${response.usage?.server_tool_use?.web_search_requests ?? "?"})`);
 
   const raw = response.content
     .filter(b => b.type === "text")
@@ -747,11 +751,14 @@ Do NOT search indeed.com or linkedin.com under any circumstances. Only include a
     if (match) jobs = JSON.parse(match[0]);
     if (jobs.length === 0) {
       console.warn(`[runJobSearch] Parsed 0 jobs for ${userId}. stop_reason=${response.stop_reason} raw_preview=${raw.slice(0, 400)}`);
+      log(`Pass 1: WARNING — Claude returned 0 parseable job candidates`);
     }
   } catch (e) {
     console.error(`[runJobSearch] JSON parse failed for ${userId}: ${e.message} | raw_preview=${raw.slice(0, 400)}`);
+    log(`Pass 1: ERROR parsing Claude response — ${e.message}`);
     jobs = [];
   }
+  log(`Pass 1: ${jobs.length} raw candidates parsed`);
 
   // Hard filter: drop jobs with no URL, or any aggregator URL that slipped through
   const BANNED_DOMAINS = /indeed\.com|linkedin\.com/i;
@@ -775,12 +782,14 @@ Do NOT search indeed.com or linkedin.com under any circumstances. Only include a
     seenFingerprints.add(fp); // also dedupe within this batch
     return true;
   });
+  log(`Pass 1: ${uniqueJobs.length} unique candidates after dedup (${jobs.length - uniqueJobs.length} skipped)`);
 
-  // Verify every job URL through the 5-stage ATS → HTTP → web-search pipeline
+  log(`Verifying ${uniqueJobs.length} URLs via ATS APIs → HTTP → web search…`);
   await verifyJobUrls(uniqueJobs);
 
   const verifiedJobs = uniqueJobs.filter(j => j.urlVerified);
   console.log(`[runJobSearch] Pass 1: ${uniqueJobs.length} candidates, ${verifiedJobs.length} verified for ${userId}`);
+  log(`Pass 1: ${verifiedJobs.length}/${uniqueJobs.length} URLs verified`);
 
   // Track cost for first pass
   if (response.usage) {
@@ -798,6 +807,7 @@ Do NOT search indeed.com or linkedin.com under any circumstances. Only include a
   // Uses different source sites to avoid redundant searches.
   let allVerifiedJobs = [...verifiedJobs];
   if (verifiedJobs.length < MIN_RESULT_TARGET) {
+    log(`Pass 2: Only ${verifiedJobs.length} verified (need ${MIN_RESULT_TARGET}+) — searching Ashby, Builtin, Wellfound…`);
     const alreadyFound = allVerifiedJobs.map(j => `- ${j.company}: ${j.title}`).join("\n");
     const secondPassQuery = `Find up to ${candidateCount} MORE job listing CANDIDATES for: ${query}
 
@@ -819,6 +829,7 @@ Do NOT search indeed.com, linkedin.com, hiring.cafe, greenhouse.io, or lever.co 
         system:     systemPrompt,
         messages:   [{ role: "user", content: secondPassQuery }],
       });
+      log(`Pass 2: Claude finished (stop_reason: ${response2.stop_reason})`);
 
       const raw2 = response2.content.filter(b => b.type === "text").map(b => b.text).join("\n\n").trim();
       let jobs2 = [];
@@ -836,12 +847,15 @@ Do NOT search indeed.com, linkedin.com, hiring.cafe, greenhouse.io, or lever.co 
         seenFingerprints.add(fp);
         return true;
       });
+      log(`Pass 2: ${jobs2.length} unique candidates`);
 
       if (jobs2.length > 0) {
+        log(`Pass 2: Verifying ${jobs2.length} URLs…`);
         await verifyJobUrls(jobs2);
         const verified2 = jobs2.filter(j => j.urlVerified);
         allVerifiedJobs = [...allVerifiedJobs, ...verified2];
         console.log(`[runJobSearch] Pass 2: ${jobs2.length} candidates, ${verified2.length} verified for ${userId}`);
+        log(`Pass 2: ${verified2.length}/${jobs2.length} URLs verified`);
       }
 
       if (response2.usage) {
@@ -856,6 +870,7 @@ Do NOT search indeed.com, linkedin.com, hiring.cafe, greenhouse.io, or lever.co 
       }
     } catch (err) {
       console.warn(`[runJobSearch] Pass 2 failed for ${userId}:`, err.message);
+      log(`Pass 2: ERROR — ${err.message}`);
     }
   }
 
@@ -869,6 +884,7 @@ Do NOT search indeed.com, linkedin.com, hiring.cafe, greenhouse.io, or lever.co 
   // Keep only the top-ranked jobs up to jobCount
   const finalJobs = allVerifiedJobs.slice(0, jobCount);
   console.log(`[runJobSearch] ${allVerifiedJobs.length} total verified → keeping top ${finalJobs.length} for ${userId}`);
+  log(`Ranking complete — saving top ${finalJobs.length} job(s) out of ${allVerifiedJobs.length} verified`);
 
   // Save search summary to digests
   const digestRef = await db.collection("digests").add({
@@ -1724,6 +1740,8 @@ app.get("/jobs/:userId", async (req, res) => {
 // â"€â"€ Manual search now â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 app.post("/search/now/:userId", async (req, res) => {
   const { userId } = req.params;
+  let logRef = null;
+  const logMessages = [];
   try {
     const [prefDoc, tier, userDoc] = await Promise.all([
       db.collection("users").doc(userId).collection("preferences").doc("config").get(),
@@ -1738,11 +1756,30 @@ app.post("/search/now/:userId", async (req, res) => {
     if (role !== "admin") {
       await enforceFeatureLimit(userId, "searches_manual");
     }
+
+    let logFn = null;
+    if (role === "admin") {
+      logRef = db.collection("search_logs").doc(userId);
+      await logRef.set({ startedAt: admin.firestore.FieldValue.serverTimestamp(), status: "running", log: [] });
+      logFn = async (msg) => {
+        const ts = new Date().toLocaleTimeString("en-US", { hour12: false });
+        logMessages.push(`${ts}  ${msg}`);
+        await logRef.update({ log: logMessages, updatedAt: admin.firestore.FieldValue.serverTimestamp() });
+      };
+    }
+
     const prefs = prefDoc.data();
-    const jobs = await runJobSearch(userId, prefs, tier);
+    const jobs  = await runJobSearch(userId, prefs, tier, logFn);
+
+    if (logRef) {
+      await logRef.update({ status: "completed", completedAt: admin.firestore.FieldValue.serverTimestamp() });
+    }
     res.json({ ok: true, jobCount: jobs.length, tier });
   } catch (err) {
     console.error("Search now error:", err.message, err.stack);
+    if (logRef) {
+      logRef.update({ status: "failed", error: err.message, updatedAt: admin.firestore.FieldValue.serverTimestamp() }).catch(() => {});
+    }
     res.status(500).json({ error: err.message || "Search failed. Please try again." });
   }
 });

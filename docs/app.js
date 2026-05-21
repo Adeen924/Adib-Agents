@@ -728,12 +728,46 @@ async function deleteApplication(id) {
 }
 
 // ── Search Now ────────────────────────────────────────────────────────────────
+function getOrCreateAdminLogPanel() {
+  let panel = document.getElementById("adminSearchLog");
+  if (!panel) {
+    panel = document.createElement("div");
+    panel.id = "adminSearchLog";
+    panel.style.cssText = "margin-top:12px;background:#0d1117;border:1px solid #30363d;border-radius:8px;padding:12px 14px;font-family:monospace;font-size:12px;line-height:1.7;color:#e6edf3;max-height:240px;overflow-y:auto;white-space:pre-wrap;display:none;";
+    const btn = document.getElementById("searchNowBtn");
+    if (btn) btn.parentNode.insertBefore(panel, btn.nextSibling);
+  }
+  return panel;
+}
+
 async function searchNow() {
   const btn = document.getElementById("searchNowBtn");
   btn.disabled = true;
   btn.textContent = "⏳ Searching…";
   const body = document.getElementById("digestBody");
-  body.innerHTML = '<div class="panel-loading">Searching for jobs — this takes about 30 seconds…</div>';
+  body.innerHTML = '<div class="panel-loading">Searching for jobs — this may take a minute…</div>';
+
+  let unsubLog = null;
+
+  if (userRole === "admin") {
+    const panel = getOrCreateAdminLogPanel();
+    panel.style.display = "";
+    panel.textContent = "Waiting for search to start…\n";
+
+    const logDoc = firebase.firestore().collection("search_logs").doc(userId);
+    unsubLog = logDoc.onSnapshot(snap => {
+      if (!snap.exists) return;
+      const d = snap.data();
+      const lines = Array.isArray(d.log) ? d.log : [];
+      panel.textContent = lines.join("\n");
+      if (d.status === "failed" && d.error) {
+        panel.textContent += `\n\nFAILED: ${d.error}`;
+      } else if (d.status === "completed") {
+        panel.textContent += "\n\nSearch complete.";
+      }
+      panel.scrollTop = panel.scrollHeight;
+    });
+  }
 
   try {
     const res  = await fetch(`${BACKEND_URL}/search/now/${encodeURIComponent(userId)}`, { method: "POST" });
@@ -745,6 +779,7 @@ async function searchNow() {
   } finally {
     btn.disabled = false;
     btn.textContent = "🔍 Search Now";
+    if (unsubLog) unsubLog();
   }
 }
 
