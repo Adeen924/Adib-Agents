@@ -1466,11 +1466,12 @@ async function loadUserTier() {
 function applyTierGates() {
   const isPro = userTier === "pro";
 
-  // Search Now button is pro-only
+  // Search Now button is pro-only (admins always get access)
   const searchBtn = document.getElementById("searchNowBtn");
   if (searchBtn) {
-    searchBtn.style.display = isPro ? "" : "none";
-    if (!isPro) {
+    const canSearch = isPro || userRole === "admin";
+    searchBtn.style.display = canSearch ? "" : "none";
+    if (!canSearch) {
       let proNote = document.getElementById("searchNowProNote");
       if (!proNote) {
         proNote = document.createElement("p");
