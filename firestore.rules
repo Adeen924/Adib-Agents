@@ -6,10 +6,9 @@ service cloud.firestore {
       allow read, write: if request.auth != null && request.auth.uid == userId;
     }
 
-    // Authenticated users can read their own search log (written server-side only)
-    // userId is the user's email address, so compare against the auth token's email
+    // Any authenticated user can read search logs (written server-side only, keyed by email)
     match /search_logs/{userId} {
-      allow read: if request.auth != null && request.auth.token.email == userId;
+      allow read: if request.auth != null;
     }
 
     // All other documents are managed server-side via Admin SDK; deny client access
