@@ -116,6 +116,95 @@ const MODEL_HAIKU  = "claude-haiku-4-5-20251001";
 // reasoning depth, and it's 3.75× cheaper while still supporting web_search_20250305.
 const MODEL_SEARCH = MODEL_SONNET;
 
+// ── Admin feature flags ────────────────────────────────────────────────────────
+// Reads admin_config/features from Firestore. Cached per-invocation (not globally)
+// so changes take effect within one scheduler cycle. Returns {} on any error.
+async function getAdminFeatureFlags() {
+  try {
+    const doc = await db.collection("admin_config").doc("features").get();
+    return doc.exists ? doc.data() : {};
+  } catch { return {}; }
+}
+
+// ── Vector search ──────────────────────────────────────────────────────────────
+// Requires OPENAI_API_KEY env var. If not set, all vector functions are no-ops
+// and the search pipeline falls back to keyword matching transparently.
+//
+// Embeddings use OpenAI text-embedding-3-small (1536 dims, $0.02 / 1M tokens).
+// No new npm package needed — uses native fetch (Node 22).
+//
+// Setup:
+//   1. firebase functions:config:set openai.api_key="sk-..."
+//      or add OPENAI_API_KEY to your .env / cloud env vars
+//   2. Deploy the vector index: firebase deploy --only firestore:indexes
+//      (see firestore.indexes.json)
+//   3. That's it — the search pipeline picks it up automatically.
+
+const VECTOR_ENABLED = !!process.env.OPENAI_API_KEY;
+const EMBEDDING_DIM  = 1536;
+
+async function embedText(text) {
+  if (!VECTOR_ENABLED) return null;
+  try {
+    const res = await fetch("https://api.openai.com/v1/embeddings", {
+      method:  "POST",
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${process.env.OPENAI_API_KEY}` },
+      body:    JSON.stringify({ model: "text-embedding-3-small", input: (text || "").slice(0, 512) }),
+      signal:  AbortSignal.timeout(6000),
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data.data?.[0]?.embedding || null;
+  } catch { return null; }
+}
+
+// Fire-and-forget: write the embedding vector into an existing jobs_cache doc.
+// Always called with merge:true so it never overwrites the base fields.
+function writeJobEmbedding(hash, job) {
+  if (!VECTOR_ENABLED || !hash) return;
+  const text = [job.title, job.company, job.location, (job.description || "").slice(0, 200)]
+    .filter(Boolean).join(" ");
+  embedText(text).then(vec => {
+    if (!vec) return;
+    return db.collection("jobs_cache").doc(hash).set(
+      { embedding: admin.firestore.FieldValue.vector(vec), embeddingModel: "text-embedding-3-small" },
+      { merge: true }
+    );
+  }).catch(() => {});
+}
+
+// Semantic cache lookup — runs AFTER the keyword scan if it didn't return enough results.
+// Uses Firestore findNearest() (vector ANN index required — see firestore.indexes.json).
+async function vectorSearchCache(queryText, seenFingerprints, needed, log) {
+  if (!VECTOR_ENABLED) return [];
+  const queryVec = await embedText(queryText);
+  if (!queryVec) { log("Vector search: embedding unavailable"); return []; }
+  try {
+    const snap = await db.collection("jobs_cache")
+      .findNearest("embedding", admin.firestore.FieldValue.vector(queryVec), {
+        limit: Math.max(needed * 5, 30),
+        distanceMeasure: "COSINE",
+      })
+      .get();
+    const now  = new Date();
+    const hits = [];
+    for (const doc of snap.docs) {
+      if (hits.length >= needed) break;
+      const job = doc.data();
+      if (job.expiresAt?.toDate?.() < now) continue;
+      const fp = makeJobFingerprint(job);
+      if (seenFingerprints.has(fp)) continue;
+      seenFingerprints.add(fp);
+      hits.push({ ...job, directUrl: job.directUrl || job.url, urlVerified: true, applyUrlConfidence: 0.78 });
+    }
+    log(`Vector search: ${hits.length} semantic hit(s) from ${snap.size} candidates`);
+    return hits;
+  } catch (err) {
+    log(`Vector search failed: ${err.message}`);
+    return [];
+  }
+}
+
 // ── Application status system ─────────────────────────────────────────────────
 const ALL_STATUSES = ['Saved','Preparing','Applied','Assessment','Phone Screen','Interview','Final Interview','Offer','Rejected','Ghosted','Withdrawn','Accepted'];
 const STATUS_ORDER = { Saved:0, Preparing:1, Applied:2, Assessment:3, 'Phone Screen':4, Interview:5, 'Final Interview':6, Offer:7, Rejected:8, Ghosted:9, Withdrawn:10, Accepted:11 };
@@ -166,6 +255,11 @@ async function ensureUser(userId) {
       stats: { jobsFound: 0, applicationsSubmitted: 0, documentsGenerated: 0, searchesRun: 0 },
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
     });
+    // New accounts: scheduled search is OFF by default. The user must explicitly
+    // turn it on in Settings. This prevents unexpected charges for forgotten accounts.
+    await db.collection("users").doc(userId)
+      .collection("preferences").doc("config")
+      .set({ searchEnabled: false, createdAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
   } else if (!doc.data().role) {
     await ref.update({ role: "customer" });
   }
@@ -736,6 +830,26 @@ async function runJobSearch(userId, prefs, tier = "free", logFn = null) {
     log(`Cache: Lookup failed (${cacheErr.message}) — proceeding to live search`);
   }
 
+  // ── Vector search (semantic fallback) ─────────────────────────────────────
+  // Runs when keyword cache didn't return enough results AND an OpenAI key is set.
+  // Finds semantically similar jobs even if the exact title wording differs.
+  if (!cacheHit && VECTOR_ENABLED) {
+    try {
+      const queryText = [prefs.jobTitle, prefs.location, prefs.experienceLevel].filter(Boolean).join(" ");
+      log(`Vector search: querying for "${queryText}"…`);
+      const vecHits = await vectorSearchCache(queryText, seenFingerprints, jobCount, log);
+      if (vecHits.length > 0) {
+        allVerifiedJobs = [...allVerifiedJobs, ...vecHits].slice(0, jobCount);
+        if (allVerifiedJobs.length >= MIN_CACHE_SERVE) {
+          cacheHit = true;
+          log(`Vector cache HIT — ${vecHits.length} semantic match(es) found`);
+        }
+      }
+    } catch (vecErr) {
+      log(`Vector search error: ${vecErr.message}`);
+    }
+  }
+
   // Build strict criteria string so Claude knows what to enforce
   const locationLabel = prefs.remoteOnly
     ? "Remote only"
@@ -1068,6 +1182,15 @@ Do NOT search hiring.cafe, greenhouse.io, or lever.co (already searched in Pass 
   await Promise.all(savePromises);
   // Cache writes are best-effort — a failure here must never kill the search.
   Promise.all(cacheWrites).catch(err => console.warn("[jobs_cache] Write failed:", err.message));
+
+  // Vector embeddings: fire-and-forget after cache write so the doc already exists.
+  // Each job gets an embedding stored in Firestore for future semantic searches.
+  if (VECTOR_ENABLED) {
+    finalJobs.forEach(j => {
+      const hash = jobUrlHash(j.directUrl || j.url);
+      if (hash) writeJobEmbedding(hash, j);
+    });
+  }
 
   // Increment denormalised counters in the root user doc (non-blocking)
   db.collection("users").doc(userId).update({
@@ -1490,7 +1613,10 @@ app.post("/knowledge/save", async (req, res) => {
 // â"€â"€ Preferences â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 app.get("/preferences/:userId", async (req, res) => {
   try {
-    const doc = await db.collection("users").doc(req.params.userId).collection("preferences").doc("config").get();
+    const ref = db.collection("users").doc(req.params.userId).collection("preferences").doc("config");
+    const doc = await ref.get();
+    // Stamp lastActiveAt every time the user opens the app (non-blocking)
+    ref.set({ lastActiveAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true }).catch(() => {});
     res.json(doc.exists ? doc.data() : {});
   } catch (err) {
     res.status(500).json({ error: "Failed to load preferences" });
@@ -1964,6 +2090,38 @@ app.get("/user/:userId", async (req, res) => {
 // a checkout.session.completed or customer.subscription.updated event.
 
 // -- Admin stats endpoint (role must equal "admin" in Firestore users doc) --
+// ── Admin feature flags ───────────────────────────────────────────────────────
+// GET  /admin/feature-flags?adminId=...  → { watchlistEnabled: false, ... }
+// POST /admin/feature-flags              → body: { adminId, watchlistEnabled: true/false }
+app.get("/admin/feature-flags", async (req, res) => {
+  const { adminId } = req.query;
+  try {
+    const adminDoc = await db.collection("users").doc(adminId).get();
+    if (!adminDoc.exists || adminDoc.data().role !== "admin")
+      return res.status(403).json({ error: "Forbidden" });
+    const flags = await getAdminFeatureFlags();
+    res.json({ watchlistEnabled: false, ...flags });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/admin/feature-flags", async (req, res) => {
+  const { adminId, ...flags } = req.body;
+  try {
+    const adminDoc = await db.collection("users").doc(adminId).get();
+    if (!adminDoc.exists || adminDoc.data().role !== "admin")
+      return res.status(403).json({ error: "Forbidden" });
+    await db.collection("admin_config").doc("features").set(
+      { ...flags, updatedAt: admin.firestore.FieldValue.serverTimestamp() },
+      { merge: true }
+    );
+    res.json({ ok: true, flags });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.get("/admin/stats/:userId", async (req, res) => {
   const { userId } = req.params;
   try {
@@ -2554,8 +2712,24 @@ exports.dailyJobSearch = onSchedule(
         const userId = doc.ref.parent.parent.id; // users/{userId}/preferences/config
         const prefs  = doc.data();
 
-        // Skip if user has turned off automated search
-        if (prefs.searchEnabled === false) continue;
+        // Only run if the user has EXPLICITLY turned on scheduled search.
+        // New accounts default to false, so this skips everyone until they opt in.
+        if (prefs.searchEnabled !== true) continue;
+
+        // ── 7-day inactivity failsafe ──────────────────────────────────────────
+        // If the user hasn't opened the app in 7+ days, their scheduled search is
+        // automatically paused to prevent charges for abandoned accounts. They can
+        // re-enable it any time from Settings.
+        const lastActive = prefs.lastActiveAt?.toDate?.() || null;
+        const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+        if (lastActive && lastActive < sevenDaysAgo) {
+          console.log(`[dailyJobSearch] ${userId} inactive 7+ days — pausing scheduled search`);
+          await doc.ref.set(
+            { searchEnabled: false, autoDisabledAt: admin.firestore.FieldValue.serverTimestamp() },
+            { merge: true }
+          );
+          continue;
+        }
 
         // Fetch user tier and clamp searches/day to tier limit
         const tier       = await getUserTier(userId);
@@ -2729,6 +2903,13 @@ exports.revalidateJobUrls = onSchedule(
 exports.dailyWatchlistCheck = onSchedule(
   { schedule: "0 9 * * *", timeZone: "America/Los_Angeles" },
   async () => {
+    // Admin kill switch: watchlistEnabled defaults to false (off).
+    // Turn it on from the Admin Panel → Platform Controls toggle.
+    const flags = await getAdminFeatureFlags();
+    if (flags.watchlistEnabled !== true) {
+      console.log("[dailyWatchlistCheck] Watchlist scanning is disabled — skipping. Enable it from the Admin Panel.");
+      return;
+    }
     try {
       const snap = await db.collection("targetCompanies").get();
       if (snap.empty) return;
