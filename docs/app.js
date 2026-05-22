@@ -2141,13 +2141,36 @@ async function saveWatchlistCompanies() {
 }
 
 // ── Admin Panel ───────────────────────────────────────────────────────────────
+async function toggleWatchlist(enable) {
+  const btn = document.getElementById("watchlistToggleBtn");
+  if (btn) { btn.disabled = true; btn.textContent = "Saving…"; }
+  try {
+    const res = await fetch(`${BACKEND_URL}/admin/feature-flags`, {
+      method:  "POST",
+      headers: { "Content-Type": "application/json" },
+      body:    JSON.stringify({ adminId: userId, watchlistEnabled: enable }),
+    });
+    if (!res.ok) throw new Error((await res.json()).error || "Failed");
+    // Reload so the button reflects the new state
+    await loadAdminPanel();
+  } catch (err) {
+    alert("Failed to update watchlist setting: " + err.message);
+    if (btn) { btn.disabled = false; btn.textContent = enable ? "Enable" : "Disable"; }
+  }
+}
+
 async function loadAdminPanel() {
   const body = document.getElementById("adminBody");
   body.innerHTML = '<div class="panel-loading" style="padding:28px">Loading admin stats…</div>';
   try {
-    const res  = await fetch(`${BACKEND_URL}/admin/stats/${encodeURIComponent(userId)}`);
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || "Failed to load");
+    const [statsRes, flagsRes] = await Promise.all([
+      fetch(`${BACKEND_URL}/admin/stats/${encodeURIComponent(userId)}`),
+      fetch(`${BACKEND_URL}/admin/feature-flags?adminId=${encodeURIComponent(userId)}`),
+    ]);
+    const data  = await statsRes.json();
+    const flags = flagsRes.ok ? await flagsRes.json() : {};
+    if (!statsRes.ok) throw new Error(data.error || "Failed to load");
+    const watchlistOn = flags.watchlistEnabled === true;
 
     const fmtCost   = (n) => `$${(n || 0).toFixed(4)}`;
     const fmtTokens = (n) => n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n || 0);
@@ -2179,6 +2202,30 @@ async function loadAdminPanel() {
     ).join("") || `<tr><td class="empty-table">All free users are active!</td></tr>`;
 
     body.innerHTML = `
+      <div class="settings-section">
+        <div class="settings-section-title">Platform Controls</div>
+        <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap">
+          <div>
+            <div style="font-weight:600;margin-bottom:4px">Watchlist Scanning</div>
+            <div style="font-size:0.82rem;color:var(--text-muted);max-width:420px">
+              When <strong>OFF</strong>, the daily watchlist job scan is completely paused —
+              users can still add companies to their watchlist, but no AI calls are made
+              and no new jobs are discovered. Turn <strong>ON</strong> when you have enough
+              users watching the same companies to justify the shared cost.
+            </div>
+          </div>
+          <div style="display:flex;align-items:center;gap:10px;flex-shrink:0">
+            <span style="font-size:0.88rem;font-weight:600;color:${watchlistOn ? 'var(--accent)' : 'var(--text-muted)'}">
+              ${watchlistOn ? '● ON' : '○ OFF'}
+            </span>
+            <button id="watchlistToggleBtn" class="btn" style="padding:6px 18px;font-size:0.85rem"
+              onclick="toggleWatchlist(${!watchlistOn})">
+              ${watchlistOn ? 'Disable' : 'Enable'}
+            </button>
+          </div>
+        </div>
+      </div>
+
       <div class="settings-section">
         <div class="settings-section-title">Platform Spending</div>
         <div class="stats-grid" style="max-width:800px">
