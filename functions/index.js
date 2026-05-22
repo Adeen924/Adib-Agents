@@ -225,7 +225,7 @@ const TIERS = {
   },
   pro: {
     label:               "Pro",
-    maxSearchesPerDay:   4,
+    maxSearchesPerDay:   3,
     webSearchesPerQuery: 9,
     maxOutputTokens:     10000,
     customSites:         true,
@@ -2716,24 +2716,24 @@ exports.dailyJobSearch = onSchedule(
         // New accounts default to false, so this skips everyone until they opt in.
         if (prefs.searchEnabled !== true) continue;
 
-        // ── 7-day inactivity failsafe ──────────────────────────────────────────
-        // If the user hasn't opened the app in 7+ days, their scheduled search is
-        // automatically paused to prevent charges for abandoned accounts. They can
-        // re-enable it any time from Settings.
-        const lastActive = prefs.lastActiveAt?.toDate?.() || null;
-        const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-        if (lastActive && lastActive < sevenDaysAgo) {
-          console.log(`[dailyJobSearch] ${userId} inactive 7+ days — pausing scheduled search`);
+        // Fetch tier first — inactivity threshold differs by tier
+        const tier       = await getUserTier(userId);
+        const tierConfig = TIERS[tier] || TIERS.free;
+
+        // ── Inactivity failsafe ────────────────────────────────────────────────
+        // Free: paused after 3 days inactive. Pro: paused after 7 days inactive.
+        // Users can re-enable any time from Settings.
+        const lastActive      = prefs.lastActiveAt?.toDate?.() || null;
+        const inactivityDays  = tier === "pro" ? 7 : 3;
+        const inactiveCutoff  = new Date(Date.now() - inactivityDays * 24 * 60 * 60 * 1000);
+        if (lastActive && lastActive < inactiveCutoff) {
+          console.log(`[dailyJobSearch] ${userId} (${tier}) inactive ${inactivityDays}+ days — pausing scheduled search`);
           await doc.ref.set(
             { searchEnabled: false, autoDisabledAt: admin.firestore.FieldValue.serverTimestamp() },
             { merge: true }
           );
           continue;
         }
-
-        // Fetch user tier and clamp searches/day to tier limit
-        const tier       = await getUserTier(userId);
-        const tierConfig = TIERS[tier] || TIERS.free;
         const cappedPrefs = {
           ...prefs,
           searchTimesPerDay: Math.min(

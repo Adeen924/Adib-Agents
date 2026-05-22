@@ -57,7 +57,8 @@
       "WebSearch",
       "Bash(npm install *)",
       "Bash(git fetch *)",
-      "Bash(git ls-tree *)"
+      "Bash(git ls-tree *)",
+      "Bash(npm run *)"
     ]
   }
 }
