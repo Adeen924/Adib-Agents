@@ -573,10 +573,10 @@ Rules:
       }],
     });
     trackCost(userId, "search_verify", res.usage);
-    const raw    = res.content.filter(b => b.type === "text").map(b => b.text).join("").trim();
-    const m      = raw.match(/\[[\s\S]*\]/);
-    if (!m) { vlog(`verifyViaWebSearch: no JSON array in response`); return; }
-    const results = JSON.parse(m[0]);
+    const raw      = res.content.filter(b => b.type === "text").map(b => b.text).join("").trim();
+    const extracted = extractJsonArray(raw);
+    if (!extracted) { vlog(`verifyViaWebSearch: no JSON array in response`); return; }
+    const results = JSON.parse(extracted);
 
     await Promise.all(results.map(async (r, i) => {
       if (i >= jobs.length) return;
@@ -640,7 +640,8 @@ async function verifyJobUrls(jobs, userId, vlog = () => {}) {
   await Promise.all(jobs.map(async (job) => {
     const atsHint  = (job.atsProvider || "").toLowerCase();
     const candidates = [];  // { url, rawConf, ats, titleScore }
-    vlog(`Verify "${job.title}" @ ${job.company} (url=${job.url || "none"}, atsHint=${atsHint || "none"})`);
+    const slugsToTry = companySlugs(job.company, job.atsSlug);
+    vlog(`Verify "${job.title}" @ ${job.company} (url=${job.url || "none"}, atsHint=${atsHint || "none"}, slugs=${slugsToTry.join(",")})`);
 
     // Stages 1–2: ATS public API lookups (parallel)
     const atsLookups = await Promise.all([
@@ -761,8 +762,8 @@ function extractJsonArray(text) {
 
 async function runJobSearch(userId, prefs, tier = "free", logFn = null) {
   const log  = (msg) => { if (typeof logFn === "function") logFn(msg).catch(() => {}); };
-  const admin = await isAdminUser(userId);
-  const vlog = admin ? (msg) => { log(`[debug] ${msg}`); console.log(`[verify:${userId}] ${msg}`); } : () => {};
+  const isAdmin = await isAdminUser(userId);
+  const vlog = isAdmin ? (msg) => { log(`[debug] ${msg}`); console.log(`[verify:${userId}] ${msg}`); } : () => {};
   const tierConfig = TIERS[tier] || TIERS.free;
 
   const jobCount       = tierConfig.jobsPerSearch || 5;
