@@ -252,6 +252,94 @@ async function isAdminUser(userId) {
   } catch { return false; }
 }
 
+// ── Company Verification Profiles ─────────────────────────────────────────────
+// Firestore: company_verification_profiles/{companyKey}
+//
+// Profiles let us override the default verification strategy per company without
+// touching global thresholds. All fields are optional — missing fields fall back
+// to standard behavior. Only companies with a profile deviate from defaults.
+//
+// Schema:
+//   companyName             string    — human-readable name
+//   atsType                 string    — "greenhouse" | "lever" | "ashby" | "custom"
+//   verificationMode        string    — "standard" | "custom"
+//   disableHttpVerification boolean   — skip Stage 3 HTTP check entirely
+//   allowGenericCareersRedirect boolean — when a valid ATS URL redirects to a
+//                                         generic /careers page, score the original
+//                                         URL pattern instead of the redirect dest
+//   preferDirectCareersScrape boolean  — skip ATS+HTTP, route to web-search fallback
+//   minAcceptScore          number    — per-company confidence threshold (replaces
+//                                       global CONFIDENCE_THRESHOLD when set)
+//   knownGoodDomains        string[]  — trusted URL substrings; when matched and
+//                                       no candidate exists, add synthetic candidate
+//                                       at minAcceptScore confidence
+//   notes                   string    — human notes on why this profile exists
+//   stats: { verificationFailures, redirectFailures, apiMisses, successfulVerifications }
+
+function normalizeCompanyKey(name) {
+  return name.toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 64);
+}
+
+// Batch-load profiles for a list of company names. Returns a Map keyed by
+// companyKey. Uses Promise.all to parallelize reads — one doc per unique company.
+async function loadCompanyProfiles(companyNames) {
+  if (!companyNames.length) return new Map();
+  const keys = [...new Set(companyNames.map(normalizeCompanyKey))];
+  try {
+    const docs = await Promise.all(
+      keys.map(k => db.collection("company_verification_profiles").doc(k).get())
+    );
+    const map = new Map();
+    for (const doc of docs) {
+      if (doc.exists) map.set(doc.id, doc.data());
+    }
+    return map;
+  } catch (err) {
+    console.warn("[profiles] loadCompanyProfiles failed:", err.message);
+    return new Map();
+  }
+}
+
+// Fire-and-forget telemetry: increment a stat counter on the company profile doc.
+// Silently no-ops if the doc doesn't exist (update() won't create docs).
+function recordVerificationStat(companyKey, field) {
+  db.collection("company_verification_profiles").doc(companyKey)
+    .update({
+      [`stats.${field}`]: admin.firestore.FieldValue.increment(1),
+      updatedAt:           admin.firestore.FieldValue.serverTimestamp(),
+    })
+    .catch(() => {});
+}
+
+// Default profiles for companies with known verification quirks.
+// Seeded via POST /admin/company-profiles/seed-defaults.
+function getDefaultCompanyProfiles() {
+  return {
+    spacex: {
+      companyName:              "SpaceX",
+      atsType:                  "greenhouse",
+      verificationMode:         "custom",
+      disableHttpVerification:  true,   // site returns 520; HTTP checks always fail
+      allowGenericCareersRedirect: false,
+      preferDirectCareersScrape: false,
+      minAcceptScore:           0.60,   // lowered from global 0.70 — trust known-good domains
+      knownGoodDomains:         ["boards.greenhouse.io/spacex"],
+      notes: "SpaceX site returns HTTP 520 on verification requests. Greenhouse board is private (API miss). Trust well-formed boards.greenhouse.io/spacex URLs via knownGoodDomains with softened threshold.",
+    },
+    relativityspace: {
+      companyName:              "Relativity Space",
+      atsType:                  "greenhouse",
+      verificationMode:         "custom",
+      disableHttpVerification:  false,
+      allowGenericCareersRedirect: true,  // Greenhouse URLs redirect to /careers — score original URL pattern
+      preferDirectCareersScrape:  false,
+      minAcceptScore:           0.62,
+      knownGoodDomains:         ["boards.greenhouse.io/relativity"],
+      notes: "Greenhouse URLs redirect to generic relativityspace.com/careers page. allowGenericCareersRedirect scores the original ATS URL pattern rather than the redirect destination.",
+    },
+  };
+}
+
 // Ensure a user document exists (called on first sign-in / first search)
 async function ensureUser(userId) {
   const ref = db.collection("users").doc(userId);
@@ -631,17 +719,48 @@ const PREFERRED_RESULT_TARGET = 5;   // preferred verified jobs per completed se
 const CANDIDATE_MULTIPLIER    = 3;   // request this many × more candidates than jobsPerSearch
 const MIN_CACHE_SERVE         = 3;   // min cache hits needed to skip live search entirely
 
-// 5-stage verification pipeline per job:
+// 6-stage verification pipeline per job:
+// Stage 0:   Load company profile (if companyProfilesEnabled feature flag is on)
 // Stage 1–2: Collect candidates from ATS public APIs (Greenhouse/Lever/Ashby)
 // Stage 3:   HTTP-verify AI-provided source URL as an additional candidate
+// Stage 3b:  knownGoodDomains synthetic candidate (profile override)
 // Stage 4:   Score each candidate by confidence × title similarity
-// Stage 5:   Select best candidate; fall through to web-search if still unverified
-async function verifyJobUrls(jobs, userId, vlog = () => {}) {
+// Stage 5:   Select best; fall through to web-search if still unverified
+//
+// options.useProfiles — gates the entire profile system; false = standard behavior
+async function verifyJobUrls(jobs, userId, vlog = () => {}, options = {}) {
+  // Batch-load company profiles in one round-trip before processing any job.
+  // Returns an empty Map when the feature flag is off — zero behavior change.
+  const profiles = options.useProfiles
+    ? await loadCompanyProfiles(jobs.map(j => j.company))
+    : new Map();
+
   await Promise.all(jobs.map(async (job) => {
-    const atsHint  = (job.atsProvider || "").toLowerCase();
-    const candidates = [];  // { url, rawConf, ats, titleScore }
+    const companyKey = normalizeCompanyKey(job.company);
+    const profile    = profiles.get(companyKey) || null;
+    const atsHint    = (job.atsProvider || "").toLowerCase();
+    const candidates = [];
+
+    // Effective threshold: per-company override takes precedence over global default.
+    const effectiveThreshold = (profile?.verificationMode === "custom" && profile?.minAcceptScore != null)
+      ? profile.minAcceptScore
+      : CONFIDENCE_THRESHOLD;
+
     const slugsToTry = companySlugs(job.company, job.atsSlug);
-    vlog(`Verify "${job.title}" @ ${job.company} (url=${job.url || "none"}, atsHint=${atsHint || "none"}, slugs=${slugsToTry.join(",")})`);
+    if (profile) {
+      vlog(`Verify "${job.title}" @ ${job.company} | profile loaded: mode=${profile.verificationMode}, threshold=${effectiveThreshold}, disableHttp=${!!profile.disableHttpVerification}, allowRedirect=${!!profile.allowGenericCareersRedirect}, preferScrape=${!!profile.preferDirectCareersScrape}`);
+      vlog(`  slugs=${slugsToTry.join(",")}, url=${job.url || "none"}`);
+    } else {
+      vlog(`Verify "${job.title}" @ ${job.company} (url=${job.url || "none"}, atsHint=${atsHint || "none"}, slugs=${slugsToTry.join(",")})`);
+    }
+
+    // Stage 0 short-circuit: preferDirectCareersScrape routes the job straight to
+    // verifyViaWebSearch by leaving urlVerified=false and returning early.
+    if (profile?.preferDirectCareersScrape) {
+      vlog(`  → skipping ATS+HTTP (preferDirectCareersScrape=true), routing to web-search fallback`);
+      job.urlVerified = false;
+      return;
+    }
 
     // Stages 1–2: ATS public API lookups (parallel)
     const atsLookups = await Promise.all([
@@ -650,9 +769,11 @@ async function verifyJobUrls(jobs, userId, vlog = () => {}) {
       (!atsHint || atsHint === "ashby")      ? findAshbyJobUrl(job.company, job.title, job.atsSlug)      : null,
     ]);
     const atsNames = ["greenhouse", "lever", "ashby"];
+    let anyAtsHit = false;
     for (let i = 0; i < atsLookups.length; i++) {
       const r = atsLookups[i];
       if (r) {
+        anyAtsHit = true;
         const ts = titleSimilarityScore(job.title, r.matchedTitle || job.title);
         vlog(`  ${atsNames[i]}: HIT url=${r.url} matchedTitle="${r.matchedTitle}" titleScore=${ts.toFixed(2)}`);
         candidates.push({ url: r.url, rawConf: r.confidence, ats: r.ats, titleScore: ts });
@@ -660,32 +781,78 @@ async function verifyJobUrls(jobs, userId, vlog = () => {}) {
         vlog(`  ${atsNames[i]}: miss`);
       }
     }
+    if (!anyAtsHit && profile) recordVerificationStat(companyKey, "apiMisses");
 
-    // Stage 3: HTTP-verify AI-provided source URL as an additional candidate
-    if (job.url && job.url.startsWith("http") && !AGGREGATOR_RE.test(job.url)) {
+    // Stage 3: HTTP-verify AI-provided source URL as an additional candidate.
+    // Skipped when profile.disableHttpVerification=true (e.g. sites that block requests).
+    if (profile?.disableHttpVerification) {
+      vlog(`  http: skipped (profile.disableHttpVerification=true)`);
+    } else if (job.url && job.url.startsWith("http") && !AGGREGATOR_RE.test(job.url)) {
       const http = await fetchUrlStatus(job.url);
-      const s    = scoreUrl(http);
-      vlog(`  http: status=${http.status} score=${s.toFixed(2)} finalUrl=${http.finalUrl}`);
-      if (s > 0) candidates.push({ url: http.finalUrl, rawConf: s, ats: detectAts(http.finalUrl) || "", titleScore: 1.0 });
+      let s      = scoreUrl(http);
+
+      // Profile override — allowGenericCareersRedirect:
+      // When a valid ATS URL redirects to a generic /careers page (e.g. Relativity Space),
+      // score the original URL pattern instead of the redirect destination. This prevents
+      // hard-failing companies where the redirect is cosmetic, not a stale-job signal.
+      const wasRedirected = http.status === 200
+        && http.finalUrl && http.finalUrl !== job.url
+        && !isSpecificJobUrl(http.finalUrl);
+      if (wasRedirected) {
+        if (profile?.allowGenericCareersRedirect) {
+          const originalScore = scoreUrl({ status: 200, finalUrl: job.url });
+          if (originalScore > s) {
+            vlog(`  http: redirect to generic page detected — allowGenericCareersRedirect: scoring original URL (${s.toFixed(2)} → ${originalScore.toFixed(2)})`);
+            s = originalScore;
+          }
+          // Use the original URL as the candidate, not the redirected destination
+          if (s > 0) candidates.push({ url: job.url, rawConf: s, ats: detectAts(job.url) || "", titleScore: 1.0 });
+        } else {
+          if (s > 0) candidates.push({ url: http.finalUrl, rawConf: s, ats: detectAts(http.finalUrl) || "", titleScore: 1.0 });
+        }
+        if (profile) recordVerificationStat(companyKey, "redirectFailures");
+        vlog(`  http: status=${http.status} score=${s.toFixed(2)} finalUrl=${http.finalUrl}${wasRedirected ? " (redirect)" : ""}`);
+      } else {
+        vlog(`  http: status=${http.status} score=${s.toFixed(2)} finalUrl=${http.finalUrl}`);
+        if (s > 0) candidates.push({ url: http.finalUrl, rawConf: s, ats: detectAts(http.finalUrl) || "", titleScore: 1.0 });
+      }
     } else if (job.url) {
       vlog(`  http: skipped (aggregator or non-http url=${job.url})`);
     }
 
-    // Stage 4–5: Rank candidates by rawConf × titleScore penalty, select best
+    // Stage 3b: knownGoodDomains synthetic candidate.
+    // For companies where HTTP verification is unreliable (e.g. 520 errors, private ATS boards),
+    // a well-formed URL matching a trusted domain pattern gets a synthetic confidence score
+    // rather than being dropped entirely. Only adds a candidate if none already covers the URL.
+    if (profile?.knownGoodDomains?.length && job.url) {
+      const matchedDomain = profile.knownGoodDomains.find(d => job.url.includes(d));
+      if (matchedDomain) {
+        const syntheticConf = profile.minAcceptScore ?? 0.65;
+        const alreadyCovered = candidates.some(c => c.url === job.url && c.rawConf >= syntheticConf);
+        if (!alreadyCovered) {
+          candidates.push({ url: job.url, rawConf: syntheticConf, ats: atsHint || profile.atsType || "", titleScore: 1.0 });
+          vlog(`  knownGoodDomain "${matchedDomain}": synthetic candidate conf=${syntheticConf.toFixed(2)}`);
+        }
+      }
+    }
+
+    // Stage 4–5: Rank candidates by rawConf × titleScore penalty, select best.
     let bestUrl = null, bestRawConf = 0, bestAts = "";
     for (const c of candidates) {
       const ranked = c.rawConf * Math.max(0.30, c.titleScore);
       if (ranked > bestRawConf) { bestRawConf = ranked; bestUrl = c.url; bestAts = c.ats; }
     }
-    if (bestUrl && bestRawConf >= CONFIDENCE_THRESHOLD) {
+    if (bestUrl && bestRawConf >= effectiveThreshold) {
       job.directUrl          = bestUrl;
       job.applyUrlConfidence = bestRawConf;
       job.atsProvider        = bestAts;
       job.urlVerified        = true;
-      vlog(`  → VERIFIED: ${bestUrl} (conf=${bestRawConf.toFixed(2)})`);
+      vlog(`  → VERIFIED: ${bestUrl} (conf=${bestRawConf.toFixed(2)}, threshold=${effectiveThreshold})`);
+      if (profile) recordVerificationStat(companyKey, "successfulVerifications");
     } else {
       job.urlVerified = false;
-      vlog(`  → FAILED: best conf=${bestRawConf.toFixed(2)} < threshold ${CONFIDENCE_THRESHOLD}${bestUrl ? ` (best url=${bestUrl})` : " (no candidates)"}`);
+      vlog(`  → FAILED: best conf=${bestRawConf.toFixed(2)} < threshold ${effectiveThreshold}${bestUrl ? ` (best url=${bestUrl})` : " (no candidates)"}`);
+      if (profile && candidates.length > 0) recordVerificationStat(companyKey, "verificationFailures");
     }
   }));
 
@@ -764,6 +931,12 @@ async function runJobSearch(userId, prefs, tier = "free", logFn = null) {
   const log  = (msg) => { if (typeof logFn === "function") logFn(msg).catch(() => {}); };
   const isAdmin = await isAdminUser(userId);
   const vlog = isAdmin ? (msg) => { log(`[debug] ${msg}`); console.log(`[verify:${userId}] ${msg}`); } : () => {};
+
+  // Load feature flags once and derive verifyOptions for the whole search run.
+  const featureFlags  = await getAdminFeatureFlags();
+  const verifyOptions = { useProfiles: featureFlags.companyProfilesEnabled === true };
+  if (isAdmin && verifyOptions.useProfiles) log("[debug] Company verification profiles: ENABLED");
+
   const tierConfig = TIERS[tier] || TIERS.free;
 
   const jobCount       = tierConfig.jobsPerSearch || 5;
@@ -1082,7 +1255,7 @@ Do NOT search indeed.com or linkedin.com in this first pass. Only include a job 
   log(`Pass 1: ${uniqueJobs.length} unique candidates after dedup (${jobs.length - uniqueJobs.length} skipped)`);
 
   log(`Verifying ${uniqueJobs.length} URLs via ATS APIs → HTTP → web search…`);
-  await verifyJobUrls(uniqueJobs, userId, vlog);
+  await verifyJobUrls(uniqueJobs, userId, vlog, verifyOptions);
   log(`URL verification complete`);
 
   const verifiedJobs = uniqueJobs.filter(j => j.urlVerified);
@@ -1139,7 +1312,7 @@ Do NOT search hiring.cafe, greenhouse.io, or lever.co (already searched in Pass 
 
       if (jobs2.length > 0) {
         log(`Pass 2: Verifying ${jobs2.length} URLs…`);
-        await verifyJobUrls(jobs2, userId, vlog);
+        await verifyJobUrls(jobs2, userId, vlog, verifyOptions);
         const verified2 = jobs2.filter(j => j.urlVerified);
         allVerifiedJobs = [...allVerifiedJobs, ...verified2];
         console.log(`[runJobSearch] Pass 2: ${jobs2.length} candidates, ${verified2.length} verified for ${userId}`);
@@ -2152,6 +2325,97 @@ app.post("/admin/feature-flags", async (req, res) => {
       { merge: true }
     );
     res.json({ ok: true, flags });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Company Verification Profile admin endpoints ──────────────────────────────
+
+// GET /admin/company-profiles — list all profiles
+app.get("/admin/company-profiles", async (req, res) => {
+  const { adminId } = req.query;
+  try {
+    const adminDoc = await db.collection("users").doc(adminId).get();
+    if (!adminDoc.exists || adminDoc.data().role !== "admin")
+      return res.status(403).json({ error: "Forbidden" });
+    const snap = await db.collection("company_verification_profiles").get();
+    const profiles = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    res.json({ profiles });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /admin/company-profiles/:companyKey — read one profile
+app.get("/admin/company-profiles/:companyKey", async (req, res) => {
+  const { adminId } = req.query;
+  try {
+    const adminDoc = await db.collection("users").doc(adminId).get();
+    if (!adminDoc.exists || adminDoc.data().role !== "admin")
+      return res.status(403).json({ error: "Forbidden" });
+    const doc = await db.collection("company_verification_profiles").doc(req.params.companyKey).get();
+    if (!doc.exists) return res.status(404).json({ error: "Profile not found" });
+    res.json({ id: doc.id, ...doc.data() });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// PUT /admin/company-profiles/:companyKey — create or update a profile
+// Body: any subset of the profile schema fields (merged, not replaced)
+app.put("/admin/company-profiles/:companyKey", async (req, res) => {
+  const { adminId } = req.query;
+  try {
+    const adminDoc = await db.collection("users").doc(adminId).get();
+    if (!adminDoc.exists || adminDoc.data().role !== "admin")
+      return res.status(403).json({ error: "Forbidden" });
+    const { adminId: _drop, ...profileData } = req.body;
+    await db.collection("company_verification_profiles").doc(req.params.companyKey).set(
+      { ...profileData, updatedAt: admin.firestore.FieldValue.serverTimestamp() },
+      { merge: true }
+    );
+    res.json({ ok: true, key: req.params.companyKey });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// DELETE /admin/company-profiles/:companyKey — remove a profile (reverts to standard behavior)
+app.delete("/admin/company-profiles/:companyKey", async (req, res) => {
+  const { adminId } = req.query;
+  try {
+    const adminDoc = await db.collection("users").doc(adminId).get();
+    if (!adminDoc.exists || adminDoc.data().role !== "admin")
+      return res.status(403).json({ error: "Forbidden" });
+    await db.collection("company_verification_profiles").doc(req.params.companyKey).delete();
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /admin/company-profiles/seed-defaults — write built-in profiles for known
+// problematic companies. Uses merge:true so existing stats are never reset.
+app.post("/admin/company-profiles/seed-defaults", async (req, res) => {
+  const { adminId } = req.query;
+  try {
+    const adminDoc = await db.collection("users").doc(adminId).get();
+    if (!adminDoc.exists || adminDoc.data().role !== "admin")
+      return res.status(403).json({ error: "Forbidden" });
+    const defaults = getDefaultCompanyProfiles();
+    const batch = db.batch();
+    for (const [key, profile] of Object.entries(defaults)) {
+      const ref = db.collection("company_verification_profiles").doc(key);
+      batch.set(ref, {
+        ...profile,
+        stats:     { verificationFailures: 0, redirectFailures: 0, apiMisses: 0, successfulVerifications: 0 },
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      }, { merge: true });  // merge preserves existing stats
+    }
+    await batch.commit();
+    res.json({ ok: true, seeded: Object.keys(defaults) });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
