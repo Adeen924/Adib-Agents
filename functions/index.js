@@ -311,6 +311,36 @@ function recordVerificationStat(companyKey, field) {
     .catch(() => {});
 }
 
+// ── Stale URL blocklist ────────────────────────────────────────────────────────
+// When a job URL definitively 404s or 410s, it's added here so future searches
+// can skip it entirely (no ATS lookups, no HTTP check, not passed to web search).
+// Stored in admin_config/stale_job_urls as a simple URL array — cheap to read,
+// cheap to write, and small enough to inject directly into Claude's prompt.
+
+function normalizeStaleUrl(url) {
+  try {
+    const u = new URL(url);
+    u.search = "";  // strip query params — same posting, different tracking params
+    return u.href.toLowerCase().replace(/\/$/, "");
+  } catch { return url.toLowerCase(); }
+}
+
+async function loadStaleUrls() {
+  try {
+    const doc = await db.collection("admin_config").doc("stale_job_urls").get();
+    if (!doc.exists) return new Set();
+    return new Set((doc.data().urls || []).map(normalizeStaleUrl));
+  } catch { return new Set(); }
+}
+
+// Fire-and-forget: add a URL to the global stale blocklist.
+function recordStaleUrl(url) {
+  const normalized = normalizeStaleUrl(url);
+  db.collection("admin_config").doc("stale_job_urls")
+    .set({ urls: admin.firestore.FieldValue.arrayUnion(normalized) }, { merge: true })
+    .catch(() => {});
+}
+
 // Default profiles for companies with known verification quirks.
 // Seeded via POST /admin/company-profiles/seed-defaults.
 function getDefaultCompanyProfiles() {
@@ -462,7 +492,7 @@ const AGGREGATOR_RE = /indeed\.com|linkedin\.com/i;
 
 // â"€â"€ ATS URL patterns â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 const ATS_PATTERNS = {
-  greenhouse:     /boards\.greenhouse\.io\/[^/]+\/jobs\/\d+|[^/]+\.greenhouse\.io\/jobs\/\d+/i,
+  greenhouse:     /(?:job-)?boards\.greenhouse\.io\/[^/]+\/jobs\/\d+|[^/]+\.greenhouse\.io\/jobs\/\d+/i,
   lever:          /jobs\.lever\.co\/[^/]+\/[a-f0-9-]{36}/i,
   ashby:          /jobs\.ashbyhq\.com\/[^/]+\/[a-f0-9-]{36}/i,
   workday:        /[^./]+\.wd\d+\.myworkdayjobs\.com\//i,
@@ -553,12 +583,13 @@ function titlesMatch(a, b) {
 // â"€â"€ Company slug candidates for ATS API lookups â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 function companySlugs(name, hint) {
   const base = name.toLowerCase();
+  // hint is included first so it's always tried — dedup runs over the full list
   const candidates = [
+    hint,
     base.replace(/[^a-z0-9]/g, ""),
     base.replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, ""),
     base.split(/\s+/)[0].replace(/[^a-z0-9]/g, ""),
-  ].filter((s, i, arr) => s.length >= 2 && arr.indexOf(s) === i);
-  if (hint) candidates.unshift(hint);
+  ].filter(Boolean).filter((s, i, arr) => s.length >= 2 && arr.indexOf(s) === i);
   return candidates;
 }
 
@@ -735,6 +766,9 @@ async function verifyJobUrls(jobs, userId, vlog = () => {}, options = {}) {
     ? await loadCompanyProfiles(jobs.map(j => j.company))
     : new Map();
 
+  // Stale URL set — URLs that 404'd/410'd in a previous search run.
+  const staleUrlSet = options.staleUrls instanceof Set ? options.staleUrls : new Set();
+
   await Promise.all(jobs.map(async (job) => {
     const companyKey = normalizeCompanyKey(job.company);
     const profile    = profiles.get(companyKey) || null;
@@ -754,7 +788,16 @@ async function verifyJobUrls(jobs, userId, vlog = () => {}, options = {}) {
       vlog(`Verify "${job.title}" @ ${job.company} (url=${job.url || "none"}, atsHint=${atsHint || "none"}, slugs=${slugsToTry.join(",")})`);
     }
 
-    // Stage 0 short-circuit: preferDirectCareersScrape routes the job straight to
+    // Stage 0a: fast-fail URLs we already know are dead from a previous search run.
+    // Saves ATS API calls + HTTP check + web-search slot for a URL that won't come back.
+    if (job.url && staleUrlSet.has(normalizeStaleUrl(job.url))) {
+      vlog(`  → SKIPPED: ${job.url} is in stale URL blocklist`);
+      job.urlVerified    = false;
+      job.definitivelyDead = true;
+      return;
+    }
+
+    // Stage 0b short-circuit: preferDirectCareersScrape routes the job straight to
     // verifyViaWebSearch by leaving urlVerified=false and returning early.
     if (profile?.preferDirectCareersScrape) {
       vlog(`  → skipping ATS+HTTP (preferDirectCareersScrape=true), routing to web-search fallback`);
@@ -813,7 +856,15 @@ async function verifyJobUrls(jobs, userId, vlog = () => {}, options = {}) {
         if (profile) recordVerificationStat(companyKey, "redirectFailures");
         vlog(`  http: status=${http.status} score=${s.toFixed(2)} finalUrl=${http.finalUrl}${wasRedirected ? " (redirect)" : ""}`);
       } else {
-        vlog(`  http: status=${http.status} score=${s.toFixed(2)} finalUrl=${http.finalUrl}`);
+        // 404/410 → definitively dead: record for future searches so Claude won't
+        // re-surface the same closed posting and waste a verification slot.
+        if (http.status === 404 || http.status === 410) {
+          vlog(`  http: status=${http.status} — recording as stale, skipping web-search fallback`);
+          recordStaleUrl(job.url);
+          job.definitivelyDead = true;
+        } else {
+          vlog(`  http: status=${http.status} score=${s.toFixed(2)} finalUrl=${http.finalUrl}`);
+        }
         if (s > 0) candidates.push({ url: http.finalUrl, rawConf: s, ats: detectAts(http.finalUrl) || "", titleScore: 1.0 });
       }
     } else if (job.url) {
@@ -856,8 +907,10 @@ async function verifyJobUrls(jobs, userId, vlog = () => {}, options = {}) {
     }
   }));
 
-  // Final fallback: batch web-search with multi-candidate comparison for anything still unverified
-  await verifyViaWebSearch(jobs.filter(j => !j.urlVerified), userId, vlog);
+  // Final fallback: batch web-search for anything still unverified.
+  // Exclude definitivelyDead jobs (404/410) — web search won't find a working URL
+  // for a posting that's gone, so don't waste a search slot on them.
+  await verifyViaWebSearch(jobs.filter(j => !j.urlVerified && !j.definitivelyDead), userId, vlog);
 }
 
 // Build a specific, criteria-aware search query
@@ -932,10 +985,17 @@ async function runJobSearch(userId, prefs, tier = "free", logFn = null) {
   const isAdmin = await isAdminUser(userId);
   const vlog = isAdmin ? (msg) => { log(`[debug] ${msg}`); console.log(`[verify:${userId}] ${msg}`); } : () => {};
 
-  // Load feature flags once and derive verifyOptions for the whole search run.
-  const featureFlags  = await getAdminFeatureFlags();
-  const verifyOptions = { useProfiles: featureFlags.companyProfilesEnabled === true };
+  // Load feature flags + stale URL blocklist once for the whole search run.
+  const [featureFlags, staleUrls] = await Promise.all([
+    getAdminFeatureFlags(),
+    loadStaleUrls(),
+  ]);
+  const verifyOptions = {
+    useProfiles: featureFlags.companyProfilesEnabled === true,
+    staleUrls,
+  };
   if (isAdmin && verifyOptions.useProfiles) log("[debug] Company verification profiles: ENABLED");
+  if (isAdmin && staleUrls.size > 0) log(`[debug] Stale URL blocklist: ${staleUrls.size} known-dead URL(s) loaded`);
 
   const tierConfig = TIERS[tier] || TIERS.free;
 
@@ -1169,7 +1229,10 @@ URL RULES — non-negotiable:
 - A valid URL contains a unique job identifier or slug (e.g. hiring.cafe/jobs/12345, boards.greenhouse.io/company/jobs/67890, jobs.lever.co/company/uuid, company.com/careers/role-name-id).
 - If you cannot find a verified direct URL for a role, DO NOT include it. Return fewer jobs rather than include even one with a bad, unverified, or generic URL.
 - Prefer postings from the last 14 days.
-- Skip jobs where the required experience is significantly above the candidate's level.
+- Skip jobs where the required experience is significantly above the candidate's level.${staleUrls.size > 0 ? `
+
+KNOWN EXPIRED URLS — never return any of these, they have been confirmed closed:
+${[...staleUrls].slice(0, 60).join("\n")}` : ""}
 
 OUTPUT FORMAT — CRITICAL: Your ENTIRE response must be a single raw JSON array. Start with [ and end with ]. No markdown, no code fences, no explanation before or after. Do not write anything outside the array. Return UP TO ${candidateCount} candidates. More verified candidates with accurate links is better — we rank and filter to the top ${jobCount} after verification.
 Field rules:
