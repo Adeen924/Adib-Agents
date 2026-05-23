@@ -245,6 +245,13 @@ async function getUserTier(userId) {
   }
 }
 
+async function isAdminUser(userId) {
+  try {
+    const doc = await db.collection("users").doc(userId).get();
+    return doc.exists && doc.data().role === "admin";
+  } catch { return false; }
+}
+
 // Ensure a user document exists (called on first sign-in / first search)
 async function ensureUser(userId) {
   const ref = db.collection("users").doc(userId);
@@ -540,7 +547,7 @@ function scoreUrl(httpResult) {
 }
 
 // â"€â"€ Web-search fallback for still-unverified jobs (batched, single Sonnet call) â"€â"€
-async function verifyViaWebSearch(jobs, userId) {
+async function verifyViaWebSearch(jobs, userId, vlog = () => {}) {
   if (jobs.length === 0) return;
   const jobList = jobs.map((j, i) => `${i + 1}. "${j.title}" at ${j.company}`).join("\n");
   try {
@@ -568,24 +575,34 @@ Rules:
     trackCost(userId, "search_verify", res.usage);
     const raw    = res.content.filter(b => b.type === "text").map(b => b.text).join("").trim();
     const m      = raw.match(/\[[\s\S]*\]/);
-    if (!m) return;
+    if (!m) { vlog(`verifyViaWebSearch: no JSON array in response`); return; }
     const results = JSON.parse(m[0]);
 
     await Promise.all(results.map(async (r, i) => {
       if (i >= jobs.length) return;
       const candidates = Array.isArray(r.candidates) ? r.candidates : [];
+      vlog(`webSearch verify "${jobs[i].title}" @ ${jobs[i].company}: ${candidates.length} candidate(s) returned`);
 
       let bestUrl = null, bestConf = 0, bestAts = "";
       for (const cand of candidates) {
         const url = (cand.url || "").trim();
-        if (!url.startsWith("http") || AGGREGATOR_RE.test(url)) continue;
-        // Reject candidates whose page title doesn't closely match the target
+        if (!url.startsWith("http") || AGGREGATOR_RE.test(url)) {
+          vlog(`  skip ${url || "(empty)"}: aggregator or non-http`);
+          continue;
+        }
         const titleScore = titleSimilarityScore(jobs[i].title, cand.pageTitle || "");
-        if (titleScore < 0.65) continue;
+        if (titleScore < 0.65) {
+          vlog(`  skip ${url}: titleScore=${titleScore.toFixed(2)} < 0.65 (pageTitle="${cand.pageTitle}")`);
+          continue;
+        }
         const http = await fetchUrlStatus(url);
-        if (http.status !== 200 || !isSpecificJobUrl(http.finalUrl)) continue;
+        if (http.status !== 200 || !isSpecificJobUrl(http.finalUrl)) {
+          vlog(`  skip ${url}: http=${http.status}, isSpecific=${isSpecificJobUrl(http.finalUrl)}, finalUrl=${http.finalUrl}`);
+          continue;
+        }
         const urlScore = scoreUrl(http);
         const conf = Math.min(0.85, 0.60 + urlScore * 0.15 + titleScore * 0.10);
+        vlog(`  candidate ${url}: urlScore=${urlScore.toFixed(2)}, titleScore=${titleScore.toFixed(2)}, conf=${conf.toFixed(2)}`);
         if (conf > bestConf) { bestConf = conf; bestUrl = http.finalUrl; bestAts = detectAts(http.finalUrl) || "web"; }
       }
       if (bestUrl && bestConf >= CONFIDENCE_THRESHOLD) {
@@ -593,10 +610,14 @@ Rules:
         jobs[i].applyUrlConfidence = bestConf;
         jobs[i].atsProvider        = bestAts;
         jobs[i].urlVerified        = true;
+        vlog(`  VERIFIED via webSearch: ${bestUrl} (conf=${bestConf.toFixed(2)})`);
+      } else {
+        vlog(`  FAILED webSearch verify: best conf=${bestConf.toFixed(2)} < threshold ${CONFIDENCE_THRESHOLD}`);
       }
     }));
   } catch (err) {
     console.warn("verifyViaWebSearch failed:", err.message);
+    vlog(`verifyViaWebSearch error: ${err.message}`);
   }
 }
 
@@ -615,10 +636,11 @@ const MIN_CACHE_SERVE         = 3;   // min cache hits needed to skip live searc
 // Stage 3:   HTTP-verify AI-provided source URL as an additional candidate
 // Stage 4:   Score each candidate by confidence × title similarity
 // Stage 5:   Select best candidate; fall through to web-search if still unverified
-async function verifyJobUrls(jobs, userId) {
+async function verifyJobUrls(jobs, userId, vlog = () => {}) {
   await Promise.all(jobs.map(async (job) => {
     const atsHint  = (job.atsProvider || "").toLowerCase();
     const candidates = [];  // { url, rawConf, ats, titleScore }
+    vlog(`Verify "${job.title}" @ ${job.company} (url=${job.url || "none"}, atsHint=${atsHint || "none"})`);
 
     // Stages 1–2: ATS public API lookups (parallel)
     const atsLookups = await Promise.all([
@@ -626,10 +648,15 @@ async function verifyJobUrls(jobs, userId) {
       (!atsHint || atsHint === "lever")      ? findLeverJobUrl(job.company, job.title, job.atsSlug)      : null,
       (!atsHint || atsHint === "ashby")      ? findAshbyJobUrl(job.company, job.title, job.atsSlug)      : null,
     ]);
-    for (const r of atsLookups) {
+    const atsNames = ["greenhouse", "lever", "ashby"];
+    for (let i = 0; i < atsLookups.length; i++) {
+      const r = atsLookups[i];
       if (r) {
         const ts = titleSimilarityScore(job.title, r.matchedTitle || job.title);
+        vlog(`  ${atsNames[i]}: HIT url=${r.url} matchedTitle="${r.matchedTitle}" titleScore=${ts.toFixed(2)}`);
         candidates.push({ url: r.url, rawConf: r.confidence, ats: r.ats, titleScore: ts });
+      } else {
+        vlog(`  ${atsNames[i]}: miss`);
       }
     }
 
@@ -637,7 +664,10 @@ async function verifyJobUrls(jobs, userId) {
     if (job.url && job.url.startsWith("http") && !AGGREGATOR_RE.test(job.url)) {
       const http = await fetchUrlStatus(job.url);
       const s    = scoreUrl(http);
+      vlog(`  http: status=${http.status} score=${s.toFixed(2)} finalUrl=${http.finalUrl}`);
       if (s > 0) candidates.push({ url: http.finalUrl, rawConf: s, ats: detectAts(http.finalUrl) || "", titleScore: 1.0 });
+    } else if (job.url) {
+      vlog(`  http: skipped (aggregator or non-http url=${job.url})`);
     }
 
     // Stage 4–5: Rank candidates by rawConf × titleScore penalty, select best
@@ -651,13 +681,15 @@ async function verifyJobUrls(jobs, userId) {
       job.applyUrlConfidence = bestRawConf;
       job.atsProvider        = bestAts;
       job.urlVerified        = true;
+      vlog(`  → VERIFIED: ${bestUrl} (conf=${bestRawConf.toFixed(2)})`);
     } else {
       job.urlVerified = false;
+      vlog(`  → FAILED: best conf=${bestRawConf.toFixed(2)} < threshold ${CONFIDENCE_THRESHOLD}${bestUrl ? ` (best url=${bestUrl})` : " (no candidates)"}`);
     }
   }));
 
   // Final fallback: batch web-search with multi-candidate comparison for anything still unverified
-  await verifyViaWebSearch(jobs.filter(j => !j.urlVerified), userId);
+  await verifyViaWebSearch(jobs.filter(j => !j.urlVerified), userId, vlog);
 }
 
 // Build a specific, criteria-aware search query
@@ -728,7 +760,9 @@ function extractJsonArray(text) {
 }
 
 async function runJobSearch(userId, prefs, tier = "free", logFn = null) {
-  const log = (msg) => { if (typeof logFn === "function") logFn(msg).catch(() => {}); };
+  const log  = (msg) => { if (typeof logFn === "function") logFn(msg).catch(() => {}); };
+  const admin = await isAdminUser(userId);
+  const vlog = admin ? (msg) => { log(`[debug] ${msg}`); console.log(`[verify:${userId}] ${msg}`); } : () => {};
   const tierConfig = TIERS[tier] || TIERS.free;
 
   const jobCount       = tierConfig.jobsPerSearch || 5;
@@ -1047,7 +1081,7 @@ Do NOT search indeed.com or linkedin.com in this first pass. Only include a job 
   log(`Pass 1: ${uniqueJobs.length} unique candidates after dedup (${jobs.length - uniqueJobs.length} skipped)`);
 
   log(`Verifying ${uniqueJobs.length} URLs via ATS APIs → HTTP → web search…`);
-  await verifyJobUrls(uniqueJobs, userId);
+  await verifyJobUrls(uniqueJobs, userId, vlog);
   log(`URL verification complete`);
 
   const verifiedJobs = uniqueJobs.filter(j => j.urlVerified);
@@ -1104,7 +1138,7 @@ Do NOT search hiring.cafe, greenhouse.io, or lever.co (already searched in Pass 
 
       if (jobs2.length > 0) {
         log(`Pass 2: Verifying ${jobs2.length} URLs…`);
-        await verifyJobUrls(jobs2, userId);
+        await verifyJobUrls(jobs2, userId, vlog);
         const verified2 = jobs2.filter(j => j.urlVerified);
         allVerifiedJobs = [...allVerifiedJobs, ...verified2];
         console.log(`[runJobSearch] Pass 2: ${jobs2.length} candidates, ${verified2.length} verified for ${userId}`);
