@@ -230,7 +230,7 @@ const TIERS = {
     maxOutputTokens:     10000,
     customSites:         true,
     maxTargetCompanies:  50,
-    jobsPerSearch:       3,
+    jobsPerSearch:       5,
     manualSearch:        true,
   },
 };
@@ -277,7 +277,8 @@ async function isAdminUser(userId) {
 //   stats: { verificationFailures, redirectFailures, apiMisses, successfulVerifications }
 
 function normalizeCompanyKey(name) {
-  return name.toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 64);
+  if (!name) return "";
+  return String(name).toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 64);
 }
 
 // Batch-load profiles for a list of company names. Returns a Map keyed by
@@ -363,7 +364,7 @@ function getDefaultCompanyProfiles() {
       disableHttpVerification:  false,
       allowGenericCareersRedirect: true,  // Greenhouse URLs redirect to /careers — score original URL pattern
       preferDirectCareersScrape:  false,
-      minAcceptScore:           0.62,
+      minAcceptScore:           0.60,   // was 0.62 — 0.95×0.65=0.6175 failed by floating-point rounding
       knownGoodDomains:         ["boards.greenhouse.io/relativity"],
       notes: "Greenhouse URLs redirect to generic relativityspace.com/careers page. allowGenericCareersRedirect scores the original ATS URL pattern rather than the redirect destination.",
     },
@@ -582,7 +583,8 @@ function titlesMatch(a, b) {
 
 // â"€â"€ Company slug candidates for ATS API lookups â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 function companySlugs(name, hint) {
-  const base = name.toLowerCase();
+  if (!name) return hint ? [String(hint).toLowerCase().replace(/[^a-z0-9-]/g, "").slice(0, 64)].filter(s => s.length >= 2) : [];
+  const base = String(name).toLowerCase();
   // hint is included first so it's always tried — dedup runs over the full list
   const candidates = [
     hint,
@@ -750,13 +752,66 @@ const PREFERRED_RESULT_TARGET = 5;   // preferred verified jobs per completed se
 const CANDIDATE_MULTIPLIER    = 3;   // request this many × more candidates than jobsPerSearch
 const MIN_CACHE_SERVE         = 3;   // min cache hits needed to skip live search entirely
 
-// 6-stage verification pipeline per job:
+// Stage 7: URL resolver — for jobs verified via companies whose ATS board URLs redirect
+// to a generic /careers page (Relativity Space, SpaceX, etc.), do one batch Sonnet+
+// web_search call to find the actual direct apply URL on the company's own domain.
+// Updates job.directUrl in-place; non-fatal on any error (falls back to ATS URL).
+async function resolveRedirectUrls(jobs, userId, vlog) {
+  if (jobs.length === 0) return;
+  const jobList = jobs.map((j, i) => `${i + 1}. "${j.title}" at ${j.company}`).join("\n");
+  try {
+    const res = await anthropic.messages.create({
+      model:      MODEL_SEARCH,
+      max_tokens: 1024,
+      tools:      [{ type: "web_search_20250305", name: "web_search", max_uses: Math.min(jobs.length + 1, 4) }],
+      messages: [{
+        role:    "user",
+        content: `For each job below, search the company's OWN careers website and return the DIRECT URL to that specific job posting. These jobs are confirmed real — I just need the link on the company's own domain, not on a third-party ATS board.
+
+${jobList}
+
+Return ONLY a raw JSON array in the same order as the input — no markdown, no explanation:
+[{"url":"https://company.com/careers/specific-job-slug-or-id"}]
+
+Rules:
+- The URL MUST be on the company's own domain (e.g. spacex.com/..., relativityspace.com/..., boeing.com/...)
+- Do NOT return boards.greenhouse.io, jobs.lever.co, ashbyhq.com, linkedin.com, indeed.com, builtin.com, glassdoor.com, ziprecruiter.com, or any job aggregator
+- The URL must open the SPECIFIC job posting — not the general /careers page
+- Search the company's own careers site for the exact job title
+- Use {"url":""} if no specific company-domain link can be found`,
+      }],
+    });
+    trackCost(userId, "resolve_redirect_urls", res.usage);
+    const raw       = res.content.filter(b => b.type === "text").map(b => b.text).join("").trim();
+    const extracted = extractJsonArray(raw);
+    if (!extracted) { vlog(`resolveRedirectUrls: no JSON in response`); return; }
+    const results   = JSON.parse(extracted);
+
+    const THIRD_PARTY_RE = /greenhouse\.io|lever\.co|ashbyhq\.com|builtin\.com|glassdoor\.com|ziprecruiter\.com|hiring\.cafe/i;
+    results.forEach((r, i) => {
+      if (i >= jobs.length) return;
+      const url = (r.url || "").trim();
+      if (!url || !url.startsWith("http")) return;
+      if (AGGREGATOR_RE.test(url) || THIRD_PARTY_RE.test(url)) return;
+      if (!isSpecificJobUrl(url)) return;   // must be a specific job page, not /careers
+      vlog(`  Stage7 upgrade: "${jobs[i].title}" @ ${jobs[i].company} → ${url}`);
+      jobs[i].directUrl = url;
+    });
+  } catch (err) {
+    console.warn("resolveRedirectUrls failed:", err.message);
+    vlog(`resolveRedirectUrls error: ${err.message}`);
+  }
+}
+
+// 7-stage verification pipeline per job:
 // Stage 0:   Load company profile (if companyProfilesEnabled feature flag is on)
 // Stage 1–2: Collect candidates from ATS public APIs (Greenhouse/Lever/Ashby)
 // Stage 3:   HTTP-verify AI-provided source URL as an additional candidate
 // Stage 3b:  knownGoodDomains synthetic candidate (profile override)
 // Stage 4:   Score each candidate by confidence × title similarity
 // Stage 5:   Select best; fall through to web-search if still unverified
+// Stage 6:   Web-search fallback for anything still unverified
+// Stage 7:   Resolve ATS redirect URLs to actual company-domain direct links
 //
 // options.useProfiles — gates the entire profile system; false = standard behavior
 async function verifyJobUrls(jobs, userId, vlog = () => {}, options = {}) {
@@ -770,6 +825,7 @@ async function verifyJobUrls(jobs, userId, vlog = () => {}, options = {}) {
   const staleUrlSet = options.staleUrls instanceof Set ? options.staleUrls : new Set();
 
   await Promise.all(jobs.map(async (job) => {
+    try {
     const companyKey = normalizeCompanyKey(job.company);
     const profile    = profiles.get(companyKey) || null;
     const atsHint    = (job.atsProvider || "").toLowerCase();
@@ -898,6 +954,11 @@ async function verifyJobUrls(jobs, userId, vlog = () => {}, options = {}) {
       job.applyUrlConfidence = bestRawConf;
       job.atsProvider        = bestAts;
       job.urlVerified        = true;
+      // Flag for Stage 7: if the company's ATS URL is known to redirect to a generic
+      // /careers page, mark for URL upgrade so we can resolve the actual direct link.
+      if (profile && (profile.allowGenericCareersRedirect || profile.disableHttpVerification)) {
+        job.hasGenericRedirect = true;
+      }
       vlog(`  → VERIFIED: ${bestUrl} (conf=${bestRawConf.toFixed(2)}, threshold=${effectiveThreshold})`);
       if (profile) recordVerificationStat(companyKey, "successfulVerifications");
     } else {
@@ -905,12 +966,20 @@ async function verifyJobUrls(jobs, userId, vlog = () => {}, options = {}) {
       vlog(`  → FAILED: best conf=${bestRawConf.toFixed(2)} < threshold ${effectiveThreshold}${bestUrl ? ` (best url=${bestUrl})` : " (no candidates)"}`);
       if (profile && candidates.length > 0) recordVerificationStat(companyKey, "verificationFailures");
     }
+    } catch (jobErr) {
+      // Guard: never let one malformed job (e.g. null company) crash the entire verification.
+      console.warn(`[verifyJobUrls] Uncaught error on "${job.title}" @ ${job.company}: ${jobErr.message}`);
+      vlog(`  → ERROR: ${jobErr.message} — marking as unverified`);
+      job.urlVerified = false;
+    }
   }));
 
-  // Final fallback: batch web-search for anything still unverified.
+  // Stage 6: batch web-search for anything still unverified.
   // Exclude definitivelyDead jobs (404/410) — web search won't find a working URL
   // for a posting that's gone, so don't waste a search slot on them.
   await verifyViaWebSearch(jobs.filter(j => !j.urlVerified && !j.definitivelyDead), userId, vlog);
+  // Stage 7 (URL resolver) is intentionally NOT called here — it runs in runJobSearch
+  // on finalJobs only, so we never resolve URLs for candidates that won't be saved.
 }
 
 // Build a specific, criteria-aware search query
@@ -1402,12 +1471,30 @@ Do NOT search hiring.cafe, greenhouse.io, or lever.co (already searched in Pass 
   console.log(`[runJobSearch] ${allVerifiedJobs.length} total verified → keeping top ${finalJobs.length} for ${userId}`);
   log(`Ranking complete — saving top ${finalJobs.length} job(s) out of ${allVerifiedJobs.length} verified`);
 
+  // Stage 7: URL resolver — run ONLY on the final jobs that will actually be saved.
+  // Moving this here (vs. inside verifyJobUrls) prevents resolving URLs for candidates
+  // that get ranked out, which was causing function timeouts when many SpaceX jobs
+  // were verified and all triggered extra web searches.
+  const redirectFinalJobs = finalJobs.filter(j => j.hasGenericRedirect);
+  if (redirectFinalJobs.length > 0) {
+    log(`Stage 7: resolving direct URLs for ${redirectFinalJobs.length} final job(s)…`);
+    await resolveRedirectUrls(redirectFinalJobs, userId, vlog);
+  }
+
   // Save search summary to digests
-  const digestRef = await db.collection("digests").add({
-    userId, query,
-    jobCount:  finalJobs.length,
-    createdAt: admin.firestore.FieldValue.serverTimestamp(),
-  });
+  log(`Saving ${finalJobs.length} job(s) to Firestore…`);
+  let digestRef;
+  try {
+    digestRef = await db.collection("digests").add({
+      userId, query,
+      jobCount:  finalJobs.length,
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+  } catch (digestErr) {
+    console.error(`[runJobSearch] digests.add failed for ${userId}:`, digestErr.message, digestErr.stack);
+    log(`ERROR creating digest: ${digestErr.message}`);
+    throw digestErr;
+  }
 
   // Save each final job as an individual document
   const savePromises = finalJobs.map(job =>
@@ -1428,12 +1515,15 @@ Do NOT search hiring.cafe, greenhouse.io, or lever.co (already searched in Pass 
       urlLastValidated:  admin.firestore.FieldValue.serverTimestamp(),
       posted:            job.posted       || "",
       fitScore:          typeof job.fitScore === "number" ? job.fitScore : null,
-      matchReasons:      Array.isArray(job.matchReasons) ? job.matchReasons : [],
+      matchReasons:      Array.isArray(job.matchReasons) ? job.matchReasons.filter(r => r != null) : [],
       createdAt:         admin.firestore.FieldValue.serverTimestamp(),
     })
   );
-  // Write to global jobs_cache (dedup index by URL, 30-day TTL)
-  const cacheWrites = finalJobs.filter(j => j.directUrl || j.url).map(j => {
+  // Write ALL verified jobs to global jobs_cache (dedup index by URL, 30-day TTL).
+  // This includes overflow jobs that were verified but ranked below the top-N cutoff —
+  // they have good URLs and may be a strong fit for a different user's search criteria.
+  // fitScore/matchReasons are intentionally omitted (user-specific; re-scored at serve time).
+  const cacheWrites = allVerifiedJobs.filter(j => j.directUrl || j.url).map(j => {
     const hash = jobUrlHash(j.directUrl || j.url);
     if (!hash) return null;
     return db.collection("jobs_cache").doc(hash).set({
@@ -1450,14 +1540,20 @@ Do NOT search hiring.cafe, greenhouse.io, or lever.co (already searched in Pass 
     }, { merge: true });
   }).filter(Boolean);
   // Save user's jobs first — this must succeed.
-  await Promise.all(savePromises);
+  try {
+    await Promise.all(savePromises);
+  } catch (saveErr) {
+    console.error(`[runJobSearch] jobs.add failed for ${userId}:`, saveErr.message, saveErr.stack);
+    log(`ERROR saving jobs: ${saveErr.message}`);
+    throw saveErr;
+  }
   // Cache writes are best-effort — a failure here must never kill the search.
   Promise.all(cacheWrites).catch(err => console.warn("[jobs_cache] Write failed:", err.message));
+  log(`Cache: wrote ${cacheWrites.length} verified job(s) (${finalJobs.length} shown + ${cacheWrites.length - finalJobs.length} overflow)`);
 
-  // Vector embeddings: fire-and-forget after cache write so the doc already exists.
-  // Each job gets an embedding stored in Firestore for future semantic searches.
+  // Vector embeddings: fire-and-forget for all verified jobs (final + overflow).
   if (VECTOR_ENABLED) {
-    finalJobs.forEach(j => {
+    allVerifiedJobs.forEach(j => {
       const hash = jobUrlHash(j.directUrl || j.url);
       if (hash) writeJobEmbedding(hash, j);
     });
