@@ -277,7 +277,8 @@ async function isAdminUser(userId) {
 //   stats: { verificationFailures, redirectFailures, apiMisses, successfulVerifications }
 
 function normalizeCompanyKey(name) {
-  return name.toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 64);
+  if (!name) return "";
+  return String(name).toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 64);
 }
 
 // Batch-load profiles for a list of company names. Returns a Map keyed by
@@ -363,7 +364,7 @@ function getDefaultCompanyProfiles() {
       disableHttpVerification:  false,
       allowGenericCareersRedirect: true,  // Greenhouse URLs redirect to /careers — score original URL pattern
       preferDirectCareersScrape:  false,
-      minAcceptScore:           0.62,
+      minAcceptScore:           0.60,   // was 0.62 — 0.95×0.65=0.6175 failed by floating-point rounding
       knownGoodDomains:         ["boards.greenhouse.io/relativity"],
       notes: "Greenhouse URLs redirect to generic relativityspace.com/careers page. allowGenericCareersRedirect scores the original ATS URL pattern rather than the redirect destination.",
     },
@@ -582,7 +583,8 @@ function titlesMatch(a, b) {
 
 // â"€â"€ Company slug candidates for ATS API lookups â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 function companySlugs(name, hint) {
-  const base = name.toLowerCase();
+  if (!name) return hint ? [String(hint).toLowerCase().replace(/[^a-z0-9-]/g, "").slice(0, 64)].filter(s => s.length >= 2) : [];
+  const base = String(name).toLowerCase();
   // hint is included first so it's always tried — dedup runs over the full list
   const candidates = [
     hint,
@@ -770,6 +772,7 @@ async function verifyJobUrls(jobs, userId, vlog = () => {}, options = {}) {
   const staleUrlSet = options.staleUrls instanceof Set ? options.staleUrls : new Set();
 
   await Promise.all(jobs.map(async (job) => {
+    try {
     const companyKey = normalizeCompanyKey(job.company);
     const profile    = profiles.get(companyKey) || null;
     const atsHint    = (job.atsProvider || "").toLowerCase();
@@ -904,6 +907,12 @@ async function verifyJobUrls(jobs, userId, vlog = () => {}, options = {}) {
       job.urlVerified = false;
       vlog(`  → FAILED: best conf=${bestRawConf.toFixed(2)} < threshold ${effectiveThreshold}${bestUrl ? ` (best url=${bestUrl})` : " (no candidates)"}`);
       if (profile && candidates.length > 0) recordVerificationStat(companyKey, "verificationFailures");
+    }
+    } catch (jobErr) {
+      // Guard: never let one malformed job (e.g. null company) crash the entire verification.
+      console.warn(`[verifyJobUrls] Uncaught error on "${job.title}" @ ${job.company}: ${jobErr.message}`);
+      vlog(`  → ERROR: ${jobErr.message} — marking as unverified`);
+      job.urlVerified = false;
     }
   }));
 
@@ -1403,11 +1412,19 @@ Do NOT search hiring.cafe, greenhouse.io, or lever.co (already searched in Pass 
   log(`Ranking complete — saving top ${finalJobs.length} job(s) out of ${allVerifiedJobs.length} verified`);
 
   // Save search summary to digests
-  const digestRef = await db.collection("digests").add({
-    userId, query,
-    jobCount:  finalJobs.length,
-    createdAt: admin.firestore.FieldValue.serverTimestamp(),
-  });
+  log(`Saving ${finalJobs.length} job(s) to Firestore…`);
+  let digestRef;
+  try {
+    digestRef = await db.collection("digests").add({
+      userId, query,
+      jobCount:  finalJobs.length,
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+  } catch (digestErr) {
+    console.error(`[runJobSearch] digests.add failed for ${userId}:`, digestErr.message, digestErr.stack);
+    log(`ERROR creating digest: ${digestErr.message}`);
+    throw digestErr;
+  }
 
   // Save each final job as an individual document
   const savePromises = finalJobs.map(job =>
@@ -1428,7 +1445,7 @@ Do NOT search hiring.cafe, greenhouse.io, or lever.co (already searched in Pass 
       urlLastValidated:  admin.firestore.FieldValue.serverTimestamp(),
       posted:            job.posted       || "",
       fitScore:          typeof job.fitScore === "number" ? job.fitScore : null,
-      matchReasons:      Array.isArray(job.matchReasons) ? job.matchReasons : [],
+      matchReasons:      Array.isArray(job.matchReasons) ? job.matchReasons.filter(r => r != null) : [],
       createdAt:         admin.firestore.FieldValue.serverTimestamp(),
     })
   );
@@ -1450,7 +1467,13 @@ Do NOT search hiring.cafe, greenhouse.io, or lever.co (already searched in Pass 
     }, { merge: true });
   }).filter(Boolean);
   // Save user's jobs first — this must succeed.
-  await Promise.all(savePromises);
+  try {
+    await Promise.all(savePromises);
+  } catch (saveErr) {
+    console.error(`[runJobSearch] jobs.add failed for ${userId}:`, saveErr.message, saveErr.stack);
+    log(`ERROR saving jobs: ${saveErr.message}`);
+    throw saveErr;
+  }
   // Cache writes are best-effort — a failure here must never kill the search.
   Promise.all(cacheWrites).catch(err => console.warn("[jobs_cache] Write failed:", err.message));
 
