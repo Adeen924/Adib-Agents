@@ -752,13 +752,66 @@ const PREFERRED_RESULT_TARGET = 5;   // preferred verified jobs per completed se
 const CANDIDATE_MULTIPLIER    = 3;   // request this many × more candidates than jobsPerSearch
 const MIN_CACHE_SERVE         = 3;   // min cache hits needed to skip live search entirely
 
-// 6-stage verification pipeline per job:
+// Stage 7: URL resolver — for jobs verified via companies whose ATS board URLs redirect
+// to a generic /careers page (Relativity Space, SpaceX, etc.), do one batch Sonnet+
+// web_search call to find the actual direct apply URL on the company's own domain.
+// Updates job.directUrl in-place; non-fatal on any error (falls back to ATS URL).
+async function resolveRedirectUrls(jobs, userId, vlog) {
+  if (jobs.length === 0) return;
+  const jobList = jobs.map((j, i) => `${i + 1}. "${j.title}" at ${j.company}`).join("\n");
+  try {
+    const res = await anthropic.messages.create({
+      model:      MODEL_SEARCH,
+      max_tokens: 1024,
+      tools:      [{ type: "web_search_20250305", name: "web_search", max_uses: Math.min(jobs.length * 2, 6) }],
+      messages: [{
+        role:    "user",
+        content: `For each job below, search the company's OWN careers website and return the DIRECT URL to that specific job posting. These jobs are confirmed real — I just need the link on the company's own domain, not on a third-party ATS board.
+
+${jobList}
+
+Return ONLY a raw JSON array in the same order as the input — no markdown, no explanation:
+[{"url":"https://company.com/careers/specific-job-slug-or-id"}]
+
+Rules:
+- The URL MUST be on the company's own domain (e.g. spacex.com/..., relativityspace.com/..., boeing.com/...)
+- Do NOT return boards.greenhouse.io, jobs.lever.co, ashbyhq.com, linkedin.com, indeed.com, builtin.com, glassdoor.com, ziprecruiter.com, or any job aggregator
+- The URL must open the SPECIFIC job posting — not the general /careers page
+- Search the company's own careers site for the exact job title
+- Use {"url":""} if no specific company-domain link can be found`,
+      }],
+    });
+    trackCost(userId, "resolve_redirect_urls", res.usage);
+    const raw       = res.content.filter(b => b.type === "text").map(b => b.text).join("").trim();
+    const extracted = extractJsonArray(raw);
+    if (!extracted) { vlog(`resolveRedirectUrls: no JSON in response`); return; }
+    const results   = JSON.parse(extracted);
+
+    const THIRD_PARTY_RE = /greenhouse\.io|lever\.co|ashbyhq\.com|builtin\.com|glassdoor\.com|ziprecruiter\.com|hiring\.cafe/i;
+    results.forEach((r, i) => {
+      if (i >= jobs.length) return;
+      const url = (r.url || "").trim();
+      if (!url || !url.startsWith("http")) return;
+      if (AGGREGATOR_RE.test(url) || THIRD_PARTY_RE.test(url)) return;
+      if (!isSpecificJobUrl(url)) return;   // must be a specific job page, not /careers
+      vlog(`  Stage7 upgrade: "${jobs[i].title}" @ ${jobs[i].company} → ${url}`);
+      jobs[i].directUrl = url;
+    });
+  } catch (err) {
+    console.warn("resolveRedirectUrls failed:", err.message);
+    vlog(`resolveRedirectUrls error: ${err.message}`);
+  }
+}
+
+// 7-stage verification pipeline per job:
 // Stage 0:   Load company profile (if companyProfilesEnabled feature flag is on)
 // Stage 1–2: Collect candidates from ATS public APIs (Greenhouse/Lever/Ashby)
 // Stage 3:   HTTP-verify AI-provided source URL as an additional candidate
 // Stage 3b:  knownGoodDomains synthetic candidate (profile override)
 // Stage 4:   Score each candidate by confidence × title similarity
 // Stage 5:   Select best; fall through to web-search if still unverified
+// Stage 6:   Web-search fallback for anything still unverified
+// Stage 7:   Resolve ATS redirect URLs to actual company-domain direct links
 //
 // options.useProfiles — gates the entire profile system; false = standard behavior
 async function verifyJobUrls(jobs, userId, vlog = () => {}, options = {}) {
@@ -901,6 +954,11 @@ async function verifyJobUrls(jobs, userId, vlog = () => {}, options = {}) {
       job.applyUrlConfidence = bestRawConf;
       job.atsProvider        = bestAts;
       job.urlVerified        = true;
+      // Flag for Stage 7: if the company's ATS URL is known to redirect to a generic
+      // /careers page, mark for URL upgrade so we can resolve the actual direct link.
+      if (profile && (profile.allowGenericCareersRedirect || profile.disableHttpVerification)) {
+        job.hasGenericRedirect = true;
+      }
       vlog(`  → VERIFIED: ${bestUrl} (conf=${bestRawConf.toFixed(2)}, threshold=${effectiveThreshold})`);
       if (profile) recordVerificationStat(companyKey, "successfulVerifications");
     } else {
@@ -916,10 +974,19 @@ async function verifyJobUrls(jobs, userId, vlog = () => {}, options = {}) {
     }
   }));
 
-  // Final fallback: batch web-search for anything still unverified.
+  // Stage 6: batch web-search for anything still unverified.
   // Exclude definitivelyDead jobs (404/410) — web search won't find a working URL
   // for a posting that's gone, so don't waste a search slot on them.
   await verifyViaWebSearch(jobs.filter(j => !j.urlVerified && !j.definitivelyDead), userId, vlog);
+
+  // Stage 7: URL resolver — for companies whose ATS URLs redirect to a generic /careers
+  // page (Relativity Space, SpaceX, etc.), run one targeted web-search batch to find
+  // the actual direct URL on the company's own domain. Updates job.directUrl in-place.
+  const redirectJobs = jobs.filter(j => j.urlVerified && j.hasGenericRedirect);
+  if (redirectJobs.length > 0) {
+    vlog(`Stage 7: resolving direct URLs for ${redirectJobs.length} redirect-verified job(s)…`);
+    await resolveRedirectUrls(redirectJobs, userId, vlog);
+  }
 }
 
 // Build a specific, criteria-aware search query
