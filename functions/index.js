@@ -230,7 +230,7 @@ const TIERS = {
     maxOutputTokens:     10000,
     customSites:         true,
     maxTargetCompanies:  50,
-    jobsPerSearch:       3,
+    jobsPerSearch:       5,
     manualSearch:        true,
   },
 };
@@ -763,7 +763,7 @@ async function resolveRedirectUrls(jobs, userId, vlog) {
     const res = await anthropic.messages.create({
       model:      MODEL_SEARCH,
       max_tokens: 1024,
-      tools:      [{ type: "web_search_20250305", name: "web_search", max_uses: Math.min(jobs.length * 2, 6) }],
+      tools:      [{ type: "web_search_20250305", name: "web_search", max_uses: Math.min(jobs.length + 1, 4) }],
       messages: [{
         role:    "user",
         content: `For each job below, search the company's OWN careers website and return the DIRECT URL to that specific job posting. These jobs are confirmed real — I just need the link on the company's own domain, not on a third-party ATS board.
@@ -978,15 +978,8 @@ async function verifyJobUrls(jobs, userId, vlog = () => {}, options = {}) {
   // Exclude definitivelyDead jobs (404/410) — web search won't find a working URL
   // for a posting that's gone, so don't waste a search slot on them.
   await verifyViaWebSearch(jobs.filter(j => !j.urlVerified && !j.definitivelyDead), userId, vlog);
-
-  // Stage 7: URL resolver — for companies whose ATS URLs redirect to a generic /careers
-  // page (Relativity Space, SpaceX, etc.), run one targeted web-search batch to find
-  // the actual direct URL on the company's own domain. Updates job.directUrl in-place.
-  const redirectJobs = jobs.filter(j => j.urlVerified && j.hasGenericRedirect);
-  if (redirectJobs.length > 0) {
-    vlog(`Stage 7: resolving direct URLs for ${redirectJobs.length} redirect-verified job(s)…`);
-    await resolveRedirectUrls(redirectJobs, userId, vlog);
-  }
+  // Stage 7 (URL resolver) is intentionally NOT called here — it runs in runJobSearch
+  // on finalJobs only, so we never resolve URLs for candidates that won't be saved.
 }
 
 // Build a specific, criteria-aware search query
@@ -1478,6 +1471,16 @@ Do NOT search hiring.cafe, greenhouse.io, or lever.co (already searched in Pass 
   console.log(`[runJobSearch] ${allVerifiedJobs.length} total verified → keeping top ${finalJobs.length} for ${userId}`);
   log(`Ranking complete — saving top ${finalJobs.length} job(s) out of ${allVerifiedJobs.length} verified`);
 
+  // Stage 7: URL resolver — run ONLY on the final jobs that will actually be saved.
+  // Moving this here (vs. inside verifyJobUrls) prevents resolving URLs for candidates
+  // that get ranked out, which was causing function timeouts when many SpaceX jobs
+  // were verified and all triggered extra web searches.
+  const redirectFinalJobs = finalJobs.filter(j => j.hasGenericRedirect);
+  if (redirectFinalJobs.length > 0) {
+    log(`Stage 7: resolving direct URLs for ${redirectFinalJobs.length} final job(s)…`);
+    await resolveRedirectUrls(redirectFinalJobs, userId, vlog);
+  }
+
   // Save search summary to digests
   log(`Saving ${finalJobs.length} job(s) to Firestore…`);
   let digestRef;
@@ -1516,8 +1519,11 @@ Do NOT search hiring.cafe, greenhouse.io, or lever.co (already searched in Pass 
       createdAt:         admin.firestore.FieldValue.serverTimestamp(),
     })
   );
-  // Write to global jobs_cache (dedup index by URL, 30-day TTL)
-  const cacheWrites = finalJobs.filter(j => j.directUrl || j.url).map(j => {
+  // Write ALL verified jobs to global jobs_cache (dedup index by URL, 30-day TTL).
+  // This includes overflow jobs that were verified but ranked below the top-N cutoff —
+  // they have good URLs and may be a strong fit for a different user's search criteria.
+  // fitScore/matchReasons are intentionally omitted (user-specific; re-scored at serve time).
+  const cacheWrites = allVerifiedJobs.filter(j => j.directUrl || j.url).map(j => {
     const hash = jobUrlHash(j.directUrl || j.url);
     if (!hash) return null;
     return db.collection("jobs_cache").doc(hash).set({
@@ -1543,11 +1549,11 @@ Do NOT search hiring.cafe, greenhouse.io, or lever.co (already searched in Pass 
   }
   // Cache writes are best-effort — a failure here must never kill the search.
   Promise.all(cacheWrites).catch(err => console.warn("[jobs_cache] Write failed:", err.message));
+  log(`Cache: wrote ${cacheWrites.length} verified job(s) (${finalJobs.length} shown + ${cacheWrites.length - finalJobs.length} overflow)`);
 
-  // Vector embeddings: fire-and-forget after cache write so the doc already exists.
-  // Each job gets an embedding stored in Firestore for future semantic searches.
+  // Vector embeddings: fire-and-forget for all verified jobs (final + overflow).
   if (VECTOR_ENABLED) {
-    finalJobs.forEach(j => {
+    allVerifiedJobs.forEach(j => {
       const hash = jobUrlHash(j.directUrl || j.url);
       if (hash) writeJobEmbedding(hash, j);
     });
