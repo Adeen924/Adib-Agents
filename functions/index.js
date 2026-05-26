@@ -328,11 +328,11 @@ const TIERS = {
   pro: {
     label:               "Pro",
     maxSearchesPerDay:   3,
-    webSearchesPerQuery: 9,
-    maxOutputTokens:     10000,
+    webSearchesPerQuery: 6,
+    maxOutputTokens:     6000,
     customSites:         true,
     maxTargetCompanies:  50,
-    jobsPerSearch:       5,
+    jobsPerSearch:       3,
     manualSearch:        true,
   },
 };
