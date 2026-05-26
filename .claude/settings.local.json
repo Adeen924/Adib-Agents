@@ -64,7 +64,12 @@
       "Bash(python3 -c \"import reportlab; print\\(reportlab.__version__\\)\")",
       "Bash(python make_pdf.py)",
       "Bash(grep -n \"fetch\\\\\\(\\\\`\\\\${BACKEND_URL}\" docs/app.js)",
-      "Bash(grep -v \"^[[:space:]]*//\")"
+      "Bash(grep -v \"^[[:space:]]*//\")",
+      "Bash(Get-ChildItem -Path \"C:\\\\Users\\\\amazl\\\\Documents\\\\GitHub\\\\Adib-Agents\" -Force)",
+      "Bash(Format-Table -AutoSize)",
+      "Bash(git check-ignore *)",
+      "Bash(gh api *)",
+      "PowerShell(gh api --method PATCH /repos/adeen924/Adib-Agents --field \"security_and_analysis[secret_scanning][status]=enabled\" --field \"security_and_analysis[secret_scanning_push_protection][status]=enabled\" 2>&1)"
     ]
   }
 }

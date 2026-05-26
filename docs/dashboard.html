@@ -977,10 +977,22 @@
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-messaging-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-check-compat.js"></script>
 <script src="firebase-config.js"></script>
 <script>
+  // On localhost: enable App Check debug mode so reCAPTCHA is not required.
+  // A debug token is auto-generated and printed in the browser console on first run.
+  // Register that token in Firebase Console → App Check → Apps → Manage debug tokens.
+  if (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1") {
+    self.FIREBASE_APPCHECK_DEBUG_TOKEN = true;
+  }
   // Guard: only init if Firebase hasn't been initialised yet (index.html may have already done it)
   if (!firebase.apps.length) firebase.initializeApp(firebaseConfig);
+  // Initialize App Check before any Firebase service usage
+  firebase.appCheck().activate(
+    new firebase.appCheck.ReCaptchaV3Provider(RECAPTCHA_SITE_KEY),
+    true // isTokenAutoRefreshEnabled
+  );
 </script>
 <script src="app.js"></script>
 <script src="onboarding.js"></script>

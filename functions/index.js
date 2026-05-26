@@ -37,7 +37,7 @@ app.use(cors({
     cb(allowed ? null : new Error("CORS: origin not allowed"), allowed);
   },
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization"],
+  allowedHeaders: ["Content-Type", "Authorization", "X-Firebase-AppCheck"],
 }));
 
 // Global rate limiter — 200 req / 15 min per IP (webhook excluded below)
@@ -150,7 +150,39 @@ async function requireAdmin(req, res, next) {
   }
 }
 
-// Apply auth to every route registered after this point
+// ── Firebase App Check middleware ─────────────────────────────────────────────
+// Verifies the X-Firebase-AppCheck token issued by reCAPTCHA on the client.
+// APP_CHECK_ENFORCE=true → reject invalid/missing tokens (enforce mode).
+// APP_CHECK_ENFORCE unset  → log but allow through (monitor mode, safe rollout).
+// Stripe webhook and health-check ("/") are handled by their own route handlers
+// before this middleware runs and are therefore unaffected.
+const APP_CHECK_ENFORCE = process.env.APP_CHECK_ENFORCE === "true";
+
+async function verifyAppCheck(req, res, next) {
+  const token = req.headers["x-firebase-appcheck"];
+
+  if (!token) {
+    console.warn(`[AppCheck] MISSING token — method=${req.method} path=${req.path} ip=${req.ip}`);
+    if (APP_CHECK_ENFORCE) {
+      return res.status(401).json({ error: "App Check token required" });
+    }
+    return next();
+  }
+
+  try {
+    await admin.appCheck().verifyToken(token);
+    next();
+  } catch (err) {
+    console.warn(`[AppCheck] INVALID token — method=${req.method} path=${req.path} ip=${req.ip} err=${err.message}`);
+    if (APP_CHECK_ENFORCE) {
+      return res.status(401).json({ error: "Invalid App Check token" });
+    }
+    next();
+  }
+}
+
+// Apply App Check then auth to every route registered after this point
+app.use(verifyAppCheck);
 app.use(authenticate);
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });

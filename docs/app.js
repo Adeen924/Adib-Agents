@@ -24,9 +24,19 @@ async function apiFetch(url, options = {}) {
     idToken = sessionStorage.getItem("fbToken");
   }
 
+  let appCheckToken = "";
+  try {
+    const result = await firebase.appCheck().getToken(false);
+    appCheckToken = result.token;
+  } catch {
+    // App Check unavailable (e.g. reCAPTCHA not yet configured) — backend logs but
+    // does not reject while in monitor mode.
+  }
+
   const headers = {
     ...(options.headers || {}),
     "Authorization": `Bearer ${idToken}`,
+    ...(appCheckToken && { "X-Firebase-AppCheck": appCheckToken }),
   };
   if (options.body && typeof options.body === "string") {
     headers["Content-Type"] = headers["Content-Type"] || "application/json";

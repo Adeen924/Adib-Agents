@@ -17,3 +17,11 @@ const firebaseConfig = {
   // Change this if you ever move to a custom domain.
   siteUrl: "https://adeen924.github.io/Adib-Agents",
 };
+
+// reCAPTCHA v3 site key for Firebase App Check.
+// Steps to obtain:
+//   1. Go to https://www.google.com/recaptcha/admin and create a reCAPTCHA v3 site
+//      with domain "adeen924.github.io" (and "localhost" for dev)
+//   2. Copy the Site Key here
+//   3. Register the key in Firebase Console → App Check → Apps → your web app → reCAPTCHA v3
+const RECAPTCHA_SITE_KEY = "YOUR_RECAPTCHA_SITE_KEY_HERE";
