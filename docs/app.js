@@ -5,10 +5,35 @@ const BACKEND_URL =
 
 // ── Auth guard ────────────────────────────────────────────────────────────────
 const email = sessionStorage.getItem("fbEmail");
-const token = sessionStorage.getItem("fbToken");
 const fbUid = sessionStorage.getItem("fbUid") || email;
-if (!email || !token) window.location.href = "index.html";
-const userId = email;
+if (!email || !fbUid) window.location.href = "index.html";
+// Use Firebase UID as the canonical user identifier
+const userId = fbUid;
+
+// ── Authenticated fetch wrapper ───────────────────────────────────────────────
+// Gets a fresh Firebase ID token on every request (auto-refreshes if expired).
+// Falls back to the stored token if Firebase Auth is unavailable.
+async function apiFetch(url, options = {}) {
+  let idToken;
+  try {
+    const user = await new Promise(resolve => {
+      const unsub = firebase.auth().onAuthStateChanged(u => { unsub(); resolve(u); });
+    });
+    idToken = user ? await user.getIdToken() : sessionStorage.getItem("fbToken");
+  } catch {
+    idToken = sessionStorage.getItem("fbToken");
+  }
+
+  const headers = {
+    ...(options.headers || {}),
+    "Authorization": `Bearer ${idToken}`,
+  };
+  if (options.body && typeof options.body === "string") {
+    headers["Content-Type"] = headers["Content-Type"] || "application/json";
+  }
+
+  return fetch(url, { ...options, headers });
+}
 
 // ── Panel registry ────────────────────────────────────────────────────────────
 const PANELS = {
@@ -156,7 +181,7 @@ function showPanel(name) {
 async function loadRecentJobs() {
   const el = document.getElementById("dashboardJobs");
   try {
-    const res  = await fetch(`${BACKEND_URL}/jobs/${encodeURIComponent(userId)}`);
+    const res  = await apiFetch(`${BACKEND_URL}/jobs/${encodeURIComponent(userId)}`);
     const data = await res.json();
     if (!data.jobs || data.jobs.length === 0) {
       el.innerHTML = `<div class="empty-table">No jobs found yet — your daily search will run automatically, or upgrade to Pro to search on demand.</div>`;
@@ -172,7 +197,7 @@ async function loadRecentJobs() {
 // ── Dashboard stats ───────────────────────────────────────────────────────────
 async function loadStats() {
   try {
-    const res  = await fetch(`${BACKEND_URL}/stats/${encodeURIComponent(userId)}`);
+    const res  = await apiFetch(`${BACKEND_URL}/stats/${encodeURIComponent(userId)}`);
     const data = await res.json();
     document.getElementById("stat-new-jobs").textContent    = data.newJobs24h        ?? 0;
     document.getElementById("stat-total-jobs").textContent  = data.totalJobs         ?? 0;
@@ -234,7 +259,7 @@ function filteredApps() {
 
 async function loadApplications() {
   try {
-    const res  = await fetch(`${BACKEND_URL}/applications/${encodeURIComponent(userId)}`);
+    const res  = await apiFetch(`${BACKEND_URL}/applications/${encodeURIComponent(userId)}`);
     const data = await res.json();
     allApplicationsList = data.applications || [];
     renderPipelineBar();
@@ -406,7 +431,7 @@ function renderAppTable() {
 // ── Quick status update (table inline select) ─────────────────────────────────
 async function quickStatusUpdate(appId, newStatus, selectEl) {
   try {
-    await fetch(`${BACKEND_URL}/applications/${encodeURIComponent(userId)}/${appId}/status`, {
+    await apiFetch(`${BACKEND_URL}/applications/${encodeURIComponent(userId)}/${appId}/status`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ status: newStatus }),
@@ -476,7 +501,7 @@ async function detailStatusChange() {
   const newStatus = sel.value;
   sel.className = `detail-status-select status-badge status-${statusClass(newStatus)}`;
   try {
-    await fetch(`${BACKEND_URL}/applications/${encodeURIComponent(userId)}/${currentDetailAppId}/status`, {
+    await apiFetch(`${BACKEND_URL}/applications/${encodeURIComponent(userId)}/${currentDetailAppId}/status`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ status: newStatus }),
@@ -498,7 +523,7 @@ async function loadNotes(appId) {
   if (!el || !appId) return;
   el.innerHTML = '<div style="font-size:0.8rem;color:var(--text-muted);padding:4px 0">Loading…</div>';
   try {
-    const res  = await fetch(`${BACKEND_URL}/applications/${encodeURIComponent(userId)}/${appId}/notes`);
+    const res  = await apiFetch(`${BACKEND_URL}/applications/${encodeURIComponent(userId)}/${appId}/notes`);
     const data = await res.json();
     if (!data.notes?.length) {
       el.innerHTML = '<div style="font-size:0.82rem;color:var(--text-muted);padding:4px 0">No notes yet.</div>';
@@ -523,7 +548,7 @@ async function submitNote() {
   const btn = document.querySelector("#detailTabNotes .btn");
   if (btn) { btn.disabled = true; btn.textContent = "Saving…"; }
   try {
-    await fetch(`${BACKEND_URL}/applications/${encodeURIComponent(userId)}/${currentDetailAppId}/notes`, {
+    await apiFetch(`${BACKEND_URL}/applications/${encodeURIComponent(userId)}/${currentDetailAppId}/notes`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ content }),
@@ -539,7 +564,7 @@ async function submitNote() {
 
 async function deleteNote(appId, noteId) {
   try {
-    await fetch(`${BACKEND_URL}/applications/${encodeURIComponent(userId)}/${appId}/notes/${noteId}`, { method: "DELETE" });
+    await apiFetch(`${BACKEND_URL}/applications/${encodeURIComponent(userId)}/${appId}/notes/${noteId}`, { method: "DELETE" });
     loadNotes(appId);
   } catch {
     showToast("Error", "Could not delete note.");
@@ -552,7 +577,7 @@ async function loadTimeline(appId) {
   if (!el || !appId) return;
   el.innerHTML = '<div style="font-size:0.8rem;color:var(--text-muted);padding:4px 0">Loading…</div>';
   try {
-    const res  = await fetch(`${BACKEND_URL}/applications/${encodeURIComponent(userId)}/${appId}`);
+    const res  = await apiFetch(`${BACKEND_URL}/applications/${encodeURIComponent(userId)}/${appId}`);
     const data = await res.json();
     const events = data.timeline || [];
     if (!events.length) {
@@ -593,7 +618,7 @@ async function loadInterviews(appId) {
   if (!el || !appId) return;
   el.innerHTML = '<div style="font-size:0.8rem;color:var(--text-muted);padding:4px 0">Loading…</div>';
   try {
-    const res  = await fetch(`${BACKEND_URL}/interviews/${encodeURIComponent(userId)}`);
+    const res  = await apiFetch(`${BACKEND_URL}/interviews/${encodeURIComponent(userId)}`);
     const data = await res.json();
     const list = (data.interviews || []).filter(i => i.applicationId === appId);
     if (!list.length) {
@@ -624,11 +649,11 @@ async function saveInterview() {
   const btn = document.querySelector("#detailTabInterviews .btn-gold");
   if (btn) { btn.disabled = true; btn.textContent = "Saving…"; }
   try {
-    await fetch(`${BACKEND_URL}/interviews/save`, {
+    await apiFetch(`${BACKEND_URL}/interviews/save`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        userId, applicationId: currentDetailAppId,
+        applicationId: currentDetailAppId,
         company: app?.company || "", role: app?.role || "",
         type:     document.getElementById("intType")?.value    || "general",
         format:   document.getElementById("intFormat")?.value  || "video",
@@ -650,7 +675,7 @@ async function saveInterview() {
 async function deleteInterview(id, appId) {
   if (!confirm("Delete this interview?")) return;
   try {
-    await fetch(`${BACKEND_URL}/interviews/${encodeURIComponent(userId)}/${id}`, { method: "DELETE" });
+    await apiFetch(`${BACKEND_URL}/interviews/${encodeURIComponent(userId)}/${id}`, { method: "DELETE" });
     loadInterviews(appId);
   } catch {
     showToast("Error", "Could not delete interview.");
@@ -682,11 +707,11 @@ async function submitQuickAdd() {
   const btn = document.getElementById("qaSubmitBtn");
   btn.disabled = true; btn.textContent = "Saving…";
   try {
-    const res  = await fetch(`${BACKEND_URL}/applications/save`, {
+    const res  = await apiFetch(`${BACKEND_URL}/applications/save`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        userId, company, role,
+        company, role,
         status:    document.getElementById("qaStatus").value,
         source:    document.getElementById("qaSource").value,
         url:       document.getElementById("qaUrl").value,
@@ -716,7 +741,7 @@ async function submitQuickAdd() {
 async function deleteApplication(id) {
   if (!confirm("Delete this application and all its notes and history?")) return;
   try {
-    await fetch(`${BACKEND_URL}/applications/${encodeURIComponent(userId)}/${id}`, { method: "DELETE" });
+    await apiFetch(`${BACKEND_URL}/applications/${encodeURIComponent(userId)}/${id}`, { method: "DELETE" });
     allApplicationsList = allApplicationsList.filter(a => a.id !== id);
     if (currentDetailAppId === id) closeAppDetail();
     renderPipelineBar();
@@ -756,7 +781,7 @@ async function searchNow() {
 
     pollTimer = setInterval(async () => {
       try {
-        const r = await fetch(`${BACKEND_URL}/search/logs/${encodeURIComponent(userId)}`);
+        const r = await apiFetch(`${BACKEND_URL}/search/logs/${encodeURIComponent(userId)}`);
         if (!r.ok) return;
         const d = await r.json();
         const lines = Array.isArray(d.log) ? d.log : [];
@@ -771,7 +796,7 @@ async function searchNow() {
   }
 
   try {
-    const res  = await fetch(`${BACKEND_URL}/search/now/${encodeURIComponent(userId)}`, { method: "POST" });
+    const res  = await apiFetch(`${BACKEND_URL}/search/now/${encodeURIComponent(userId)}`, { method: "POST" });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || "Search failed");
     await loadDigest();
@@ -790,8 +815,8 @@ async function loadJobs() {
   body.innerHTML = '<div class="panel-loading" style="padding:28px">Loading jobs…</div>';
   try {
     const [jobsRes, watchlistRes] = await Promise.all([
-      fetch(`${BACKEND_URL}/jobs/${encodeURIComponent(userId)}`),
-      fetch(`${BACKEND_URL}/watchlist-jobs/${encodeURIComponent(userId)}`),
+      apiFetch(`${BACKEND_URL}/jobs/${encodeURIComponent(userId)}`),
+      apiFetch(`${BACKEND_URL}/watchlist-jobs/${encodeURIComponent(userId)}`),
     ]);
     const jobsData      = await jobsRes.json();
     const watchlistData = await watchlistRes.json();
@@ -906,7 +931,7 @@ async function openJobDetail(jobId, source) {
     const endpoint = source === "watchlist"
       ? `${BACKEND_URL}/watchlist-jobs/${encodeURIComponent(userId)}/detail/${encodeURIComponent(jobId)}`
       : `${BACKEND_URL}/jobs/${encodeURIComponent(userId)}/detail/${encodeURIComponent(jobId)}`;
-    const res = await fetch(endpoint);
+    const res = await apiFetch(endpoint);
     const j   = await res.json();
     if (!res.ok) throw new Error(j.error || "Not found");
 
@@ -1051,10 +1076,10 @@ async function generateJobDoc(type) {
   const labelMap    = { "resume": "Tailored Resume", "cover-letter": "Cover Letter", "interview": "Interview Prep" };
 
   try {
-    const res  = await fetch(`${BACKEND_URL}/jobs/${currentJob.id}/${endpointMap[type]}`, {
+    const res  = await apiFetch(`${BACKEND_URL}/jobs/${currentJob.id}/${endpointMap[type]}`, {
       method:  "POST",
       headers: { "Content-Type": "application/json" },
-      body:    JSON.stringify({ userId }),
+      body:    JSON.stringify({}),
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || "Generation failed");
@@ -1071,10 +1096,10 @@ async function generateJobDoc(type) {
       const jobTitle  = currentJob.title   || "Untitled Role";
       const company   = currentJob.company || "";
       const docTitle  = company ? `${jobTitle} at ${company} — ${dateStr}` : `${jobTitle} — ${dateStr}`;
-      fetch(`${BACKEND_URL}/documents/save`, {
+      apiFetch(`${BACKEND_URL}/documents/save`, {
         method:  "POST",
         headers: { "Content-Type": "application/json" },
-        body:    JSON.stringify({ userId, type: docType, content: data.text, title: docTitle, company }),
+        body:    JSON.stringify({ type: docType, content: data.text, title: docTitle, company }),
       }).catch(() => {});
     }
 
@@ -1211,10 +1236,10 @@ async function networkForRole() {
     }, 5000);
 
     try {
-      const res  = await fetch(`${BACKEND_URL}/jobs/${currentJob.id}/network`, {
+      const res  = await apiFetch(`${BACKEND_URL}/jobs/${currentJob.id}/network`, {
         method:  "POST",
         headers: { "Content-Type": "application/json" },
-        body:    JSON.stringify({ userId }),
+        body:    JSON.stringify({}),
       });
       clearInterval(stepTimer);
       const data = await res.json();
@@ -1260,8 +1285,8 @@ async function loadDigest() {
   body.innerHTML = '<div class="panel-loading" style="padding:28px">Loading…</div>';
   try {
     const [jobsRes, digestRes] = await Promise.all([
-      fetch(`${BACKEND_URL}/jobs/${encodeURIComponent(userId)}`),
-      fetch(`${BACKEND_URL}/digest/${encodeURIComponent(userId)}`),
+      apiFetch(`${BACKEND_URL}/jobs/${encodeURIComponent(userId)}`),
+      apiFetch(`${BACKEND_URL}/digest/${encodeURIComponent(userId)}`),
     ]);
     const jobsData   = await jobsRes.json();
     const digestData = await digestRes.json();
@@ -1302,7 +1327,7 @@ async function loadDocuments(type) {
   const searchEl = document.getElementById("docsSearch");
   if (searchEl) searchEl.value = "";
   try {
-    const res  = await fetch(`${BACKEND_URL}/documents/${encodeURIComponent(userId)}/${type}`);
+    const res  = await apiFetch(`${BACKEND_URL}/documents/${encodeURIComponent(userId)}/${type}`);
     const data = await res.json();
     allDocumentsList = data.documents || [];
     renderDocumentsList(type);
@@ -1355,7 +1380,7 @@ function filterDocuments() {
 
 async function deleteDocument(id, type) {
   if (!confirm("Delete this document?")) return;
-  await fetch(`${BACKEND_URL}/documents/${encodeURIComponent(userId)}/${id}`, { method: "DELETE" });
+  await apiFetch(`${BACKEND_URL}/documents/${encodeURIComponent(userId)}/${id}`, { method: "DELETE" });
   loadDocuments(type);
 }
 
@@ -1376,7 +1401,7 @@ async function loadPreferencesPanel() {
 
 async function loadNotificationSettings() {
   try {
-    const res  = await fetch(`${BACKEND_URL}/preferences/${encodeURIComponent(userId)}`);
+    const res  = await apiFetch(`${BACKEND_URL}/preferences/${encodeURIComponent(userId)}`);
     const data = await res.json();
     if (data.notifEmail) document.getElementById("settingNotifEmail").value = data.notifEmail;
     if (data.notifPhone) document.getElementById("settingNotifPhone").value = formatPhoneDisplay(data.notifPhone);
@@ -1385,7 +1410,7 @@ async function loadNotificationSettings() {
 
 async function loadScheduleSettings() {
   try {
-    const res  = await fetch(`${BACKEND_URL}/preferences/${encodeURIComponent(userId)}`);
+    const res  = await apiFetch(`${BACKEND_URL}/preferences/${encodeURIComponent(userId)}`);
     const data = await res.json();
     if (data.searchEnabled !== undefined) document.getElementById("settingSearchEnabled").checked = data.searchEnabled;
     if (data.searchTimesPerDay) document.getElementById("settingTimesPerDay").value = data.searchTimesPerDay;
@@ -1396,7 +1421,7 @@ async function loadScheduleSettings() {
 
 async function loadCustomSites() {
   try {
-    const res  = await fetch(`${BACKEND_URL}/preferences/${encodeURIComponent(userId)}`);
+    const res  = await apiFetch(`${BACKEND_URL}/preferences/${encodeURIComponent(userId)}`);
     const data = await res.json();
     const sites = data.customSites || "";
     // Stored as comma-separated; display one per line for the textarea
@@ -1426,10 +1451,10 @@ async function handleUpgradeClick() {
   const btn = document.getElementById("upgradeBtn");
   if (btn) { btn.disabled = true; btn.textContent = "Redirecting…"; }
   try {
-    const res  = await fetch(`${BACKEND_URL}/create-checkout-session`, {
+    const res  = await apiFetch(`${BACKEND_URL}/create-checkout-session`, {
       method:  "POST",
       headers: { "Content-Type": "application/json" },
-      body:    JSON.stringify({ userId, userEmail: userId, billingPeriod: selectedBillingPeriod }),
+      body:    JSON.stringify({ billingPeriod: selectedBillingPeriod }),
     });
     const data = await res.json();
     if (data.url) {
@@ -1448,10 +1473,10 @@ async function openBillingPortal() {
   const btn = document.getElementById("manageSubBtn");
   if (btn) { btn.disabled = true; btn.textContent = "Opening…"; }
   try {
-    const res  = await fetch(`${BACKEND_URL}/create-portal-session`, {
+    const res  = await apiFetch(`${BACKEND_URL}/create-portal-session`, {
       method:  "POST",
       headers: { "Content-Type": "application/json" },
-      body:    JSON.stringify({ userId }),
+      body:    JSON.stringify({}),
     });
     const data = await res.json();
     if (data.url) {
@@ -1468,7 +1493,7 @@ async function openBillingPortal() {
 
 async function loadUserTier() {
   try {
-    const res  = await fetch(`${BACKEND_URL}/user/${encodeURIComponent(userId)}`);
+    const res  = await apiFetch(`${BACKEND_URL}/user/${encodeURIComponent(userId)}`);
     const data = await res.json();
     userTier   = data.tier || "free";
     userRole   = data.role || "customer";
@@ -1595,7 +1620,7 @@ async function changePassword() {
 // ── Preferences ───────────────────────────────────────────────────────────────
 async function loadPreferences() {
   try {
-    const res  = await fetch(`${BACKEND_URL}/preferences/${encodeURIComponent(userId)}`);
+    const res  = await apiFetch(`${BACKEND_URL}/preferences/${encodeURIComponent(userId)}`);
     const data = await res.json();
     if (data.jobTitle)        document.getElementById("prefJobTitle").value        = data.jobTitle;
     if (data.locationCity)    document.getElementById("prefLocationCity").value    = data.locationCity;
@@ -1616,10 +1641,9 @@ async function savePreferences(e) {
   const btn    = e.submitter;
   btn.disabled = true; btn.textContent = "Saving…";
   try {
-    await fetch(`${BACKEND_URL}/preferences/save`, {
+    await apiFetch(`${BACKEND_URL}/preferences/save`, {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        userId,
         jobTitle:        document.getElementById("prefJobTitle").value,
         locationCity:    document.getElementById("prefLocationCity").value,
         locationRadius:  document.getElementById("prefLocationRadius").value,
@@ -1643,10 +1667,9 @@ async function saveScheduleSettings() {
   const status = document.getElementById("scheduleStatus");
   btn.disabled = true; btn.textContent = "Saving…";
   try {
-    await fetch(`${BACKEND_URL}/preferences/save`, {
+    await apiFetch(`${BACKEND_URL}/preferences/save`, {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        userId,
         searchEnabled:     document.getElementById("settingSearchEnabled").checked,
         searchTimesPerDay: parseInt(document.getElementById("settingTimesPerDay").value, 10),
         searchStartHour:   parseInt(document.getElementById("settingStartHour").value, 10),
@@ -1675,10 +1698,9 @@ async function saveNotificationSettings() {
 
   btn.disabled = true; btn.textContent = "Saving…";
   try {
-    await fetch(`${BACKEND_URL}/preferences/save`, {
+    await apiFetch(`${BACKEND_URL}/preferences/save`, {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        userId,
         notifEmail: document.getElementById("settingNotifEmail").value.trim(),
         notifPhone: cleanPhone(document.getElementById("settingNotifPhone").value),
       }),
@@ -1696,9 +1718,9 @@ async function saveCustomSites() {
   try {
     const raw = document.getElementById("prefCustomSites").value;
     const customSites = raw.split(/[\n,]/).map(s => s.trim()).filter(Boolean).join(",");
-    await fetch(`${BACKEND_URL}/preferences/save`, {
+    await apiFetch(`${BACKEND_URL}/preferences/save`, {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ userId, customSites }),
+      body: JSON.stringify({ customSites }),
     });
     status.textContent = "✓ Pages saved.";
   } catch {
@@ -1709,7 +1731,7 @@ async function saveCustomSites() {
 // ── Knowledge Base ────────────────────────────────────────────────────────────
 async function loadKnowledge() {
   try {
-    const res  = await fetch(`${BACKEND_URL}/knowledge/${encodeURIComponent(userId)}`);
+    const res  = await apiFetch(`${BACKEND_URL}/knowledge/${encodeURIComponent(userId)}`);
     const data = await res.json();
     if (data.resume) {
       document.getElementById("kbResumeText").value = data.resume;
@@ -1729,10 +1751,9 @@ async function saveKnowledge(e) {
   const btn    = e.submitter;
   btn.disabled = true; btn.textContent = "Saving…";
   try {
-    await fetch(`${BACKEND_URL}/knowledge/save`, {
+    await apiFetch(`${BACKEND_URL}/knowledge/save`, {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        userId,
         resume:            document.getElementById("kbResumeText").value,
         currentPosition:   document.getElementById("kbCurrentPos").value,
         previousPositions: document.getElementById("kbPrevPos").value,
@@ -1861,7 +1882,7 @@ async function handleResumeFile(file) {
     setKbStatus("⏳ Parsing your resume…", "muted");
 
     try {
-      const res  = await fetch(`${BACKEND_URL}/knowledge/parse-resume`, {
+      const res  = await apiFetch(`${BACKEND_URL}/knowledge/parse-resume`, {
         method:  "POST",
         headers: { "Content-Type": "application/json" },
         body:    JSON.stringify({ resumeText: text }),
@@ -2042,10 +2063,10 @@ async function initNotifications() {
     const token = await messaging.getToken({ vapidKey: firebaseConfig.vapidKey, serviceWorkerRegistration: swReg });
     if (!token) return;
 
-    await fetch(`${BACKEND_URL}/notifications/token`, {
+    await apiFetch(`${BACKEND_URL}/notifications/token`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ userId, token }),
+      body: JSON.stringify({ token }),
     });
 
     messaging.onMessage(payload => {
@@ -2086,7 +2107,7 @@ function showToast(title, body) {
 // ── Target Company Watchlist ──────────────────────────────────────────────────
 async function loadTargetCompanies() {
   try {
-    const res  = await fetch(`${BACKEND_URL}/target-companies/${encodeURIComponent(userId)}`);
+    const res  = await apiFetch(`${BACKEND_URL}/target-companies/${encodeURIComponent(userId)}`);
     const data = await res.json();
     renderTargetCompanies(data.companies || []);
   } catch { /* non-fatal */ }
@@ -2129,9 +2150,9 @@ async function saveWatchlistCompanies() {
       .map(row => ({ name: row.querySelector(".tc-name").value.trim() }))
       .filter(c => c.name);
 
-    const res = await fetch(`${BACKEND_URL}/target-companies/save`, {
+    const res = await apiFetch(`${BACKEND_URL}/target-companies/save`, {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ userId, companies }),
+      body: JSON.stringify({ companies }),
     });
     if (!res.ok) throw new Error("Save failed");
     status.textContent = "Saved! The agent will check these companies on your search schedule.";
@@ -2145,10 +2166,10 @@ async function toggleWatchlist(enable) {
   const btn = document.getElementById("watchlistToggleBtn");
   if (btn) { btn.disabled = true; btn.textContent = "Saving…"; }
   try {
-    const res = await fetch(`${BACKEND_URL}/admin/feature-flags`, {
+    const res = await apiFetch(`${BACKEND_URL}/admin/feature-flags`, {
       method:  "POST",
       headers: { "Content-Type": "application/json" },
-      body:    JSON.stringify({ adminId: userId, watchlistEnabled: enable }),
+      body:    JSON.stringify({ watchlistEnabled: enable }),
     });
     if (!res.ok) throw new Error((await res.json()).error || "Failed");
     // Reload so the button reflects the new state
@@ -2164,8 +2185,8 @@ async function loadAdminPanel() {
   body.innerHTML = '<div class="panel-loading" style="padding:28px">Loading admin stats…</div>';
   try {
     const [statsRes, flagsRes] = await Promise.all([
-      fetch(`${BACKEND_URL}/admin/stats/${encodeURIComponent(userId)}`),
-      fetch(`${BACKEND_URL}/admin/feature-flags?adminId=${encodeURIComponent(userId)}`),
+      apiFetch(`${BACKEND_URL}/admin/stats/${encodeURIComponent(userId)}`),
+      apiFetch(`${BACKEND_URL}/admin/feature-flags`),
     ]);
     const data  = await statsRes.json();
     const flags = flagsRes.ok ? await flagsRes.json() : {};
@@ -2310,7 +2331,7 @@ async function loadAdminUserDetail(encodedTargetId) {
   const body = document.getElementById("adminBody");
   body.innerHTML = '<div class="panel-loading" style="padding:28px">Loading user detail…</div>';
   try {
-    const res  = await fetch(`${BACKEND_URL}/admin/user-detail/${encodeURIComponent(targetId)}?adminId=${encodeURIComponent(userId)}`);
+    const res  = await apiFetch(`${BACKEND_URL}/admin/user-detail/${encodeURIComponent(targetId)}`);
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || "Failed to load");
 
