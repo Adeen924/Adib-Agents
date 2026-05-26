@@ -58,7 +58,11 @@
       "Bash(npm install *)",
       "Bash(git fetch *)",
       "Bash(git ls-tree *)",
-      "Bash(npm run *)"
+      "Bash(npm run *)",
+      "Bash(Sort-Object)",
+      "Bash(xargs ls -lh)",
+      "Bash(python3 -c \"import reportlab; print\\(reportlab.__version__\\)\")",
+      "Bash(python make_pdf.py)"
     ]
   }
 }
