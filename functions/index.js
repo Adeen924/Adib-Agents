@@ -2,6 +2,8 @@
 const { onSchedule } = require("firebase-functions/v2/scheduler");
 const express    = require("express");
 const cors       = require("cors");
+const rateLimit  = require("express-rate-limit");
+const helmet     = require("helmet");
 const { Anthropic } = require("@anthropic-ai/sdk");
 const admin      = require("firebase-admin");
 const Stripe     = require("stripe");
@@ -16,8 +18,38 @@ const SITE_URL = "https://adeen924.github.io/Adib-Agents";
 // Sender address for job alert emails — update when you create the business Gmail
 const GMAIL_SENDER = process.env.GMAIL_SENDER || "adibmazloom@gmail.com";
 
+// ── Security: allowed CORS origins ────────────────────────────────────────────
+const ALLOWED_ORIGINS = [
+  "https://adeen924.github.io",
+  "http://localhost",
+  "http://127.0.0.1",
+];
+
 const app = express();
-app.use(cors({ origin: true }));
+
+app.use(helmet());
+
+app.use(cors({
+  origin: (origin, cb) => {
+    // Allow requests with no origin (server-to-server, curl, Stripe webhook)
+    if (!origin) return cb(null, true);
+    const allowed = ALLOWED_ORIGINS.some(o => origin === o || origin.startsWith(o + ":"));
+    cb(allowed ? null : new Error("CORS: origin not allowed"), allowed);
+  },
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization"],
+}));
+
+// Global rate limiter — 200 req / 15 min per IP (webhook excluded below)
+const globalLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 200,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many requests, please try again later." },
+  skip: (req) => req.path === "/webhook",
+});
+app.use(globalLimiter);
 
 // â"€â"€ Stripe webhook — must be registered BEFORE express.json() so we get the raw body â"€â"€
 app.post("/webhook", express.raw({ type: "application/json" }), async (req, res) => {
@@ -81,7 +113,45 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
   res.json({ received: true });
 });
 
+// Public route — no auth required
+app.get("/", (req, res) => res.send("Backend is running"));
+
 app.use(express.json({ limit: "2mb" }));
+
+// ── Authentication middleware ─────────────────────────────────────────────────
+// Verifies Firebase ID token from Authorization: Bearer <token> header.
+// Attaches req.user = { uid, email, ... } on success.
+async function authenticate(req, res, next) {
+  const header = (req.headers.authorization || "").trim();
+  if (!header.startsWith("Bearer ")) {
+    return res.status(401).json({ error: "Missing or invalid Authorization header" });
+  }
+  const token = header.slice(7);
+  try {
+    req.user = await admin.auth().verifyIdToken(token);
+    next();
+  } catch {
+    return res.status(401).json({ error: "Invalid or expired token" });
+  }
+}
+
+// ── Admin authorization middleware ────────────────────────────────────────────
+// Must be used AFTER authenticate. Checks that req.user.uid maps to an admin role
+// in Firestore — eliminates the old adminId query/body param pattern.
+async function requireAdmin(req, res, next) {
+  try {
+    const doc = await db.collection("users").doc(req.user.uid).get();
+    if (!doc.exists || doc.data().role !== "admin") {
+      return res.status(403).json({ error: "Forbidden" });
+    }
+    next();
+  } catch {
+    return res.status(403).json({ error: "Forbidden" });
+  }
+}
+
+// Apply auth to every route registered after this point
+app.use(authenticate);
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 const db = admin.firestore();
@@ -371,20 +441,22 @@ function getDefaultCompanyProfiles() {
   };
 }
 
-// Ensure a user document exists (called on first sign-in / first search)
-async function ensureUser(userId) {
-  const ref = db.collection("users").doc(userId);
+// Ensure a user document exists (called on first sign-in / first search).
+// Uses Firebase UID as Firestore document ID; email stored as a field.
+async function ensureUser(uid, email) {
+  const ref = db.collection("users").doc(uid);
   const doc = await ref.get();
   if (!doc.exists) {
     await ref.set({
-      tier: "free", role: "customer", email: userId,
+      uid,
+      tier: "free", role: "customer",
+      email: email || "",
       stats: { jobsFound: 0, applicationsSubmitted: 0, documentsGenerated: 0, searchesRun: 0 },
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
     });
     // New accounts: scheduled search is OFF by default. The user must explicitly
     // turn it on in Settings. This prevents unexpected charges for forgotten accounts.
-    await db.collection("users").doc(userId)
-      .collection("preferences").doc("config")
+    await ref.collection("preferences").doc("config")
       .set({ searchEnabled: false, createdAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
   } else if (!doc.data().role) {
     await ref.update({ role: "customer" });
@@ -1576,13 +1648,10 @@ Do NOT search hiring.cafe, greenhouse.io, or lever.co (already searched in Pass 
   return finalJobs;
 }
 
-// â"€â"€ Health check â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
-app.get("/", (req, res) => res.send("Backend is running"));
-
 // â"€â"€ Stats â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 app.get("/stats/:userId", async (req, res) => {
   try {
-    const userId   = req.params.userId;
+    const userId   = req.user.uid;
     const cutoff   = Date.now() - 24 * 60 * 60 * 1000;
     const monthKey = new Date().toISOString().slice(0, 7);
 
@@ -1610,9 +1679,10 @@ app.get("/stats/:userId", async (req, res) => {
 
 // â"€â"€ Documents â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 app.get("/documents/:userId/:type", async (req, res) => {
-  const { userId, type } = req.params;
+  const uid  = req.user.uid;
+  const type = req.params.type;
   try {
-    const snap = await db.collection("users").doc(userId).collection("documents").get();
+    const snap = await db.collection("users").doc(uid).collection("documents").get();
     const docs = sortByDate(snap.docs.filter(d => d.data().type === type))
       .slice(0, 50)
       .map(d => ({ id: d.id, ...d.data() }));
@@ -1623,18 +1693,19 @@ app.get("/documents/:userId/:type", async (req, res) => {
 });
 
 app.post("/documents/save", async (req, res) => {
-  const { userId, type, content, title, company } = req.body;
-  if (!userId || !type || !content)
-    return res.status(400).json({ error: "userId, type, and content are required" });
+  const uid = req.user.uid;
+  const { type, content, title, company } = req.body;
+  if (!type || !content)
+    return res.status(400).json({ error: "type and content are required" });
   try {
-    const ref = await db.collection("users").doc(userId).collection("documents").add({
-      userId, type, content,
+    const ref = await db.collection("users").doc(uid).collection("documents").add({
+      userId: uid, type, content,
       title:   title   || (type === "resume" ? "Resume" : "Cover Letter"),
       company: company || "",
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
     });
     // Increment denormalised counter (non-blocking)
-    db.collection("users").doc(userId).update({
+    db.collection("users").doc(uid).update({
       "stats.documentsGenerated": admin.firestore.FieldValue.increment(1),
     }).catch(() => {});
     res.json({ ok: true, id: ref.id });
@@ -1644,8 +1715,9 @@ app.post("/documents/save", async (req, res) => {
 });
 
 app.delete("/documents/:userId/:docId", async (req, res) => {
+  const uid = req.user.uid;
   try {
-    await db.collection("users").doc(req.params.userId).collection("documents").doc(req.params.docId).delete();
+    await db.collection("users").doc(uid).collection("documents").doc(req.params.docId).delete();
     res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: "Failed to delete document" });
@@ -1655,8 +1727,9 @@ app.delete("/documents/:userId/:docId", async (req, res) => {
 // â"€â"€ Applications â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 // GET all applications for a user
 app.get("/applications/:userId", async (req, res) => {
+  const uid = req.user.uid;
   try {
-    const snap = await db.collection("users").doc(req.params.userId).collection("applications").get();
+    const snap = await db.collection("users").doc(uid).collection("applications").get();
     const applications = sortByDate(snap.docs).map(d => ({ id: d.id, ...d.data() }));
     res.json({ applications });
   } catch (err) {
@@ -1666,8 +1739,9 @@ app.get("/applications/:userId", async (req, res) => {
 
 // GET single application with its timeline
 app.get("/applications/:userId/:appId", async (req, res) => {
+  const uid = req.user.uid;
   try {
-    const appRef = db.collection("users").doc(req.params.userId)
+    const appRef = db.collection("users").doc(uid)
       .collection("applications").doc(req.params.appId);
     const [appDoc, timelineSnap] = await Promise.all([
       appRef.get(),
@@ -1683,13 +1757,14 @@ app.get("/applications/:userId/:appId", async (req, res) => {
 
 // POST create or update an application (full schema)
 app.post("/applications/save", async (req, res) => {
+  const uid = req.user.uid;
   const {
-    userId, id, company, role, status, url, notes, appliedAt,
+    id, company, role, status, url, notes, appliedAt,
     source, priority, tags, recruiterName, recruiterEmail,
     salaryExpectation, industry, remote, companySize,
   } = req.body;
-  if (!userId || !company || !role)
-    return res.status(400).json({ error: "userId, company, and role are required" });
+  if (!company || !role)
+    return res.status(400).json({ error: "company and role are required" });
 
   const newStatus = ALL_STATUSES.includes(status) ? status : "Applied";
 
@@ -1699,7 +1774,7 @@ app.post("/applications/save", async (req, res) => {
 
     // Duplicate detection for new applications only
     if (!id) {
-      const dupeSnap = await db.collection("users").doc(userId)
+      const dupeSnap = await db.collection("users").doc(uid)
         .collection("applications")
         .where("company", "==", company)
         .where("role", "==", role)
@@ -1712,7 +1787,7 @@ app.post("/applications/save", async (req, res) => {
     }
 
     const data = {
-      userId, company, role,
+      userId: uid, company, role,
       status:    newStatus,
       statusOrder: STATUS_ORDER[newStatus] ?? 2,
       url:       url            || "",
@@ -1736,17 +1811,17 @@ app.post("/applications/save", async (req, res) => {
 
     let appId;
     if (id) {
-      const existing = await db.collection("users").doc(userId)
+      const existing = await db.collection("users").doc(uid)
         .collection("applications").doc(id).get();
       const prevStatus = existing.exists ? existing.data().status : null;
       const statusChanged = prevStatus && prevStatus !== newStatus;
 
-      await db.collection("users").doc(userId).collection("applications")
+      await db.collection("users").doc(uid).collection("applications")
         .doc(id).set(data, { merge: true });
       appId = id;
 
       if (statusChanged) {
-        await db.collection("users").doc(userId).collection("applications")
+        await db.collection("users").doc(uid).collection("applications")
           .doc(id).collection("timeline").add({
             type: "status_change", actor: "user",
             previousStatus: prevStatus, newStatus,
@@ -1755,7 +1830,7 @@ app.post("/applications/save", async (req, res) => {
       }
     } else {
       data.createdAt = now;
-      const ref = await db.collection("users").doc(userId)
+      const ref = await db.collection("users").doc(uid)
         .collection("applications").add(data);
       appId = ref.id;
 
@@ -1764,7 +1839,7 @@ app.post("/applications/save", async (req, res) => {
         newStatus, note: "", createdAt: now,
       });
 
-      db.collection("users").doc(userId).update({
+      db.collection("users").doc(uid).update({
         "stats.applicationsSubmitted": admin.firestore.FieldValue.increment(1),
       }).catch(() => {});
     }
@@ -1778,12 +1853,13 @@ app.post("/applications/save", async (req, res) => {
 
 // PATCH fast status update (used for inline/kanban status changes)
 app.patch("/applications/:userId/:appId/status", async (req, res) => {
-  const { userId, appId } = req.params;
+  const uid   = req.user.uid;
+  const appId = req.params.appId;
   const { status, note } = req.body;
   if (!ALL_STATUSES.includes(status))
     return res.status(400).json({ error: "Invalid status" });
   try {
-    const appRef = db.collection("users").doc(userId)
+    const appRef = db.collection("users").doc(uid)
       .collection("applications").doc(appId);
     const doc = await appRef.get();
     if (!doc.exists) return res.status(404).json({ error: "Not found" });
@@ -1814,8 +1890,9 @@ app.patch("/applications/:userId/:appId/status", async (req, res) => {
 
 // GET notes for an application
 app.get("/applications/:userId/:appId/notes", async (req, res) => {
+  const uid = req.user.uid;
   try {
-    const snap = await db.collection("users").doc(req.params.userId)
+    const snap = await db.collection("users").doc(uid)
       .collection("applications").doc(req.params.appId)
       .collection("notes").get();
     const notes = sortByDate(snap.docs).map(d => ({ id: d.id, ...d.data() }));
@@ -1827,12 +1904,13 @@ app.get("/applications/:userId/:appId/notes", async (req, res) => {
 
 // POST add note
 app.post("/applications/:userId/:appId/notes", async (req, res) => {
-  const { userId, appId } = req.params;
+  const uid   = req.user.uid;
+  const appId = req.params.appId;
   const { content, type } = req.body;
   if (!content?.trim()) return res.status(400).json({ error: "Content required" });
   try {
     const now    = admin.firestore.FieldValue.serverTimestamp();
-    const appRef = db.collection("users").doc(userId).collection("applications").doc(appId);
+    const appRef = db.collection("users").doc(uid).collection("applications").doc(appId);
     const noteRef = await appRef.collection("notes").add({
       content: content.trim(), type: type || "general",
       isPinned: false, createdAt: now, updatedAt: now,
@@ -1850,8 +1928,9 @@ app.post("/applications/:userId/:appId/notes", async (req, res) => {
 
 // DELETE note
 app.delete("/applications/:userId/:appId/notes/:noteId", async (req, res) => {
+  const uid = req.user.uid;
   try {
-    await db.collection("users").doc(req.params.userId)
+    await db.collection("users").doc(uid)
       .collection("applications").doc(req.params.appId)
       .collection("notes").doc(req.params.noteId).delete();
     res.json({ ok: true });
@@ -1862,8 +1941,9 @@ app.delete("/applications/:userId/:appId/notes/:noteId", async (req, res) => {
 
 // DELETE application (cascades subcollections)
 app.delete("/applications/:userId/:appId", async (req, res) => {
+  const uid = req.user.uid;
   try {
-    const appRef = db.collection("users").doc(req.params.userId)
+    const appRef = db.collection("users").doc(uid)
       .collection("applications").doc(req.params.appId);
     const [tlSnap, notesSnap] = await Promise.all([
       appRef.collection("timeline").get(),
@@ -1882,8 +1962,9 @@ app.delete("/applications/:userId/:appId", async (req, res) => {
 
 // ── Interviews ────────────────────────────────────────────────────────────────
 app.get("/interviews/:userId", async (req, res) => {
+  const uid = req.user.uid;
   try {
-    const snap = await db.collection("users").doc(req.params.userId)
+    const snap = await db.collection("users").doc(uid)
       .collection("interviews").get();
     const interviews = snap.docs
       .map(d => ({ id: d.id, ...d.data() }))
@@ -1895,10 +1976,11 @@ app.get("/interviews/:userId", async (req, res) => {
 });
 
 app.post("/interviews/save", async (req, res) => {
-  const { userId, id, applicationId, company, role, type, format,
+  const uid = req.user.uid;
+  const { id, applicationId, company, role, type, format,
           scheduledAt, duration, interviewers, notes } = req.body;
-  if (!userId || !applicationId || !scheduledAt)
-    return res.status(400).json({ error: "userId, applicationId, and scheduledAt are required" });
+  if (!applicationId || !scheduledAt)
+    return res.status(400).json({ error: "applicationId and scheduledAt are required" });
   try {
     const now  = admin.firestore.FieldValue.serverTimestamp();
     const data = {
@@ -1916,13 +1998,13 @@ app.post("/interviews/save", async (req, res) => {
       updatedAt:  now,
     };
     if (id) {
-      await db.collection("users").doc(userId).collection("interviews").doc(id).set(data, { merge: true });
+      await db.collection("users").doc(uid).collection("interviews").doc(id).set(data, { merge: true });
       res.json({ ok: true, id });
     } else {
       data.createdAt = now;
-      const ref = await db.collection("users").doc(userId).collection("interviews").add(data);
+      const ref = await db.collection("users").doc(uid).collection("interviews").add(data);
       // Log timeline event on the linked application
-      await db.collection("users").doc(userId).collection("applications")
+      await db.collection("users").doc(uid).collection("applications")
         .doc(applicationId).collection("timeline").add({
           type: "interview_scheduled", actor: "user",
           interviewId: ref.id,
@@ -1937,8 +2019,9 @@ app.post("/interviews/save", async (req, res) => {
 });
 
 app.delete("/interviews/:userId/:interviewId", async (req, res) => {
+  const uid = req.user.uid;
   try {
-    await db.collection("users").doc(req.params.userId)
+    await db.collection("users").doc(uid)
       .collection("interviews").doc(req.params.interviewId).delete();
     res.json({ ok: true });
   } catch (err) {
@@ -1948,8 +2031,9 @@ app.delete("/interviews/:userId/:interviewId", async (req, res) => {
 
 // â"€â"€ Knowledge Base â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 app.get("/knowledge/:userId", async (req, res) => {
+  const uid = req.user.uid;
   try {
-    const doc = await db.collection("users").doc(req.params.userId).collection("knowledge").doc("profile").get();
+    const doc = await db.collection("users").doc(uid).collection("knowledge").doc("profile").get();
     res.json(doc.exists ? doc.data() : {});
   } catch (err) {
     res.status(500).json({ error: "Failed to load knowledge base" });
@@ -1957,11 +2041,11 @@ app.get("/knowledge/:userId", async (req, res) => {
 });
 
 app.post("/knowledge/save", async (req, res) => {
-  const { userId, resume, currentPosition, previousPositions,
+  const uid = req.user.uid;
+  const { resume, currentPosition, previousPositions,
           targetRole, skills, education, additionalContext } = req.body;
-  if (!userId) return res.status(400).json({ error: "userId is required" });
   try {
-    await db.collection("users").doc(userId).collection("knowledge").doc("profile").set({
+    await db.collection("users").doc(uid).collection("knowledge").doc("profile").set({
       resume:            resume            || "",
       currentPosition:   currentPosition   || "",
       previousPositions: previousPositions || "",
@@ -1979,8 +2063,9 @@ app.post("/knowledge/save", async (req, res) => {
 
 // â"€â"€ Preferences â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 app.get("/preferences/:userId", async (req, res) => {
+  const uid = req.user.uid;
   try {
-    const ref = db.collection("users").doc(req.params.userId).collection("preferences").doc("config");
+    const ref = db.collection("users").doc(uid).collection("preferences").doc("config");
     const doc = await ref.get();
     // Stamp lastActiveAt every time the user opens the app (non-blocking)
     ref.set({ lastActiveAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true }).catch(() => {});
@@ -1991,12 +2076,12 @@ app.get("/preferences/:userId", async (req, res) => {
 });
 
 app.post("/preferences/save", async (req, res) => {
-  const { userId, jobTitle, location, locationCity, locationRadius,
+  const uid = req.user.uid;
+  const { jobTitle, location, locationCity, locationRadius,
           jobType, salaryMin, experienceLevel, remoteOnly,
           industries, companySize, postedWithin, customSites,
           searchEnabled, searchTimesPerDay, searchStartHour,
           notifTimezone, notifEmail, notifPhone } = req.body;
-  if (!userId) return res.status(400).json({ error: "userId is required" });
 
   const update = { updatedAt: admin.firestore.FieldValue.serverTimestamp() };
   // Only include fields that were explicitly sent so partial saves don't overwrite
@@ -2020,7 +2105,7 @@ app.post("/preferences/save", async (req, res) => {
   if (notifPhone      !== undefined) update.notifPhone      = notifPhone      || "";
 
   try {
-    await db.collection("users").doc(userId).collection("preferences").doc("config").set(update, { merge: true });
+    await db.collection("users").doc(uid).collection("preferences").doc("config").set(update, { merge: true });
     res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: "Failed to save preferences" });
@@ -2095,8 +2180,9 @@ ${resumeText.slice(0, 8000)}`,
 
 // â"€â"€ Digest â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 app.get("/digest/:userId", async (req, res) => {
+  const uid = req.user.uid;
   try {
-    const snap = await db.collection("digests").where("userId", "==", req.params.userId).get();
+    const snap = await db.collection("digests").where("userId", "==", uid).get();
     const digests = sortByDate(snap.docs).slice(0, 10).map(d => ({ id: d.id, ...d.data() }));
     res.json({ digests });
   } catch (err) {
@@ -2106,8 +2192,9 @@ app.get("/digest/:userId", async (req, res) => {
 
 // â"€â"€ Jobs Found â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 app.get("/jobs/:userId/detail/:jobId", async (req, res) => {
+  const uid = req.user.uid;
   try {
-    const doc = await db.collection("users").doc(req.params.userId).collection("jobs").doc(req.params.jobId).get();
+    const doc = await db.collection("users").doc(uid).collection("jobs").doc(req.params.jobId).get();
     if (!doc.exists) return res.status(404).json({ error: "Job not found" });
     res.json({ id: doc.id, ...doc.data() });
   } catch (err) {
@@ -2129,11 +2216,10 @@ async function getJobAndResume(jobId, userId) {
 }
 
 app.post("/jobs/:jobId/tailored-resume", async (req, res) => {
-  const { userId } = req.body;
-  if (!userId) return res.status(400).json({ error: "userId required" });
+  const uid = req.user.uid;
   try {
-    await enforceFeatureLimit(userId, "resumes");
-    const { jobDoc, job, resume } = await getJobAndResume(req.params.jobId, userId);
+    await enforceFeatureLimit(uid, "resumes");
+    const { jobDoc, job, resume } = await getJobAndResume(req.params.jobId, uid);
 
     const response = await anthropic.messages.create({
       model:      MODEL_SONNET,
@@ -2169,7 +2255,7 @@ ${job.description ? `Description:\n${job.description}` : ""}`,
     });
 
     const text = response.content.filter(b => b.type === "text").map(b => b.text).join("").trim();
-    trackCost(userId, "resume", response.usage);
+    trackCost(uid, "resume", response.usage);
     await jobDoc.ref.update({
       tailoredResume:   text,
       tailoredResumeAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -2182,11 +2268,10 @@ ${job.description ? `Description:\n${job.description}` : ""}`,
 });
 
 app.post("/jobs/:jobId/cover-letter", async (req, res) => {
-  const { userId } = req.body;
-  if (!userId) return res.status(400).json({ error: "userId required" });
+  const uid = req.user.uid;
   try {
-    await enforceFeatureLimit(userId, "cover_letters");
-    const { jobDoc, job, resume } = await getJobAndResume(req.params.jobId, userId);
+    await enforceFeatureLimit(uid, "cover_letters");
+    const { jobDoc, job, resume } = await getJobAndResume(req.params.jobId, uid);
     const tailoredResume = job.tailoredResume || resume;
 
     const response = await anthropic.messages.create({
@@ -2219,7 +2304,7 @@ ${job.description ? `Description:\n${job.description}` : ""}`,
     });
 
     const text = response.content.filter(b => b.type === "text").map(b => b.text).join("").trim();
-    trackCost(userId, "cover_letter", response.usage);
+    trackCost(uid, "cover_letter", response.usage);
     await jobDoc.ref.update({
       coverLetter:   text,
       coverLetterAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -2232,11 +2317,10 @@ ${job.description ? `Description:\n${job.description}` : ""}`,
 });
 
 app.post("/jobs/:jobId/interview-prep", async (req, res) => {
-  const { userId } = req.body;
-  if (!userId) return res.status(400).json({ error: "userId required" });
+  const uid = req.user.uid;
   try {
-    await enforceFeatureLimit(userId, "interview_preps");
-    const { jobDoc, job, resume } = await getJobAndResume(req.params.jobId, userId);
+    await enforceFeatureLimit(uid, "interview_preps");
+    const { jobDoc, job, resume } = await getJobAndResume(req.params.jobId, uid);
 
     const response = await anthropic.messages.create({
       model:      MODEL_HAIKU,
@@ -2259,7 +2343,7 @@ ${job.description || ""}`,
     });
 
     const text = response.content.filter(b => b.type === "text").map(b => b.text).join("").trim();
-    trackCost(userId, "interview_prep", response.usage, true);
+    trackCost(uid, "interview_prep", response.usage, true);
     await jobDoc.ref.update({
       interviewPrep:   text,
       interviewPrepAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -2272,13 +2356,12 @@ ${job.description || ""}`,
 });
 
 app.post("/jobs/:jobId/network", async (req, res) => {
-  const { userId } = req.body;
-  if (!userId) return res.status(400).json({ error: "userId required" });
+  const uid = req.user.uid;
   try {
-    await enforceFeatureLimit(userId, "networking");
+    await enforceFeatureLimit(uid, "networking");
     const [jobDoc, kbDoc] = await Promise.all([
-      db.collection("users").doc(userId).collection("jobs").doc(req.params.jobId).get(),
-      db.collection("users").doc(userId).collection("knowledge").doc("profile").get(),
+      db.collection("users").doc(uid).collection("jobs").doc(req.params.jobId).get(),
+      db.collection("users").doc(uid).collection("knowledge").doc("profile").get(),
     ]);
     if (!jobDoc.exists) throw new Error("Job not found");
     const job = { id: jobDoc.id, ...jobDoc.data() };
@@ -2339,7 +2422,7 @@ Respond with ONLY a valid JSON object, no text before or after:
     });
 
     const rawText = response.content.filter(b => b.type === "text").map(b => b.text).join("").trim();
-    trackCost(userId, "linkedin", response.usage);
+    trackCost(uid, "linkedin", response.usage);
     let networking;
     try {
       const jsonMatch = rawText.match(/\{[\s\S]*\}/);
@@ -2361,8 +2444,9 @@ Respond with ONLY a valid JSON object, no text before or after:
 });
 
 app.get("/jobs/:userId", async (req, res) => {
+  const uid = req.user.uid;
   try {
-    const snap = await db.collection("users").doc(req.params.userId).collection("jobs").get();
+    const snap = await db.collection("users").doc(uid).collection("jobs").get();
     const jobs = sortByDate(snap.docs).slice(0, 50).map(d => ({ id: d.id, ...d.data() }));
     res.json({ jobs });
   } catch (err) {
@@ -2372,27 +2456,27 @@ app.get("/jobs/:userId", async (req, res) => {
 
 // â"€â"€ Manual search now â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 app.post("/search/now/:userId", async (req, res) => {
-  const { userId } = req.params;
+  const uid = req.user.uid;
   let logRef = null;
   const logMessages = [];
   try {
     const [prefDoc, tier, userDoc] = await Promise.all([
-      db.collection("users").doc(userId).collection("preferences").doc("config").get(),
-      getUserTier(userId),
-      db.collection("users").doc(userId).get(),
+      db.collection("users").doc(uid).collection("preferences").doc("config").get(),
+      getUserTier(uid),
+      db.collection("users").doc(uid).get(),
     ]);
     if (!prefDoc.exists) {
       return res.status(400).json({ error: "No preferences saved yet. Please set your preferences first." });
     }
-    await ensureUser(userId);
+    await ensureUser(uid, req.user.email);
     const role = userDoc.exists ? (userDoc.data().role || "customer") : "customer";
     if (role !== "admin") {
-      await enforceFeatureLimit(userId, "searches_manual");
+      await enforceFeatureLimit(uid, "searches_manual");
     }
 
     let logFn = null;
     if (role === "admin") {
-      logRef = db.collection("search_logs").doc(userId);
+      logRef = db.collection("search_logs").doc(uid);
       await logRef.set({ startedAt: admin.firestore.FieldValue.serverTimestamp(), status: "running", log: [] });
       logFn = async (msg) => {
         const ts = new Date().toLocaleTimeString("en-US", { hour12: false });
@@ -2402,7 +2486,7 @@ app.post("/search/now/:userId", async (req, res) => {
     }
 
     const prefs = prefDoc.data();
-    const jobs  = await runJobSearch(userId, prefs, tier, logFn);
+    const jobs  = await runJobSearch(uid, prefs, tier, logFn);
 
     if (logRef) {
       await logRef.update({ status: "completed", completedAt: admin.firestore.FieldValue.serverTimestamp() });
@@ -2420,14 +2504,10 @@ app.post("/search/now/:userId", async (req, res) => {
 // ── Admin search log polling ───────────────────────────────────────────────────
 // Frontend polls this every 2s instead of using Firestore onSnapshot directly,
 // avoiding client-side auth/rules issues entirely.
-app.get("/search/logs/:userId", async (req, res) => {
-  const { userId } = req.params;
+app.get("/search/logs/:userId", requireAdmin, async (req, res) => {
+  const uid = req.user.uid;
   try {
-    const userDoc = await db.collection("users").doc(userId).get();
-    if (!userDoc.exists || userDoc.data().role !== "admin") {
-      return res.status(403).json({ error: "Forbidden" });
-    }
-    const logDoc = await db.collection("search_logs").doc(userId).get();
+    const logDoc = await db.collection("search_logs").doc(uid).get();
     if (!logDoc.exists) return res.json({ status: "none", log: [] });
     res.json(logDoc.data());
   } catch (err) {
@@ -2437,10 +2517,10 @@ app.get("/search/logs/:userId", async (req, res) => {
 
 // â"€â"€ User / tier management â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 app.get("/user/:userId", async (req, res) => {
-  const { userId } = req.params;
+  const uid = req.user.uid;
   try {
-    await ensureUser(userId);
-    const doc        = await db.collection("users").doc(userId).get();
+    await ensureUser(uid, req.user.email);
+    const doc        = await db.collection("users").doc(uid).get();
     const data       = doc.exists ? doc.data() : {};
     const tier       = data.tier || "free";
     const role       = data.role || "customer";
@@ -2458,14 +2538,8 @@ app.get("/user/:userId", async (req, res) => {
 
 // -- Admin stats endpoint (role must equal "admin" in Firestore users doc) --
 // ── Admin feature flags ───────────────────────────────────────────────────────
-// GET  /admin/feature-flags?adminId=...  → { watchlistEnabled: false, ... }
-// POST /admin/feature-flags              → body: { adminId, watchlistEnabled: true/false }
-app.get("/admin/feature-flags", async (req, res) => {
-  const { adminId } = req.query;
+app.get("/admin/feature-flags", requireAdmin, async (req, res) => {
   try {
-    const adminDoc = await db.collection("users").doc(adminId).get();
-    if (!adminDoc.exists || adminDoc.data().role !== "admin")
-      return res.status(403).json({ error: "Forbidden" });
     const flags = await getAdminFeatureFlags();
     res.json({ watchlistEnabled: false, ...flags });
   } catch (err) {
@@ -2473,12 +2547,9 @@ app.get("/admin/feature-flags", async (req, res) => {
   }
 });
 
-app.post("/admin/feature-flags", async (req, res) => {
-  const { adminId, ...flags } = req.body;
+app.post("/admin/feature-flags", requireAdmin, async (req, res) => {
   try {
-    const adminDoc = await db.collection("users").doc(adminId).get();
-    if (!adminDoc.exists || adminDoc.data().role !== "admin")
-      return res.status(403).json({ error: "Forbidden" });
+    const flags = req.body;
     await db.collection("admin_config").doc("features").set(
       { ...flags, updatedAt: admin.firestore.FieldValue.serverTimestamp() },
       { merge: true }
@@ -2492,12 +2563,8 @@ app.post("/admin/feature-flags", async (req, res) => {
 // ── Company Verification Profile admin endpoints ──────────────────────────────
 
 // GET /admin/company-profiles — list all profiles
-app.get("/admin/company-profiles", async (req, res) => {
-  const { adminId } = req.query;
+app.get("/admin/company-profiles", requireAdmin, async (req, res) => {
   try {
-    const adminDoc = await db.collection("users").doc(adminId).get();
-    if (!adminDoc.exists || adminDoc.data().role !== "admin")
-      return res.status(403).json({ error: "Forbidden" });
     const snap = await db.collection("company_verification_profiles").get();
     const profiles = snap.docs.map(d => ({ id: d.id, ...d.data() }));
     res.json({ profiles });
@@ -2507,12 +2574,8 @@ app.get("/admin/company-profiles", async (req, res) => {
 });
 
 // GET /admin/company-profiles/:companyKey — read one profile
-app.get("/admin/company-profiles/:companyKey", async (req, res) => {
-  const { adminId } = req.query;
+app.get("/admin/company-profiles/:companyKey", requireAdmin, async (req, res) => {
   try {
-    const adminDoc = await db.collection("users").doc(adminId).get();
-    if (!adminDoc.exists || adminDoc.data().role !== "admin")
-      return res.status(403).json({ error: "Forbidden" });
     const doc = await db.collection("company_verification_profiles").doc(req.params.companyKey).get();
     if (!doc.exists) return res.status(404).json({ error: "Profile not found" });
     res.json({ id: doc.id, ...doc.data() });
@@ -2523,15 +2586,10 @@ app.get("/admin/company-profiles/:companyKey", async (req, res) => {
 
 // PUT /admin/company-profiles/:companyKey — create or update a profile
 // Body: any subset of the profile schema fields (merged, not replaced)
-app.put("/admin/company-profiles/:companyKey", async (req, res) => {
-  const { adminId } = req.query;
+app.put("/admin/company-profiles/:companyKey", requireAdmin, async (req, res) => {
   try {
-    const adminDoc = await db.collection("users").doc(adminId).get();
-    if (!adminDoc.exists || adminDoc.data().role !== "admin")
-      return res.status(403).json({ error: "Forbidden" });
-    const { adminId: _drop, ...profileData } = req.body;
     await db.collection("company_verification_profiles").doc(req.params.companyKey).set(
-      { ...profileData, updatedAt: admin.firestore.FieldValue.serverTimestamp() },
+      { ...req.body, updatedAt: admin.firestore.FieldValue.serverTimestamp() },
       { merge: true }
     );
     res.json({ ok: true, key: req.params.companyKey });
@@ -2541,12 +2599,8 @@ app.put("/admin/company-profiles/:companyKey", async (req, res) => {
 });
 
 // DELETE /admin/company-profiles/:companyKey — remove a profile (reverts to standard behavior)
-app.delete("/admin/company-profiles/:companyKey", async (req, res) => {
-  const { adminId } = req.query;
+app.delete("/admin/company-profiles/:companyKey", requireAdmin, async (req, res) => {
   try {
-    const adminDoc = await db.collection("users").doc(adminId).get();
-    if (!adminDoc.exists || adminDoc.data().role !== "admin")
-      return res.status(403).json({ error: "Forbidden" });
     await db.collection("company_verification_profiles").doc(req.params.companyKey).delete();
     res.json({ ok: true });
   } catch (err) {
@@ -2556,12 +2610,8 @@ app.delete("/admin/company-profiles/:companyKey", async (req, res) => {
 
 // POST /admin/company-profiles/seed-defaults — write built-in profiles for known
 // problematic companies. Uses merge:true so existing stats are never reset.
-app.post("/admin/company-profiles/seed-defaults", async (req, res) => {
-  const { adminId } = req.query;
+app.post("/admin/company-profiles/seed-defaults", requireAdmin, async (req, res) => {
   try {
-    const adminDoc = await db.collection("users").doc(adminId).get();
-    if (!adminDoc.exists || adminDoc.data().role !== "admin")
-      return res.status(403).json({ error: "Forbidden" });
     const defaults = getDefaultCompanyProfiles();
     const batch = db.batch();
     for (const [key, profile] of Object.entries(defaults)) {
@@ -2580,14 +2630,8 @@ app.post("/admin/company-profiles/seed-defaults", async (req, res) => {
   }
 });
 
-app.get("/admin/stats/:userId", async (req, res) => {
-  const { userId } = req.params;
+app.get("/admin/stats/:userId", requireAdmin, async (req, res) => {
   try {
-    const userDoc = await db.collection("users").doc(userId).get();
-    if (!userDoc.exists || userDoc.data().role !== "admin") {
-      return res.status(403).json({ error: "Forbidden" });
-    }
-
     const now = Date.now();
 
     // Calendar-day boundaries (UTC)
@@ -2685,14 +2729,8 @@ app.get("/admin/stats/:userId", async (req, res) => {
   }
 });
 // -- Admin user detail endpoint --
-app.get("/admin/user-detail/:targetUserId", async (req, res) => {
-  const { adminId } = req.query;
+app.get("/admin/user-detail/:targetUserId", requireAdmin, async (req, res) => {
   try {
-    const adminDoc = await db.collection("users").doc(adminId).get();
-    if (!adminDoc.exists || adminDoc.data().role !== "admin") {
-      return res.status(403).json({ error: "Forbidden" });
-    }
-
     const targetId = req.params.targetUserId;
     const now = Date.now();
 
@@ -2764,15 +2802,11 @@ app.get("/admin/user-detail/:targetUserId", async (req, res) => {
   }
 });
 
-app.post("/user/tier", async (req, res) => {
-  const { userId, tier, secret } = req.body;
+// Admin-only manual tier override (for support/ops use)
+app.post("/user/tier", requireAdmin, async (req, res) => {
+  const { userId, tier } = req.body;
   if (!userId || !tier) return res.status(400).json({ error: "userId and tier required" });
   if (!["free", "pro"].includes(tier)) return res.status(400).json({ error: "Invalid tier" });
-  // Simple shared-secret guard — set ADMIN_SECRET in your Cloud Functions env vars
-  // to protect this endpoint until you have real Stripe auth in place.
-  if (process.env.ADMIN_SECRET && secret !== process.env.ADMIN_SECRET) {
-    return res.status(403).json({ error: "Forbidden" });
-  }
   try {
     await db.collection("users").doc(userId).set(
       { tier, tierUpdatedAt: admin.firestore.FieldValue.serverTimestamp() },
@@ -2786,10 +2820,10 @@ app.post("/user/tier", async (req, res) => {
 
 // â"€â"€ Stripe Checkout â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 app.post("/create-checkout-session", async (req, res) => {
-  const { userId, userEmail, billingPeriod } = req.body;
-  if (!userId) return res.status(400).json({ error: "userId required" });
+  const uid        = req.user.uid;
+  const userEmail  = req.user.email;
+  const { billingPeriod } = req.body;
 
-  // STRIPE_PRO_MONTHLY_PRICE_ID takes precedence; falls back to STRIPE_PRO_PRICE_ID for existing deployments
   const priceId = billingPeriod === "annual"
     ? process.env.STRIPE_PRO_ANNUAL_PRICE_ID
     : (process.env.STRIPE_PRO_MONTHLY_PRICE_ID || process.env.STRIPE_PRO_PRICE_ID);
@@ -2801,7 +2835,7 @@ app.post("/create-checkout-session", async (req, res) => {
     const session = await stripe.checkout.sessions.create({
       mode: "subscription",
       line_items: [{ price: priceId, quantity: 1 }],
-      client_reference_id: userId,
+      client_reference_id: uid,
       customer_email: userEmail || undefined,
       subscription_data: { trial_period_days: 7 },
       success_url: `${SITE_URL}/dashboard.html?subscription=success`,
@@ -2816,11 +2850,9 @@ app.post("/create-checkout-session", async (req, res) => {
 });
 
 app.post("/create-portal-session", async (req, res) => {
-  const { userId } = req.body;
-  if (!userId) return res.status(400).json({ error: "userId required" });
-
+  const uid = req.user.uid;
   try {
-    const userDoc = await db.collection("users").doc(userId).get();
+    const userDoc = await db.collection("users").doc(uid).get();
     const customerId = userDoc.exists ? userDoc.data().stripeCustomerId : null;
     if (!customerId) return res.status(404).json({ error: "No Stripe customer found for this user" });
 
@@ -2839,10 +2871,11 @@ app.post("/create-portal-session", async (req, res) => {
 
 // â"€â"€ Push Notification token management â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 app.post("/notifications/token", async (req, res) => {
-  const { userId, token } = req.body;
-  if (!userId || !token) return res.status(400).json({ error: "userId and token required" });
+  const uid   = req.user.uid;
+  const { token } = req.body;
+  if (!token) return res.status(400).json({ error: "token required" });
   try {
-    const ref = db.collection("fcmTokens").doc(userId);
+    const ref = db.collection("fcmTokens").doc(uid);
     await ref.set(
       { tokens: admin.firestore.FieldValue.arrayUnion(token), updatedAt: admin.firestore.FieldValue.serverTimestamp() },
       { merge: true }
@@ -2855,8 +2888,9 @@ app.post("/notifications/token", async (req, res) => {
 
 // â"€â"€ Target Companies (Watchlist) â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 app.get("/target-companies/:userId", async (req, res) => {
+  const uid = req.user.uid;
   try {
-    const doc = await db.collection("targetCompanies").doc(req.params.userId).get();
+    const doc = await db.collection("targetCompanies").doc(uid).get();
     res.json(doc.exists ? doc.data() : { companies: [] });
   } catch (err) {
     res.status(500).json({ error: "Failed to load target companies" });
@@ -2864,11 +2898,11 @@ app.get("/target-companies/:userId", async (req, res) => {
 });
 
 app.post("/target-companies/save", async (req, res) => {
-  const { userId, companies } = req.body;
-  if (!userId) return res.status(400).json({ error: "userId is required" });
+  const uid = req.user.uid;
+  const { companies } = req.body;
   if (!Array.isArray(companies)) return res.status(400).json({ error: "companies must be an array" });
   try {
-    await db.collection("targetCompanies").doc(userId).set({
+    await db.collection("targetCompanies").doc(uid).set({
       companies: companies.filter(c => c.name).map(c => ({
         name: c.name.trim(),
         url:  (c.url || "").trim(),
@@ -2882,8 +2916,9 @@ app.post("/target-companies/save", async (req, res) => {
 });
 
 app.get("/watchlist-jobs/:userId/detail/:jobId", async (req, res) => {
+  const uid = req.user.uid;
   try {
-    const doc = await db.collection("users").doc(req.params.userId).collection("watchlistJobs").doc(req.params.jobId).get();
+    const doc = await db.collection("users").doc(uid).collection("watchlistJobs").doc(req.params.jobId).get();
     if (!doc.exists) return res.status(404).json({ error: "Job not found" });
     res.json({ id: doc.id, ...doc.data() });
   } catch (err) {
@@ -2892,8 +2927,9 @@ app.get("/watchlist-jobs/:userId/detail/:jobId", async (req, res) => {
 });
 
 app.get("/watchlist-jobs/:userId", async (req, res) => {
+  const uid = req.user.uid;
   try {
-    const snap = await db.collection("users").doc(req.params.userId).collection("watchlistJobs").get();
+    const snap = await db.collection("users").doc(uid).collection("watchlistJobs").get();
     const jobs = sortByDate(snap.docs).slice(0, 100).map(d => ({ id: d.id, ...d.data() }));
     res.json({ jobs });
   } catch (err) {
