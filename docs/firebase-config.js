@@ -24,4 +24,4 @@ const firebaseConfig = {
 //      with domain "adeen924.github.io" (and "localhost" for dev)
 //   2. Copy the Site Key here
 //   3. Register the key in Firebase Console → App Check → Apps → your web app → reCAPTCHA v3
-const RECAPTCHA_SITE_KEY = "YOUR_RECAPTCHA_SITE_KEY_HERE";
+const RECAPTCHA_SITE_KEY = "6Lda8P0sAAAAAKLp0RCQPxx0-DOyr1kV2gLlapLu";
