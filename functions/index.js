@@ -1432,7 +1432,48 @@ Search in this order (complete ALL of them):
 
 Do NOT search indeed.com or linkedin.com in this first pass. Only include a job if the URL opens directly to that specific posting.`;
 
-  if (!cacheHit) {
+  // ── Hybrid pipeline (feature/gemini-search-hybrid) ───────────────────────
+  // Gated by ENABLE_HYBRID_AI_PIPELINE=true.  Falls back to the Claude-only
+  // path below on any error — existing behaviour is never touched.
+  if (!cacheHit && process.env.ENABLE_HYBRID_AI_PIPELINE === "true") {
+    try {
+      const { runHybridSearch } = require("./services/ai/pipeline/hybridPipeline");
+      log(`[Hybrid] Activating Gemini+Claude hybrid pipeline…`);
+
+      const { jobs: hybridJobs, session } = await runHybridSearch({
+        userId,
+        prefs,
+        tier,
+        query,
+        candidateProfile,
+        criteria,
+        seenFingerprints,
+        recentJobs,
+        staleUrls,
+        db,
+        anthropic,
+        jobCount,
+        logFn,
+      });
+
+      if (hybridJobs && hybridJobs.length > 0) {
+        log(`[Hybrid] Pipeline returned ${hybridJobs.length} jobs — skipping Claude-only path`);
+        allVerifiedJobs = [...(allVerifiedJobs || []), ...hybridJobs];
+        // session.flush() happens after we save the final jobs below
+        // Store session on closure so we can flush it after save
+        runJobSearch._lastHybridSession = session;
+      } else {
+        log(`[Hybrid] Pipeline returned 0 jobs — falling through to Claude-only path`);
+        if (session) session.flush().catch(() => {});
+      }
+    } catch (hybridErr) {
+      log(`[Hybrid] Pipeline error (${hybridErr.message}) — falling back to Claude-only`);
+      console.error("[runJobSearch] Hybrid pipeline error:", hybridErr.message);
+      // Continue to Claude-only path
+    }
+  }
+
+  if (!cacheHit && allVerifiedJobs.length < 1) {
   log(`Pass 1: Asking Claude to find up to ${candidateCount} candidates (${tierConfig.webSearchesPerQuery} web searches)…`);
   const response = await anthropic.messages.create({
     model:      MODEL_SEARCH,
@@ -1561,7 +1602,7 @@ Do NOT search hiring.cafe, greenhouse.io, or lever.co (already searched in Pass 
       log(`Pass 2: ERROR — ${err.message}`);
     }
   }
-  } // end if (!cacheHit)
+  } // end if (!cacheHit && allVerifiedJobs.length < 1) — Claude-only path
 
   // Rank all verified jobs: composite score = applyUrlConfidence (50%) + fitScore (50%)
   allVerifiedJobs.sort((a, b) => {
@@ -1654,6 +1695,13 @@ Do NOT search hiring.cafe, greenhouse.io, or lever.co (already searched in Pass 
   // Cache writes are best-effort — a failure here must never kill the search.
   Promise.all(cacheWrites).catch(err => console.warn("[jobs_cache] Write failed:", err.message));
   log(`Cache: wrote ${cacheWrites.length} verified job(s) (${finalJobs.length} shown + ${cacheWrites.length - finalJobs.length} overflow)`);
+
+  // Flush hybrid pipeline cost session if one was created
+  if (runJobSearch._lastHybridSession) {
+    runJobSearch._lastHybridSession.setOutcome({ finalJobs: finalJobs.length });
+    runJobSearch._lastHybridSession.flush().catch(() => {});
+    runJobSearch._lastHybridSession = null;
+  }
 
   // Vector embeddings: fire-and-forget for all verified jobs (final + overflow).
   if (VECTOR_ENABLED) {
@@ -2569,6 +2617,38 @@ app.get("/user/:userId", async (req, res) => {
 // a checkout.session.completed or customer.subscription.updated event.
 
 // -- Admin stats endpoint (role must equal "admin" in Firestore users doc) --
+
+// ── Hybrid pipeline admin endpoints ──────────────────────────────────────────
+
+// GET /admin/hybrid/stats — cost comparison (hybrid vs claude-only)
+app.get("/admin/hybrid/stats", requireAdmin, async (req, res) => {
+  try {
+    const { getComparisonStats } = require("./services/ai/pipeline/costTracker");
+    const stats = await getComparisonStats(db, req.user.uid, req.query.since);
+    res.json(stats);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /admin/hybrid/benchmark — run benchmark suite (admin-only, authenticated)
+app.post("/admin/hybrid/benchmark", requireAdmin, async (req, res) => {
+  if (process.env.ENABLE_HYBRID_AI_PIPELINE !== "true") {
+    return res.status(400).json({ error: "Hybrid pipeline not enabled (ENABLE_HYBRID_AI_PIPELINE != true)" });
+  }
+  try {
+    const { runBenchmark } = require("./services/ai/benchmark/runner");
+    const { scenarioIds, dryRun } = req.body || {};
+    // Run async, return immediately with runId
+    const runId = `bm_${Date.now()}`;
+    runBenchmark({ db, anthropic, userId: req.user.uid, scenarioIds, dryRun: dryRun || false })
+      .catch(err => console.error("[Benchmark] Error:", err.message));
+    res.json({ ok: true, runId, message: "Benchmark started — results saved to benchmark_reports collection" });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Admin feature flags ───────────────────────────────────────────────────────
 app.get("/admin/feature-flags", requireAdmin, async (req, res) => {
   try {
