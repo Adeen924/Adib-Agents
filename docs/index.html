@@ -116,14 +116,13 @@
   <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-check-compat.js"></script>
   <script src="firebase-config.js"></script>
   <script>
-    if (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1") {
-      self.FIREBASE_APPCHECK_DEBUG_TOKEN = true;
-    }
     firebase.initializeApp(firebaseConfig);
-    firebase.appCheck().activate(
-      new firebase.appCheck.ReCaptchaV3Provider(RECAPTCHA_SITE_KEY),
-      true
-    );
+    if (window.location.hostname !== "localhost" && window.location.hostname !== "127.0.0.1") {
+      firebase.appCheck().activate(
+        new firebase.appCheck.ReCaptchaV3Provider(RECAPTCHA_SITE_KEY),
+        true
+      );
+    }
     const auth = firebase.auth();
 
     // ── Toggle between sign-in and sign-up ──────────────────────────────────

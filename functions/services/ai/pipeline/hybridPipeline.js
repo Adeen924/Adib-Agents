@@ -206,11 +206,20 @@ async function runHybridSearch(params) {
       log(`[HybridPipeline] URL discovery: refining ${needsDiscovery.length} uncertain URLs…`);
       try {
         const refined = await discoverUrlsForJobs(needsDiscovery, geminiClient, userId, logFn);
-        // Merge refined URLs back
+        // Merge refined URLs back — if discovery found a confident URL, treat the job as verified
         const refinedMap = new Map(refined.map(j => [_makeFingerprint(j), j]));
         verifiedCandidates = verifiedCandidates.map(j => {
           const fp = _makeFingerprint(j);
-          return refinedMap.has(fp) ? { ...j, ...refinedMap.get(fp) } : j;
+          if (!refinedMap.has(fp)) return j;
+          const r = refinedMap.get(fp);
+          const discoveryConf = r.urlDiscoveryConfidence || 0;
+          return {
+            ...j,
+            ...r,
+            // Upgrade verification status if discovery found a good URL
+            urlVerified:        j.urlVerified || discoveryConf >= 0.7,
+            applyUrlConfidence: Math.max(j.applyUrlConfidence || 0, discoveryConf),
+          };
         });
       } catch (err) {
         log(`[HybridPipeline] URL discovery failed (non-fatal): ${err.message}`);
@@ -249,6 +258,8 @@ async function runHybridSearch(params) {
       }));
   }
 
+  finalJobs = _enrichJobs(finalJobs);
+
   session.setOutcome({ finalJobs: finalJobs.length });
   log(`[HybridPipeline] Complete — ${finalJobs.length} jobs | ${session.summary()}`);
 
@@ -261,6 +272,30 @@ function _makeFingerprint(job) {
   const title   = (job.title   || "").toLowerCase().replace(/\s+/g, " ").trim();
   const company = (job.company || "").toLowerCase().replace(/[^a-z0-9]/g, "");
   return `${title}__${company}`;
+}
+
+/**
+ * Infer experience level from job title when the field is missing or empty.
+ * Returns the existing value if non-empty, otherwise guesses from title keywords.
+ */
+function _inferExperienceLevel(title, existingExperience) {
+  if (existingExperience && existingExperience.trim()) return existingExperience.trim();
+  const t = (title || "").toLowerCase();
+  if (/\b(engineer i{1,2}|level i{1,2}|\bi\b|\bii\b|entry[\s-]?level|junior|jr\.?|new\s*grad|associate(?! director| principal))\b/.test(t)) return "Entry Level";
+  if (/\b(engineer\s*iii|level\s*iii|\biii\b|mid[\s-]?level|intermediate)\b/.test(t)) return "Mid Level";
+  if (/\b(senior|sr\.?|lead|principal|staff|distinguished|fellow)\b/.test(t)) return "Senior";
+  if (/\b(director|vp|vice\s*president|head\s*of|manager)\b/.test(t)) return "Manager / Director";
+  return "";
+}
+
+/**
+ * Enrich final jobs with inferred fields that Gemini may have omitted.
+ */
+function _enrichJobs(jobs) {
+  return jobs.map(j => ({
+    ...j,
+    experience: _inferExperienceLevel(j.title, j.experience),
+  }));
 }
 
 module.exports = { runHybridSearch };

@@ -14,6 +14,7 @@
  */
 
 const admin = require("firebase-admin");
+const { FieldValue } = require("firebase-admin/firestore");
 
 // ── Pricing ───────────────────────────────────────────────────────────────────
 const PRICING = {
@@ -111,7 +112,7 @@ class CostSession {
         pipelineSession: this.sessionId,
         pipelineMode:   this.pipelineMode,
         ...meta,
-        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        createdAt: FieldValue.serverTimestamp(),
       }).catch(() => {});
     }
   }
@@ -153,7 +154,7 @@ class CostSession {
         urlAccuracyRate: this.urlsVerified > 0
           ? (this.urlsVerified / (this.urlsVerified + this.urlsRejected))
           : null,
-        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        createdAt: FieldValue.serverTimestamp(),
       });
     } catch (err) {
       console.error("[CostTracker] Failed to flush session:", err.message);

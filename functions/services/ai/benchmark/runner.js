@@ -15,6 +15,7 @@
 const { SCENARIOS } = require("./scenarios");
 const { runHybridSearch } = require("../pipeline/hybridPipeline");
 const admin = require("firebase-admin");
+const { FieldValue } = require("firebase-admin/firestore");
 
 // Minimal stub for the Claude-only pipeline timing/cost extraction
 // (the real pipeline lives in index.js; this just measures platform_events)
@@ -87,7 +88,7 @@ async function runBenchmark(params) {
   try {
     await db.collection("benchmark_reports").add({
       ...report,
-      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      createdAt: FieldValue.serverTimestamp(),
     });
     log(`Report saved — runId=${report.runId}`);
   } catch (err) {

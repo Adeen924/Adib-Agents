@@ -69,7 +69,20 @@
       "Bash(Format-Table -AutoSize)",
       "Bash(git check-ignore *)",
       "Bash(gh api *)",
-      "PowerShell(gh api --method PATCH /repos/adeen924/Adib-Agents --field \"security_and_analysis[secret_scanning][status]=enabled\" --field \"security_and_analysis[secret_scanning_push_protection][status]=enabled\" 2>&1)"
+      "PowerShell(gh api --method PATCH /repos/adeen924/Adib-Agents --field \"security_and_analysis[secret_scanning][status]=enabled\" --field \"security_and_analysis[secret_scanning_push_protection][status]=enabled\" 2>&1)",
+      "Bash(Get-ChildItem -Path \"C:\\\\Users\\\\amazl\\\\Documents\\\\GitHub\\\\Adib-Agents\" -Depth 0)",
+      "Bash(Select-Object Name, FullName)",
+      "Bash(node --check services/ai/providers/gemini/client.js)",
+      "Bash(node --check services/ai/providers/gemini/search.js)",
+      "Bash(node --check services/ai/providers/gemini/urlDiscovery.js)",
+      "Bash(node --check services/ai/providers/gemini/extractJobs.js)",
+      "Bash(node --check services/ai/providers/gemini/verifyJobUrl.js)",
+      "Bash(where firebase *)",
+      "Bash(firebase --version)",
+      "Bash(node --check services/ai/pipeline/costTracker.js)",
+      "Bash(node --check services/ai/providers/claude/reasoner.js)",
+      "Bash(node --check services/ai/benchmark/runner.js)",
+      "Bash(node -e \"require\\('./services/ai/providers/gemini/client'\\)\")"
     ]
   }
 }

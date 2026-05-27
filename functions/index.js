@@ -73,7 +73,7 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
         const custId   = session.customer;
         if (userId) {
           await db.collection("users").doc(userId).set(
-            { tier: "pro", stripeCustomerId: custId, tierUpdatedAt: admin.firestore.FieldValue.serverTimestamp() },
+            { tier: "pro", stripeCustomerId: custId, tierUpdatedAt: FieldValue.serverTimestamp() },
             { merge: true }
           );
         }
@@ -85,7 +85,7 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
         const snap   = await db.collection("users").where("stripeCustomerId", "==", custId).limit(1).get();
         for (const doc of snap.docs) {
           await doc.ref.set(
-            { tier: "free", tierUpdatedAt: admin.firestore.FieldValue.serverTimestamp() },
+            { tier: "free", tierUpdatedAt: FieldValue.serverTimestamp() },
             { merge: true }
           );
         }
@@ -98,7 +98,7 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
         const snap   = await db.collection("users").where("stripeCustomerId", "==", custId).limit(1).get();
         for (const doc of snap.docs) {
           await doc.ref.set(
-            { tier: active ? "pro" : "free", tierUpdatedAt: admin.firestore.FieldValue.serverTimestamp() },
+            { tier: active ? "pro" : "free", tierUpdatedAt: FieldValue.serverTimestamp() },
             { merge: true }
           );
         }
@@ -187,6 +187,7 @@ app.use(authenticate);
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 const db = admin.firestore();
+const { FieldValue } = require("firebase-admin/firestore");
 
 // Claude Sonnet 4.6 — complex reasoning, writing, web synthesis
 const INPUT_COST_SONNET  = 3    / 1_000_000;
@@ -208,7 +209,7 @@ function trackCost(userId, view, usage, isHaiku = false) {
     inputTokens:  usage.input_tokens  || 0,
     outputTokens: usage.output_tokens || 0,
     cost: ((usage.input_tokens || 0) * ic) + ((usage.output_tokens || 0) * oc),
-    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    createdAt: FieldValue.serverTimestamp(),
   }).catch(() => {});
 }
 
@@ -269,7 +270,7 @@ function writeJobEmbedding(hash, job) {
   embedText(text).then(vec => {
     if (!vec) return;
     return db.collection("jobs_cache").doc(hash).set(
-      { embedding: admin.firestore.FieldValue.vector(vec), embeddingModel: "text-embedding-3-small" },
+      { embedding: FieldValue.vector(vec), embeddingModel: "text-embedding-3-small" },
       { merge: true }
     );
   }).catch(() => {});
@@ -283,7 +284,7 @@ async function vectorSearchCache(queryText, seenFingerprints, needed, log) {
   if (!queryVec) { log("Vector search: embedding unavailable"); return []; }
   try {
     const snap = await db.collection("jobs_cache")
-      .findNearest("embedding", admin.firestore.FieldValue.vector(queryVec), {
+      .findNearest("embedding", FieldValue.vector(queryVec), {
         limit: Math.max(needed * 5, 30),
         distanceMeasure: "COSINE",
       })
@@ -408,8 +409,8 @@ async function loadCompanyProfiles(companyNames) {
 function recordVerificationStat(companyKey, field) {
   db.collection("company_verification_profiles").doc(companyKey)
     .update({
-      [`stats.${field}`]: admin.firestore.FieldValue.increment(1),
-      updatedAt:           admin.firestore.FieldValue.serverTimestamp(),
+      [`stats.${field}`]: FieldValue.increment(1),
+      updatedAt:           FieldValue.serverTimestamp(),
     })
     .catch(() => {});
 }
@@ -440,7 +441,7 @@ async function loadStaleUrls() {
 function recordStaleUrl(url) {
   const normalized = normalizeStaleUrl(url);
   db.collection("admin_config").doc("stale_job_urls")
-    .set({ urls: admin.firestore.FieldValue.arrayUnion(normalized) }, { merge: true })
+    .set({ urls: FieldValue.arrayUnion(normalized) }, { merge: true })
     .catch(() => {});
 }
 
@@ -484,12 +485,12 @@ async function ensureUser(uid, email) {
       tier: "free", role: "customer",
       email: email || "",
       stats: { jobsFound: 0, applicationsSubmitted: 0, documentsGenerated: 0, searchesRun: 0 },
-      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      createdAt: FieldValue.serverTimestamp(),
     });
     // New accounts: scheduled search is OFF by default. The user must explicitly
     // turn it on in Settings. This prevents unexpected charges for forgotten accounts.
     await ref.collection("preferences").doc("config")
-      .set({ searchEnabled: false, createdAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+      .set({ searchEnabled: false, createdAt: FieldValue.serverTimestamp() }, { merge: true });
   } else if (!doc.data().role) {
     await ref.update({ role: "customer" });
   }
@@ -553,7 +554,7 @@ async function enforceFeatureLimit(userId, feature) {
 
     txn.set(
       ref,
-      { [feature]: current + 1, updatedAt: admin.firestore.FieldValue.serverTimestamp() },
+      { [feature]: current + 1, updatedAt: FieldValue.serverTimestamp() },
       { merge: true }
     );
   });
@@ -1633,7 +1634,7 @@ Do NOT search hiring.cafe, greenhouse.io, or lever.co (already searched in Pass 
     digestRef = await db.collection("digests").add({
       userId, query,
       jobCount:  finalJobs.length,
-      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      createdAt: FieldValue.serverTimestamp(),
     });
   } catch (digestErr) {
     console.error(`[runJobSearch] digests.add failed for ${userId}:`, digestErr.message, digestErr.stack);
@@ -1657,11 +1658,11 @@ Do NOT search hiring.cafe, greenhouse.io, or lever.co (already searched in Pass 
       applyUrlConfidence:job.applyUrlConfidence || 0,
       atsProvider:       job.atsProvider  || "",
       urlVerified:       true,
-      urlLastValidated:  admin.firestore.FieldValue.serverTimestamp(),
+      urlLastValidated:  FieldValue.serverTimestamp(),
       posted:            job.posted       || "",
       fitScore:          typeof job.fitScore === "number" ? job.fitScore : null,
       matchReasons:      Array.isArray(job.matchReasons) ? job.matchReasons.filter(r => r != null) : [],
-      createdAt:         admin.firestore.FieldValue.serverTimestamp(),
+      createdAt:         FieldValue.serverTimestamp(),
     })
   );
   // Write ALL verified jobs to global jobs_cache (dedup index by URL, 30-day TTL).
@@ -1680,7 +1681,7 @@ Do NOT search hiring.cafe, greenhouse.io, or lever.co (already searched in Pass 
       directUrl:   j.directUrl || j.url,
       url:         j.directUrl || j.url,
       posted:      j.posted      || "",
-      cachedAt:    admin.firestore.FieldValue.serverTimestamp(),
+      cachedAt:    FieldValue.serverTimestamp(),
       expiresAt:   new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
     }, { merge: true });
   }).filter(Boolean);
@@ -1713,8 +1714,8 @@ Do NOT search hiring.cafe, greenhouse.io, or lever.co (already searched in Pass 
 
   // Increment denormalised counters in the root user doc (non-blocking)
   db.collection("users").doc(userId).update({
-    "stats.searchesRun": admin.firestore.FieldValue.increment(1),
-    ...(finalJobs.length > 0 ? { "stats.jobsFound": admin.firestore.FieldValue.increment(finalJobs.length) } : {}),
+    "stats.searchesRun": FieldValue.increment(1),
+    ...(finalJobs.length > 0 ? { "stats.jobsFound": FieldValue.increment(finalJobs.length) } : {}),
   }).catch(() => {});
 
   // Send push + email notification if new jobs were found
@@ -1782,11 +1783,11 @@ app.post("/documents/save", async (req, res) => {
       userId: uid, type, content,
       title:   title   || (type === "resume" ? "Resume" : "Cover Letter"),
       company: company || "",
-      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      createdAt: FieldValue.serverTimestamp(),
     });
     // Increment denormalised counter (non-blocking)
     db.collection("users").doc(uid).update({
-      "stats.documentsGenerated": admin.firestore.FieldValue.increment(1),
+      "stats.documentsGenerated": FieldValue.increment(1),
     }).catch(() => {});
     res.json({ ok: true, id: ref.id });
   } catch (err) {
@@ -1849,7 +1850,7 @@ app.post("/applications/save", async (req, res) => {
   const newStatus = ALL_STATUSES.includes(status) ? status : "Applied";
 
   try {
-    const now = admin.firestore.FieldValue.serverTimestamp();
+    const now = FieldValue.serverTimestamp();
     const appliedDate = appliedAt || new Date().toISOString();
 
     // Duplicate detection for new applications only
@@ -1920,7 +1921,7 @@ app.post("/applications/save", async (req, res) => {
       });
 
       db.collection("users").doc(uid).update({
-        "stats.applicationsSubmitted": admin.firestore.FieldValue.increment(1),
+        "stats.applicationsSubmitted": FieldValue.increment(1),
       }).catch(() => {});
     }
 
@@ -1945,7 +1946,7 @@ app.patch("/applications/:userId/:appId/status", async (req, res) => {
     if (!doc.exists) return res.status(404).json({ error: "Not found" });
 
     const prev = doc.data().status;
-    const now  = admin.firestore.FieldValue.serverTimestamp();
+    const now  = FieldValue.serverTimestamp();
 
     await appRef.update({
       status,
@@ -1989,7 +1990,7 @@ app.post("/applications/:userId/:appId/notes", async (req, res) => {
   const { content, type } = req.body;
   if (!content?.trim()) return res.status(400).json({ error: "Content required" });
   try {
-    const now    = admin.firestore.FieldValue.serverTimestamp();
+    const now    = FieldValue.serverTimestamp();
     const appRef = db.collection("users").doc(uid).collection("applications").doc(appId);
     const noteRef = await appRef.collection("notes").add({
       content: content.trim(), type: type || "general",
@@ -2062,7 +2063,7 @@ app.post("/interviews/save", async (req, res) => {
   if (!applicationId || !scheduledAt)
     return res.status(400).json({ error: "applicationId and scheduledAt are required" });
   try {
-    const now  = admin.firestore.FieldValue.serverTimestamp();
+    const now  = FieldValue.serverTimestamp();
     const data = {
       applicationId,
       company:    company    || "",
@@ -2133,7 +2134,7 @@ app.post("/knowledge/save", async (req, res) => {
       skills:            skills            || "",
       education:         education         || "",
       additionalContext: additionalContext || "",
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
     }, { merge: true });
     res.json({ ok: true });
   } catch (err) {
@@ -2148,7 +2149,7 @@ app.get("/preferences/:userId", async (req, res) => {
     const ref = db.collection("users").doc(uid).collection("preferences").doc("config");
     const doc = await ref.get();
     // Stamp lastActiveAt every time the user opens the app (non-blocking)
-    ref.set({ lastActiveAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true }).catch(() => {});
+    ref.set({ lastActiveAt: FieldValue.serverTimestamp() }, { merge: true }).catch(() => {});
     res.json(doc.exists ? doc.data() : {});
   } catch (err) {
     res.status(500).json({ error: "Failed to load preferences" });
@@ -2163,7 +2164,7 @@ app.post("/preferences/save", async (req, res) => {
           searchEnabled, searchTimesPerDay, searchStartHour,
           notifTimezone, notifEmail, notifPhone } = req.body;
 
-  const update = { updatedAt: admin.firestore.FieldValue.serverTimestamp() };
+  const update = { updatedAt: FieldValue.serverTimestamp() };
   // Only include fields that were explicitly sent so partial saves don't overwrite
   if (jobTitle        !== undefined) update.jobTitle        = jobTitle        || "";
   if (location        !== undefined) update.location        = location        || "";
@@ -2338,7 +2339,7 @@ ${job.description ? `Description:\n${job.description}` : ""}`,
     trackCost(uid, "resume", response.usage);
     await jobDoc.ref.update({
       tailoredResume:   text,
-      tailoredResumeAt: admin.firestore.FieldValue.serverTimestamp(),
+      tailoredResumeAt: FieldValue.serverTimestamp(),
     });
     res.json({ text });
   } catch (err) {
@@ -2387,7 +2388,7 @@ ${job.description ? `Description:\n${job.description}` : ""}`,
     trackCost(uid, "cover_letter", response.usage);
     await jobDoc.ref.update({
       coverLetter:   text,
-      coverLetterAt: admin.firestore.FieldValue.serverTimestamp(),
+      coverLetterAt: FieldValue.serverTimestamp(),
     });
     res.json({ text });
   } catch (err) {
@@ -2426,7 +2427,7 @@ ${job.description || ""}`,
     trackCost(uid, "interview_prep", response.usage, true);
     await jobDoc.ref.update({
       interviewPrep:   text,
-      interviewPrepAt: admin.firestore.FieldValue.serverTimestamp(),
+      interviewPrepAt: FieldValue.serverTimestamp(),
     });
     res.json({ text });
   } catch (err) {
@@ -2514,7 +2515,7 @@ Respond with ONLY a valid JSON object, no text before or after:
     await jobDoc.ref.update({
       networkingContacts: networking.contacts || [],
       networkingStrategy: networking.strategy || "",
-      networkingAt:       admin.firestore.FieldValue.serverTimestamp(),
+      networkingAt:       FieldValue.serverTimestamp(),
     });
     res.json(networking);
   } catch (err) {
@@ -2557,11 +2558,11 @@ app.post("/search/now/:userId", async (req, res) => {
     let logFn = null;
     if (role === "admin") {
       logRef = db.collection("search_logs").doc(uid);
-      await logRef.set({ startedAt: admin.firestore.FieldValue.serverTimestamp(), status: "running", log: [] });
+      await logRef.set({ startedAt: FieldValue.serverTimestamp(), status: "running", log: [] });
       logFn = async (msg) => {
         const ts = new Date().toLocaleTimeString("en-US", { hour12: false });
         logMessages.push(`${ts}  ${msg}`);
-        await logRef.update({ log: logMessages, updatedAt: admin.firestore.FieldValue.serverTimestamp() });
+        await logRef.update({ log: logMessages, updatedAt: FieldValue.serverTimestamp() });
       };
     }
 
@@ -2569,13 +2570,13 @@ app.post("/search/now/:userId", async (req, res) => {
     const jobs  = await runJobSearch(uid, prefs, tier, logFn);
 
     if (logRef) {
-      await logRef.update({ status: "completed", completedAt: admin.firestore.FieldValue.serverTimestamp() });
+      await logRef.update({ status: "completed", completedAt: FieldValue.serverTimestamp() });
     }
     res.json({ ok: true, jobCount: jobs.length, tier });
   } catch (err) {
     console.error("Search now error:", err.message, err.stack);
     if (logRef) {
-      logRef.update({ status: "failed", error: err.message, updatedAt: admin.firestore.FieldValue.serverTimestamp() }).catch(() => {});
+      logRef.update({ status: "failed", error: err.message, updatedAt: FieldValue.serverTimestamp() }).catch(() => {});
     }
     res.status(500).json({ error: err.message || "Search failed. Please try again." });
   }
@@ -2663,7 +2664,7 @@ app.post("/admin/feature-flags", requireAdmin, async (req, res) => {
   try {
     const flags = req.body;
     await db.collection("admin_config").doc("features").set(
-      { ...flags, updatedAt: admin.firestore.FieldValue.serverTimestamp() },
+      { ...flags, updatedAt: FieldValue.serverTimestamp() },
       { merge: true }
     );
     res.json({ ok: true, flags });
@@ -2701,7 +2702,7 @@ app.get("/admin/company-profiles/:companyKey", requireAdmin, async (req, res) =>
 app.put("/admin/company-profiles/:companyKey", requireAdmin, async (req, res) => {
   try {
     await db.collection("company_verification_profiles").doc(req.params.companyKey).set(
-      { ...req.body, updatedAt: admin.firestore.FieldValue.serverTimestamp() },
+      { ...req.body, updatedAt: FieldValue.serverTimestamp() },
       { merge: true }
     );
     res.json({ ok: true, key: req.params.companyKey });
@@ -2731,8 +2732,8 @@ app.post("/admin/company-profiles/seed-defaults", requireAdmin, async (req, res)
       batch.set(ref, {
         ...profile,
         stats:     { verificationFailures: 0, redirectFailures: 0, apiMisses: 0, successfulVerifications: 0 },
-        createdAt: admin.firestore.FieldValue.serverTimestamp(),
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        createdAt: FieldValue.serverTimestamp(),
+        updatedAt: FieldValue.serverTimestamp(),
       }, { merge: true });  // merge preserves existing stats
     }
     await batch.commit();
@@ -2921,7 +2922,7 @@ app.post("/user/tier", requireAdmin, async (req, res) => {
   if (!["free", "pro"].includes(tier)) return res.status(400).json({ error: "Invalid tier" });
   try {
     await db.collection("users").doc(userId).set(
-      { tier, tierUpdatedAt: admin.firestore.FieldValue.serverTimestamp() },
+      { tier, tierUpdatedAt: FieldValue.serverTimestamp() },
       { merge: true }
     );
     res.json({ ok: true, tier });
@@ -2989,7 +2990,7 @@ app.post("/notifications/token", async (req, res) => {
   try {
     const ref = db.collection("fcmTokens").doc(uid);
     await ref.set(
-      { tokens: admin.firestore.FieldValue.arrayUnion(token), updatedAt: admin.firestore.FieldValue.serverTimestamp() },
+      { tokens: FieldValue.arrayUnion(token), updatedAt: FieldValue.serverTimestamp() },
       { merge: true }
     );
     res.json({ ok: true });
@@ -3019,7 +3020,7 @@ app.post("/target-companies/save", async (req, res) => {
         name: c.name.trim(),
         url:  (c.url || "").trim(),
       })),
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
     });
     res.json({ ok: true });
   } catch (err) {
@@ -3053,7 +3054,7 @@ exports.api = functions
   .runWith({
     timeoutSeconds: 540,
     secrets: ["ANTHROPIC_API_KEY", "STRIPE_SECRET_KEY", "STRIPE_WEBHOOK_SECRET",
-              "STRIPE_PRO_PRICE_ID", "STRIPE_PRO_ANNUAL_PRICE_ID"],
+              "STRIPE_PRO_PRICE_ID", "STRIPE_PRO_ANNUAL_PRICE_ID", "GEMINI_API_KEY"],
   })
   .https.onRequest(app);
 
@@ -3087,7 +3088,7 @@ async function sendPushNotification(userId, title, body) {
 
     if (deadTokens.length > 0) {
       await db.collection("fcmTokens").doc(userId).update({
-        tokens: admin.firestore.FieldValue.arrayRemove(...deadTokens),
+        tokens: FieldValue.arrayRemove(...deadTokens),
       });
     }
   } catch (err) {
@@ -3262,7 +3263,7 @@ Rules:
         url:         job.url         || company.url,
         posted:      job.posted      || "",
         fingerprint: fp,
-        createdAt:   admin.firestore.FieldValue.serverTimestamp(),
+        createdAt:   FieldValue.serverTimestamp(),
       });
     });
     await Promise.all(saves);
@@ -3305,7 +3306,7 @@ function computeSearchHours(prefs) {
 
 // â"€â"€ Job search — runs every hour, fires per each user's schedule â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 exports.dailyJobSearch = onSchedule(
-  { schedule: "0 * * * *", timeZone: "UTC" },
+  { schedule: "0 * * * *", timeZone: "UTC", secrets: ["ANTHROPIC_API_KEY", "GEMINI_API_KEY"] },
   async () => {
     try {
       const now       = new Date();
@@ -3335,7 +3336,7 @@ exports.dailyJobSearch = onSchedule(
         if (lastActive && lastActive < inactiveCutoff) {
           console.log(`[dailyJobSearch] ${userId} (${tier}) inactive ${inactivityDays}+ days — pausing scheduled search`);
           await doc.ref.set(
-            { searchEnabled: false, autoDisabledAt: admin.firestore.FieldValue.serverTimestamp() },
+            { searchEnabled: false, autoDisabledAt: FieldValue.serverTimestamp() },
             { merge: true }
           );
           continue;
@@ -3482,7 +3483,7 @@ exports.revalidateJobUrls = onSchedule(
 
       try {
         const result = await fetchUrlStatus(urlToCheck);
-        const patch  = { urlLastValidated: admin.firestore.FieldValue.serverTimestamp() };
+        const patch  = { urlLastValidated: FieldValue.serverTimestamp() };
 
         if (result.status === 404 || result.status === 410) {
           patch.urlExpired = true;
@@ -3507,7 +3508,7 @@ exports.revalidateJobUrls = onSchedule(
 );
 
 exports.dailyWatchlistCheck = onSchedule(
-  { schedule: "0 9 * * *", timeZone: "America/Los_Angeles" },
+  { schedule: "0 9 * * *", timeZone: "America/Los_Angeles", secrets: ["ANTHROPIC_API_KEY", "GEMINI_API_KEY"] },
   async () => {
     // Admin kill switch: watchlistEnabled defaults to false (off).
     // Turn it on from the Admin Panel → Platform Controls toggle.

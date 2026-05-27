@@ -187,7 +187,7 @@ function _trackCost(db, userId, view, usage, isHaiku = false) {
   if (!db || !userId || !usage) return;
   const ic = isHaiku ? INPUT_COST_HAIKU  : INPUT_COST_SONNET;
   const oc = isHaiku ? OUTPUT_COST_HAIKU : OUTPUT_COST_SONNET;
-  const admin = require("firebase-admin");
+  const { FieldValue } = require("firebase-admin/firestore");
   db.collection("platform_events").add({
     userId, view,
     provider: "claude",
@@ -195,7 +195,7 @@ function _trackCost(db, userId, view, usage, isHaiku = false) {
     inputTokens:  usage.input_tokens  || 0,
     outputTokens: usage.output_tokens || 0,
     cost: ((usage.input_tokens || 0) * ic) + ((usage.output_tokens || 0) * oc),
-    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    createdAt: FieldValue.serverTimestamp(),
   }).catch(() => {});
 }
 
