@@ -57,6 +57,7 @@ const PANELS = {
   account:      document.getElementById("accountView"),
   preferences:  document.getElementById("preferencesView"),
   admin:        document.getElementById("adminView"),
+  network:      document.getElementById("networkView"),
 };
 
 let isLoading      = false;
@@ -82,6 +83,10 @@ function init() {
   document.getElementById("nav-account").addEventListener("click",     () => showPanel("account"));
   document.getElementById("nav-preferences").addEventListener("click", () => showPanel("preferences"));
   document.getElementById("nav-admin")?.addEventListener("click",       () => showPanel("admin"));
+  document.getElementById("nav-network").addEventListener("click", () => {
+    showPanel("network");
+    loadNetworkDashboard();
+  });
   document.getElementById("signOutBtn").addEventListener("click",    signOut);
 
   // Applications panel
@@ -173,6 +178,7 @@ function showPanel(name) {
     account:      "nav-account",
     preferences:  "nav-preferences",
     admin:        "nav-admin",
+    network:      "nav-network",
   };
   if (navIds[name]) document.getElementById(navIds[name])?.classList.add("active");
 

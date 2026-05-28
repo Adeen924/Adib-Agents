@@ -6,7 +6,15 @@ service cloud.firestore {
       allow read, write: if request.auth != null && request.auth.uid == userId;
     }
 
-    // All other documents are managed server-side via Admin SDK; deny client access
+    // All other documents are managed server-side via Admin SDK; deny client access.
+    // This includes the Network Intelligence collections:
+    //   users/{userId}/connections      — imported contacts with relationship scores
+    //   users/{userId}/companies        — denormalized company network data
+    //   users/{userId}/outreach_history — generated and sent outreach messages
+    //   users/{userId}/oauth_tokens     — encrypted Google OAuth refresh tokens
+    //   users/{userId}/extension_tokens — short-lived Chrome extension link tokens
+    //   import_jobs/{importId}          — async import job status documents
+    //   jobs_cache/{jobId}              — crawled job listings with vector embeddings
     match /{document=**} {
       allow read, write: if false;
     }

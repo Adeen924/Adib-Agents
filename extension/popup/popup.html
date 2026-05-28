@@ -1,0 +1,629 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>CareerCopilot — Network Intelligence</title>
+  <style>
+    *, *::before, *::after {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    :root {
+      --bg-primary: #0f1117;
+      --bg-secondary: #1a1d27;
+      --bg-card: #1e2235;
+      --accent-gold: #f0c040;
+      --accent-gold-dim: rgba(240, 192, 64, 0.15);
+      --accent-gold-border: rgba(240, 192, 64, 0.3);
+      --text-primary: #ffffff;
+      --text-secondary: #a0a8c0;
+      --text-muted: #606880;
+      --success: #34d399;
+      --success-bg: rgba(52, 211, 153, 0.1);
+      --error: #f87171;
+      --error-bg: rgba(248, 113, 113, 0.1);
+      --border: rgba(255, 255, 255, 0.08);
+      --radius: 12px;
+      --radius-sm: 8px;
+      --radius-xs: 6px;
+    }
+
+    body {
+      width: 380px;
+      min-height: 520px;
+      background: var(--bg-primary);
+      color: var(--text-primary);
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+      font-size: 14px;
+      line-height: 1.5;
+      overflow-x: hidden;
+    }
+
+    /* ─── Header ─────────────────────────────────────────────────────────── */
+    .header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 16px 18px 14px;
+      border-bottom: 1px solid var(--border);
+      background: var(--bg-secondary);
+    }
+
+    .logo {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .logo-icon {
+      width: 28px;
+      height: 28px;
+      background: var(--accent-gold);
+      border-radius: 7px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 14px;
+      font-weight: 800;
+      color: #0f1117;
+      flex-shrink: 0;
+    }
+
+    .logo-text {
+      display: flex;
+      flex-direction: column;
+      line-height: 1.1;
+    }
+
+    .logo-name {
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--text-primary);
+      letter-spacing: 0.2px;
+    }
+
+    .logo-subtitle {
+      font-size: 10px;
+      color: var(--text-muted);
+      font-weight: 500;
+      letter-spacing: 0.3px;
+      text-transform: uppercase;
+    }
+
+    .status-indicator {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 10px;
+      border-radius: 20px;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.3px;
+    }
+
+    .status-indicator.connected {
+      background: rgba(52, 211, 153, 0.12);
+      color: var(--success);
+      border: 1px solid rgba(52, 211, 153, 0.25);
+    }
+
+    .status-indicator.disconnected {
+      background: rgba(248, 113, 113, 0.1);
+      color: var(--error);
+      border: 1px solid rgba(248, 113, 113, 0.2);
+    }
+
+    .status-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: currentColor;
+    }
+
+    /* ─── Main content ────────────────────────────────────────────────────── */
+    .content {
+      padding: 16px 18px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+
+    /* ─── Cards ──────────────────────────────────────────────────────────── */
+    .card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 14px;
+    }
+
+    .card-title {
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      margin-bottom: 10px;
+    }
+
+    /* ─── Auth / connected state ──────────────────────────────────────────── */
+    .user-info {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .user-avatar {
+      width: 36px;
+      height: 36px;
+      border-radius: 50%;
+      background: var(--accent-gold-dim);
+      border: 1px solid var(--accent-gold-border);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 14px;
+      font-weight: 700;
+      color: var(--accent-gold);
+      flex-shrink: 0;
+    }
+
+    .user-details {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .user-email {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text-primary);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .user-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      margin-top: 2px;
+      padding: 2px 7px;
+      border-radius: 10px;
+      background: var(--success-bg);
+      color: var(--success);
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.3px;
+      text-transform: uppercase;
+    }
+
+    /* ─── Setup / token input ─────────────────────────────────────────────── */
+    .setup-instructions {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      margin-bottom: 12px;
+    }
+
+    .setup-step {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      font-size: 12px;
+      color: var(--text-secondary);
+      line-height: 1.4;
+    }
+
+    .setup-step-num {
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      background: var(--accent-gold-dim);
+      border: 1px solid var(--accent-gold-border);
+      color: var(--accent-gold);
+      font-size: 10px;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      margin-top: 1px;
+    }
+
+    .token-input-group {
+      display: flex;
+      gap: 8px;
+    }
+
+    input[type="text"],
+    input[type="password"] {
+      flex: 1;
+      padding: 9px 12px;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-xs);
+      color: var(--text-primary);
+      font-size: 13px;
+      font-family: inherit;
+      outline: none;
+      transition: border-color 0.15s;
+    }
+
+    input[type="text"]::placeholder,
+    input[type="password"]::placeholder {
+      color: var(--text-muted);
+    }
+
+    input[type="text"]:focus,
+    input[type="password"]:focus {
+      border-color: var(--accent-gold-border);
+      background: rgba(240, 192, 64, 0.04);
+    }
+
+    /* ─── Buttons ─────────────────────────────────────────────────────────── */
+    .btn {
+      padding: 9px 16px;
+      border: none;
+      border-radius: var(--radius-xs);
+      font-size: 13px;
+      font-weight: 600;
+      font-family: inherit;
+      cursor: pointer;
+      transition: opacity 0.15s, transform 0.1s;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      white-space: nowrap;
+    }
+
+    .btn:active { transform: scale(0.97); }
+    .btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+      transform: none;
+    }
+
+    .btn-primary {
+      background: var(--accent-gold);
+      color: #0f1117;
+      width: 100%;
+    }
+
+    .btn-primary:hover:not(:disabled) { opacity: 0.88; }
+
+    .btn-secondary {
+      background: rgba(255, 255, 255, 0.07);
+      color: var(--text-secondary);
+      border: 1px solid var(--border);
+    }
+
+    .btn-secondary:hover:not(:disabled) {
+      background: rgba(255, 255, 255, 0.11);
+      color: var(--text-primary);
+    }
+
+    .btn-connect {
+      background: var(--accent-gold);
+      color: #0f1117;
+      padding: 9px 14px;
+      flex-shrink: 0;
+    }
+
+    .btn-connect:hover:not(:disabled) { opacity: 0.88; }
+
+    .btn-danger {
+      background: transparent;
+      color: var(--error);
+      border: 1px solid rgba(248, 113, 113, 0.25);
+      font-size: 12px;
+      padding: 7px 12px;
+    }
+
+    .btn-danger:hover:not(:disabled) {
+      background: var(--error-bg);
+    }
+
+    /* ─── Page analysis section ───────────────────────────────────────────── */
+    .page-type-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 10px;
+      border-radius: 20px;
+      background: var(--accent-gold-dim);
+      border: 1px solid var(--accent-gold-border);
+      color: var(--accent-gold);
+      font-size: 11px;
+      font-weight: 600;
+      margin-bottom: 12px;
+    }
+
+    .page-type-badge.unsupported {
+      background: rgba(255,255,255,0.05);
+      border-color: var(--border);
+      color: var(--text-muted);
+    }
+
+    .not-linkedin-msg {
+      font-size: 12px;
+      color: var(--text-muted);
+      text-align: center;
+      padding: 8px 0 4px;
+      line-height: 1.5;
+    }
+
+    .not-linkedin-msg a {
+      color: var(--accent-gold);
+      text-decoration: none;
+    }
+
+    /* ─── Results area ────────────────────────────────────────────────────── */
+    .results-summary {
+      padding: 10px 12px;
+      border-radius: var(--radius-xs);
+      background: var(--accent-gold-dim);
+      border: 1px solid var(--accent-gold-border);
+      margin-bottom: 10px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .results-count {
+      font-size: 22px;
+      font-weight: 800;
+      color: var(--accent-gold);
+      line-height: 1;
+    }
+
+    .results-label {
+      font-size: 12px;
+      color: var(--text-secondary);
+      line-height: 1.3;
+    }
+
+    .results-label strong {
+      color: var(--text-primary);
+      display: block;
+      font-size: 13px;
+    }
+
+    /* ─── Recruiter stat ──────────────────────────────────────────────────── */
+    .stat-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 4px 0;
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+
+    .stat-row span:last-child {
+      color: var(--text-secondary);
+      font-weight: 600;
+    }
+
+    /* ─── Status / feedback ───────────────────────────────────────────────── */
+    .status-area {
+      border-radius: var(--radius-xs);
+      padding: 10px 12px;
+      font-size: 12px;
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      line-height: 1.4;
+    }
+
+    .status-area.success {
+      background: var(--success-bg);
+      color: var(--success);
+      border: 1px solid rgba(52, 211, 153, 0.2);
+    }
+
+    .status-area.error {
+      background: var(--error-bg);
+      color: var(--error);
+      border: 1px solid rgba(248, 113, 113, 0.2);
+    }
+
+    .status-area.loading {
+      background: rgba(255, 255, 255, 0.04);
+      color: var(--text-secondary);
+      border: 1px solid var(--border);
+    }
+
+    /* ─── Spinner ─────────────────────────────────────────────────────────── */
+    .spinner {
+      width: 14px;
+      height: 14px;
+      border: 2px solid rgba(255, 255, 255, 0.15);
+      border-top-color: var(--accent-gold);
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+      flex-shrink: 0;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    /* ─── Footer ─────────────────────────────────────────────────────────── */
+    .footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 18px;
+      border-top: 1px solid var(--border);
+      background: var(--bg-secondary);
+    }
+
+    .footer-link {
+      font-size: 12px;
+      color: var(--accent-gold);
+      text-decoration: none;
+      font-weight: 500;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+
+    .footer-link:hover { opacity: 0.8; }
+
+    /* ─── Utility ─────────────────────────────────────────────────────────── */
+    .hidden { display: none !important; }
+
+    .section-gap { margin-top: 10px; }
+
+    .divider {
+      height: 1px;
+      background: var(--border);
+      margin: 2px 0;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- ─── Header ─────────────────────────────────────────────────────────── -->
+  <header class="header">
+    <div class="logo">
+      <div class="logo-icon">✦</div>
+      <div class="logo-text">
+        <span class="logo-name">CareerCopilot</span>
+        <span class="logo-subtitle">Network Intelligence</span>
+      </div>
+    </div>
+    <div id="headerStatus" class="status-indicator disconnected">
+      <div class="status-dot"></div>
+      <span id="headerStatusText">Not Connected</span>
+    </div>
+  </header>
+
+  <!-- ─── Main content ────────────────────────────────────────────────────── -->
+  <main class="content">
+
+    <!-- Setup section (shown when NOT connected) -->
+    <section id="setupSection" class="card hidden">
+      <div class="card-title">Connect Your Account</div>
+      <div class="setup-instructions">
+        <div class="setup-step">
+          <div class="setup-step-num">1</div>
+          <span>Go to <strong>CareerCopilot → Settings → Extension</strong> tab</span>
+        </div>
+        <div class="setup-step">
+          <div class="setup-step-num">2</div>
+          <span>Click <strong>"Generate Extension Token"</strong></span>
+        </div>
+        <div class="setup-step">
+          <div class="setup-step-num">3</div>
+          <span>Paste your token below and click Connect</span>
+        </div>
+      </div>
+      <div class="token-input-group">
+        <input
+          type="password"
+          id="tokenInput"
+          placeholder="Paste extension token..."
+          autocomplete="off"
+          spellcheck="false"
+        />
+        <button id="connectBtn" class="btn btn-connect">Connect</button>
+      </div>
+    </section>
+
+    <!-- Connected user info (shown when connected) -->
+    <section id="connectedSection" class="card hidden">
+      <div class="card-title">Account</div>
+      <div class="user-info">
+        <div class="user-avatar" id="userAvatar">?</div>
+        <div class="user-details">
+          <div class="user-email" id="userEmail">—</div>
+          <div class="user-badge">
+            <span>●</span> Connected
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Page analysis section (shown when connected AND on LinkedIn) -->
+    <section id="analysisSection" class="card hidden">
+      <div class="card-title">Page Analysis</div>
+
+      <div id="pageTypeBadge" class="page-type-badge">
+        <span id="pageTypeIcon">🔍</span>
+        <span id="pageTypeText">Detecting...</span>
+      </div>
+
+      <!-- Not on LinkedIn message -->
+      <div id="notLinkedInMsg" class="not-linkedin-msg hidden">
+        Navigate to a LinkedIn page to use this feature.<br/>
+        <a href="https://www.linkedin.com" target="_blank">Open LinkedIn →</a>
+      </div>
+
+      <!-- Analysis controls -->
+      <div id="analysisControls">
+        <button id="analyzeBtn" class="btn btn-primary" disabled>
+          <span id="analyzeBtnText">Analyze This Page</span>
+        </button>
+      </div>
+
+      <!-- Results (shown after analysis) -->
+      <div id="resultsArea" class="hidden">
+        <div class="divider" style="margin: 12px 0 10px;"></div>
+        <div class="results-summary">
+          <div class="results-count" id="resultsCount">0</div>
+          <div class="results-label">
+            <strong id="resultsTitle">Connections Found</strong>
+            <span id="resultsSubtitle">on this page</span>
+          </div>
+        </div>
+        <div class="stat-row">
+          <span>Likely recruiters</span>
+          <span id="recruiterCount">—</span>
+        </div>
+        <div class="stat-row">
+          <span>With mutual connections</span>
+          <span id="mutualCount">—</span>
+        </div>
+        <div class="section-gap"></div>
+        <button id="syncBtn" class="btn btn-primary">
+          Sync to CareerCopilot
+        </button>
+      </div>
+    </section>
+
+    <!-- Status/feedback area -->
+    <div id="statusArea" class="hidden"></div>
+
+    <!-- View in CareerCopilot link (shown after sync) -->
+    <div id="viewLinkArea" class="hidden" style="text-align:center; padding: 4px 0;">
+      <a
+        id="viewLink"
+        href="https://adib-job-agent.web.app/network"
+        target="_blank"
+        class="footer-link"
+        style="justify-content: center; font-size: 13px;"
+      >
+        View synced connections in CareerCopilot →
+      </a>
+    </div>
+
+  </main>
+
+  <!-- ─── Footer ──────────────────────────────────────────────────────────── -->
+  <footer class="footer">
+    <a
+      href="https://adib-job-agent.web.app"
+      target="_blank"
+      class="footer-link"
+    >
+      Open CareerCopilot ↗
+    </a>
+    <button id="disconnectBtn" class="btn btn-danger hidden">Disconnect</button>
+  </footer>
+
+  <script src="popup.js"></script>
+</body>
+</html>

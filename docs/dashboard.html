@@ -43,6 +43,11 @@
         <span class="nav-icon">📁</span> Documents
       </button>
 
+      <div class="nav-label" style="margin-top:10px">Intelligence</div>
+      <button class="nav-item" id="nav-network">
+        <span class="nav-icon">🤝</span> Network Intel
+      </button>
+
       <div class="nav-label" style="margin-top:10px">Account</div>
       <button class="nav-item" id="nav-profile">
         <span class="nav-icon">👤</span> Profile
@@ -872,6 +877,30 @@
   </div>
 </div>
 
+<!-- ── Network Intelligence view ── -->
+<div class="main-content panel-view" id="networkView" style="display:none">
+  <header class="main-header">
+    <div><h2>Network Intelligence</h2><p>Leverage your professional network for warm job opportunities</p></div>
+    <button class="btn btn-gold" id="networkImportBtn" style="padding:8px 18px;font-size:0.85rem" onclick="triggerGoogleImport()">+ Import Contacts</button>
+  </header>
+  <div class="panel-body" style="max-width:100%;overflow-y:auto;padding-bottom:32px" id="networkPanelBody">
+    <!-- Sub-nav -->
+    <div class="tracker-toolbar" style="margin-bottom:0" id="networkSubNav">
+      <div class="view-toggle" id="networkViewToggle">
+        <button class="view-toggle-btn active" onclick="switchNetworkView('overview')">Overview</button>
+        <button class="view-toggle-btn" onclick="switchNetworkView('connections')">Connections</button>
+        <button class="view-toggle-btn" onclick="switchNetworkView('companies')">Companies</button>
+        <button class="view-toggle-btn" onclick="switchNetworkView('outreach')">Outreach</button>
+        <button class="view-toggle-btn" onclick="switchNetworkView('settings')">Settings</button>
+      </div>
+    </div>
+    <!-- Dynamic content area -->
+    <div id="networkContent" style="margin-top:20px">
+      <div class="panel-loading">Loading network data…</div>
+    </div>
+  </div>
+</div>
+
 <!-- ── Spotlight backdrop + hole ── -->
 <div id="obBackdrop" aria-hidden="true"></div>
 <div id="obHole"     aria-hidden="true"></div>
@@ -996,5 +1025,6 @@
 </script>
 <script src="app.js"></script>
 <script src="onboarding.js"></script>
+<script src="network.js"></script>
 </body>
 </html>

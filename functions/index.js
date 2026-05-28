@@ -1,5 +1,6 @@
 ﻿const functions = require("firebase-functions/v1");
 const { onSchedule } = require("firebase-functions/v2/scheduler");
+const { onDocumentCreated } = require("firebase-functions/v2/firestore");
 const express    = require("express");
 const cors       = require("cors");
 const rateLimit  = require("express-rate-limit");
@@ -9,6 +10,10 @@ const admin      = require("firebase-admin");
 const Stripe     = require("stripe");
 const crypto     = require("crypto");
 const nodemailer = require("nodemailer");
+
+// ── Relationship Intelligence Engine modules ──────────────────────────────────
+const googleOAuth        = require("./google-oauth");
+const relationshipEngine = require("./relationship-engine");
 
 admin.initializeApp();
 
@@ -122,6 +127,9 @@ app.use(express.json({ limit: "2mb" }));
 // Verifies Firebase ID token from Authorization: Bearer <token> header.
 // Attaches req.user = { uid, email, ... } on success.
 async function authenticate(req, res, next) {
+  // Extension sync uses its own token; skip Firebase auth for that path
+  if (req.path === "/network/extension/sync" && req.method === "POST") return next();
+
   const header = (req.headers.authorization || "").trim();
   if (!header.startsWith("Bearer ")) {
     return res.status(401).json({ error: "Missing or invalid Authorization header" });
@@ -3423,6 +3431,496 @@ exports.revalidateJobUrls = onSchedule(
       }
     }
     console.log(`[revalidate] checked=${checked} expired=${expired} redirects_updated=${updated}`);
+  }
+);
+
+// ════════════════════════════════════════════════════════════════════════════
+// ── RELATIONSHIP INTELLIGENCE ENGINE — /network routes ──────────────────────
+// ════════════════════════════════════════════════════════════════════════════
+
+// ── Helper: get redirect URI for OAuth callbacks ──────────────────────────────
+function getOAuthRedirectUri(req) {
+  const proto = req.headers["x-forwarded-proto"] || req.protocol || "https";
+  const host  = req.headers["x-forwarded-host"]  || req.headers.host || "";
+  return `${proto}://${host}/network/oauth/google/callback`;
+}
+
+// ── Helper: get frontend base URL ────────────────────────────────────────────
+const FRONTEND_URL = process.env.FRONTEND_URL || "https://adeen924.github.io/Adib-Agents";
+
+// ────────────────────────────────────────────────────────────────────────────
+// OAuth endpoints (no JSON body — use query params or redirects)
+// ────────────────────────────────────────────────────────────────────────────
+
+// GET /network/oauth/google/url — generate the Google OAuth authorization URL
+app.get("/network/oauth/google/url", authenticate, async (req, res) => {
+  try {
+    const redirectUri = getOAuthRedirectUri(req);
+    const { url } = googleOAuth.generateGoogleAuthUrl(req.user.uid, redirectUri);
+    res.json({ url });
+  } catch (err) {
+    console.error("[network/oauth/google/url]", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /network/oauth/google/callback — exchange code, store tokens, redirect
+// Note: verifyAppCheck + authenticate are applied globally but this route
+// receives the request from Google (no Firebase token). We use the state
+// param to identify the user instead.
+app.get("/network/oauth/google/callback", async (req, res) => {
+  const { code, state, error } = req.query;
+
+  if (error) {
+    return res.redirect(`${FRONTEND_URL}?network_error=${encodeURIComponent(error)}`);
+  }
+
+  try {
+    const redirectUri = getOAuthRedirectUri(req);
+    await googleOAuth.handleGoogleCallback(code, state, redirectUri);
+    res.redirect(`${FRONTEND_URL}?network_connected=1`);
+  } catch (err) {
+    console.error("[network/oauth/google/callback]", err.message);
+    res.redirect(`${FRONTEND_URL}?network_error=${encodeURIComponent(err.message)}`);
+  }
+});
+
+// DELETE /network/oauth/google — revoke access and delete stored tokens
+app.delete("/network/oauth/google", authenticate, async (req, res) => {
+  try {
+    await googleOAuth.revokeGoogleAccess(req.user.uid);
+    res.json({ success: true });
+  } catch (err) {
+    console.error("[network/oauth/google DELETE]", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /network/oauth/status — check OAuth connection status
+app.get("/network/oauth/status", authenticate, async (req, res) => {
+  try {
+    const status = await googleOAuth.getOAuthStatus(req.user.uid);
+    res.json(status);
+  } catch (err) {
+    console.error("[network/oauth/status]", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// Import endpoints
+// ────────────────────────────────────────────────────────────────────────────
+
+// POST /network/import/google — kick off a Google Contacts import
+app.post("/network/import/google", authenticate, async (req, res) => {
+  const userId = req.user.uid;
+  try {
+    // Verify Google is connected first
+    const status = await googleOAuth.getOAuthStatus(userId);
+    if (!status.google.connected) {
+      return res.status(400).json({ error: "Google account not connected" });
+    }
+
+    // Create the import document
+    const importRef = db.collection("users").doc(userId)
+      .collection("network_imports").doc();
+    const importId  = importRef.id;
+
+    await importRef.set({
+      importId,
+      userId,
+      status:           "queued",
+      progress:         0,
+      contactsProcessed: 0,
+      companiesDetected: 0,
+      source:           "google_contacts",
+      createdAt:        admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt:        admin.firestore.FieldValue.serverTimestamp(),
+      error:            null,
+    });
+
+    // Fire and forget — full import runs in background
+    (async () => {
+      try {
+        const result = await googleOAuth.importGoogleContacts(userId, importId);
+        await relationshipEngine.processImportedContacts(userId, importId, result.contacts);
+      } catch (err) {
+        console.error(`[network/import/google] async error userId=${userId} importId=${importId}:`, err.message);
+        await db.collection("users").doc(userId)
+          .collection("network_imports").doc(importId)
+          .set({ status: "error", error: err.message }, { merge: true });
+      }
+    })();
+
+    res.json({ importId, status: "processing" });
+  } catch (err) {
+    console.error("[network/import/google]", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /network/import/:importId/status — poll import progress
+app.get("/network/import/:importId/status", authenticate, async (req, res) => {
+  const userId   = req.user.uid;
+  const { importId } = req.params;
+  try {
+    const snap = await db.collection("users").doc(userId)
+      .collection("network_imports").doc(importId).get();
+    if (!snap.exists) return res.status(404).json({ error: "Import not found" });
+    const d = snap.data();
+    res.json({
+      importId:          d.importId,
+      status:            d.status,
+      progress:          d.progress || 0,
+      contactsProcessed: d.contactsProcessed || 0,
+      companiesDetected: d.companiesDetected || 0,
+      error:             d.error || null,
+    });
+  } catch (err) {
+    console.error("[network/import/:importId/status]", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// Connection + company data endpoints
+// ────────────────────────────────────────────────────────────────────────────
+
+// GET /network/connections — list connections with pagination
+app.get("/network/connections", authenticate, async (req, res) => {
+  const userId  = req.user.uid;
+  const page    = Math.max(1, parseInt(req.query.page  || "1", 10));
+  const limit   = Math.min(100, parseInt(req.query.limit || "50", 10));
+  const tier    = req.query.tier    || null;  // filter by relationship tier
+  const source  = req.query.source  || null;  // filter by source
+
+  try {
+    let query = db.collection("users").doc(userId).collection("connections")
+      .orderBy("relationshipScore", "desc");
+
+    if (tier)   query = query.where("relationshipTier", "==", tier);
+    if (source) query = query.where("source",           "==", source);
+
+    // Fetch one extra to detect if there's a next page
+    const snap = await query.limit(limit + 1).offset((page - 1) * limit).get();
+    const docs = snap.docs.slice(0, limit);
+
+    const connections = docs.map(d => {
+      const data = d.data();
+      // Redact phones for privacy — return only first email
+      return {
+        ...data,
+        phones: undefined,
+        emails: (data.emails || []).slice(0, 1),
+      };
+    });
+
+    // Count total (lightweight — avoid full scan on large collections)
+    const totalSnap = await db.collection("users").doc(userId)
+      .collection("connections").count().get();
+
+    res.json({
+      connections,
+      total: totalSnap.data().count,
+      page,
+      hasMore: snap.docs.length > limit,
+    });
+  } catch (err) {
+    console.error("[network/connections]", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /network/companies — list aggregated company profiles
+app.get("/network/companies", authenticate, async (req, res) => {
+  const userId = req.user.uid;
+  try {
+    const snap = await db.collection("users").doc(userId)
+      .collection("network_companies")
+      .orderBy("connectionCount", "desc")
+      .limit(200)
+      .get();
+    const companies = snap.docs.map(d => d.data());
+    res.json({ companies });
+  } catch (err) {
+    console.error("[network/companies]", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /network/jobs/warm — jobs in pipeline with network path
+app.get("/network/jobs/warm", authenticate, async (req, res) => {
+  const userId = req.user.uid;
+  try {
+    const result = await relationshipEngine.getWarmJobPaths(userId);
+    res.json(result);
+  } catch (err) {
+    console.error("[network/jobs/warm]", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /network/analysis — network gap analysis
+app.get("/network/analysis", authenticate, async (req, res) => {
+  const userId = req.user.uid;
+  try {
+    const userSnap = await db.collection("users").doc(userId).get();
+    const userProfile = userSnap.exists ? {
+      targetCompanies: (userSnap.data().targetCompanies || []),
+      targetIndustry:  userSnap.data().targetIndustry || "",
+      targetRoles:     userSnap.data().targetRoles || [],
+    } : {};
+    const result = await relationshipEngine.analyzeNetworkGaps(userId, userProfile);
+    res.json(result);
+  } catch (err) {
+    console.error("[network/analysis]", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// Outreach endpoints
+// ────────────────────────────────────────────────────────────────────────────
+
+// POST /network/outreach/generate — generate an outreach message (not saved)
+app.post("/network/outreach/generate", authenticate, async (req, res) => {
+  const userId = req.user.uid;
+  const {
+    connectionId,
+    messageType,
+    jobTitle,
+    company,
+    userBackground,
+    tone,
+    premium,
+  } = req.body;
+
+  if (!connectionId) return res.status(400).json({ error: "connectionId is required" });
+
+  try {
+    // Fetch the connection doc
+    const connSnap = await db.collection("users").doc(userId)
+      .collection("connections").doc(connectionId).get();
+    if (!connSnap.exists) return res.status(404).json({ error: "Connection not found" });
+
+    const result = await relationshipEngine.generateOutreachMessage({
+      connection: connSnap.data(),
+      messageType,
+      jobTitle,
+      company,
+      userBackground,
+      tone,
+      premium: !!premium,
+    }, anthropic);
+
+    // Track cost
+    trackCost(userId, "outreach_generate", {
+      input_tokens:  result.inputTokens,
+      output_tokens: result.outputTokens,
+    }, !premium);
+
+    res.json({
+      message:    result.message,
+      tone:       result.tone,
+      keySignals: result.keySignals,
+      messageType: result.messageType,
+    });
+  } catch (err) {
+    console.error("[network/outreach/generate]", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /network/outreach — list outreach history
+app.get("/network/outreach", authenticate, async (req, res) => {
+  const userId = req.user.uid;
+  try {
+    const snap = await db.collection("users").doc(userId)
+      .collection("outreach_history")
+      .orderBy("createdAt", "desc")
+      .limit(100)
+      .get();
+    const outreach = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    res.json({ outreach });
+  } catch (err) {
+    console.error("[network/outreach GET]", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /network/outreach — save an outreach record
+app.post("/network/outreach", authenticate, async (req, res) => {
+  const userId = req.user.uid;
+  const {
+    connectionId,
+    messageType,
+    message,
+    tone,
+    keySignals,
+    channel,   // linkedin | email | other
+    status,    // drafted | sent
+  } = req.body;
+
+  if (!connectionId || !message) {
+    return res.status(400).json({ error: "connectionId and message are required" });
+  }
+
+  try {
+    const ref = db.collection("users").doc(userId).collection("outreach_history").doc();
+    await ref.set({
+      outreachId:   ref.id,
+      connectionId,
+      messageType:  messageType || "linkedin_outreach",
+      message,
+      tone:         tone    || "professional",
+      keySignals:   keySignals || [],
+      channel:      channel || "linkedin",
+      status:       status  || "drafted",
+      createdAt:    admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt:    admin.firestore.FieldValue.serverTimestamp(),
+    });
+    res.json({ outreachId: ref.id });
+  } catch (err) {
+    console.error("[network/outreach POST]", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// PATCH /network/outreach/:outreachId/status — update outreach status (sent, replied, etc.)
+app.patch("/network/outreach/:outreachId/status", authenticate, async (req, res) => {
+  const userId      = req.user.uid;
+  const { outreachId } = req.params;
+  const { status }  = req.body;
+
+  const VALID_STATUSES = ["drafted", "sent", "replied", "no_response", "archived"];
+  if (!status || !VALID_STATUSES.includes(status)) {
+    return res.status(400).json({ error: `status must be one of: ${VALID_STATUSES.join(", ")}` });
+  }
+
+  try {
+    const ref = db.collection("users").doc(userId)
+      .collection("outreach_history").doc(outreachId);
+    const snap = await ref.get();
+    if (!snap.exists) return res.status(404).json({ error: "Outreach record not found" });
+
+    await ref.update({
+      status,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+    res.json({ success: true });
+  } catch (err) {
+    console.error("[network/outreach/:outreachId/status]", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// Dashboard
+// ────────────────────────────────────────────────────────────────────────────
+
+// GET /network/dashboard — aggregated network dashboard stats
+app.get("/network/dashboard", authenticate, async (req, res) => {
+  const userId = req.user.uid;
+  try {
+    const result = await relationshipEngine.getNetworkDashboard(userId);
+    res.json(result);
+  } catch (err) {
+    console.error("[network/dashboard]", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// Privacy — delete all network data
+// ────────────────────────────────────────────────────────────────────────────
+
+// DELETE /network/data — erase all Relationship Intelligence data for this user
+app.delete("/network/data", authenticate, async (req, res) => {
+  const userId = req.user.uid;
+  try {
+    const { deleted } = await relationshipEngine.deleteAllNetworkData(userId);
+    res.json({ success: true, deleted });
+  } catch (err) {
+    console.error("[network/data DELETE]", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// Chrome Extension endpoints
+// ────────────────────────────────────────────────────────────────────────────
+
+// POST /network/extension/token — issue a 30-day extension token
+app.post("/network/extension/token", authenticate, async (req, res) => {
+  const userId = req.user.uid;
+  try {
+    const result = await relationshipEngine.generateExtensionToken(userId);
+    res.json(result);
+  } catch (err) {
+    console.error("[network/extension/token]", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /network/extension/sync — sync contacts from Chrome extension
+// Authenticated via extension token (x-extension-token header), NOT Firebase ID token
+app.post("/network/extension/sync", async (req, res) => {
+  const extToken = req.headers["x-extension-token"];
+  if (!extToken) return res.status(401).json({ error: "x-extension-token header required" });
+
+  let userId;
+  try {
+    const verified = await relationshipEngine.verifyExtensionToken(extToken);
+    userId = verified.userId;
+  } catch (err) {
+    return res.status(401).json({ error: `Invalid extension token: ${err.message}` });
+  }
+
+  const { contacts } = req.body;
+  if (!Array.isArray(contacts) || contacts.length === 0) {
+    return res.status(400).json({ error: "contacts array is required and must not be empty" });
+  }
+
+  // Cap at 500 contacts per sync
+  if (contacts.length > 500) {
+    return res.status(400).json({ error: "Maximum 500 contacts per sync batch" });
+  }
+
+  try {
+    const result = await relationshipEngine.syncExtensionContacts(userId, contacts);
+    res.json(result);
+  } catch (err) {
+    console.error("[network/extension/sync]", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ════════════════════════════════════════════════════════════════════════════
+// ── Firestore-triggered Cloud Function: processNetworkImport ─────────────────
+// Triggers when a new network_imports document is created, allowing the import
+// to be processed even if the original HTTP request times out.
+// (The HTTP route above also runs the import inline; this provides resilience.)
+// ════════════════════════════════════════════════════════════════════════════
+exports.processNetworkImport = onDocumentCreated(
+  { document: "users/{userId}/network_imports/{importId}", timeoutSeconds: 540 },
+  async (event) => {
+    const { userId, importId } = event.params;
+    const data = event.data?.data();
+    if (!data) return;
+
+    // Only process if still in queued state (avoid double-processing with HTTP route)
+    if (data.status !== "queued") return;
+
+    try {
+      const result = await googleOAuth.importGoogleContacts(userId, importId);
+      await relationshipEngine.processImportedContacts(userId, importId, result.contacts);
+    } catch (err) {
+      console.error(`[processNetworkImport] userId=${userId} importId=${importId}:`, err.message);
+      await admin.firestore()
+        .collection("users").doc(userId)
+        .collection("network_imports").doc(importId)
+        .set({ status: "error", error: err.message }, { merge: true });
+    }
   }
 );
 
