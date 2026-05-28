@@ -69,7 +69,11 @@
       "Bash(Format-Table -AutoSize)",
       "Bash(git check-ignore *)",
       "Bash(gh api *)",
-      "PowerShell(gh api --method PATCH /repos/adeen924/Adib-Agents --field \"security_and_analysis[secret_scanning][status]=enabled\" --field \"security_and_analysis[secret_scanning_push_protection][status]=enabled\" 2>&1)"
+      "PowerShell(gh api --method PATCH /repos/adeen924/Adib-Agents --field \"security_and_analysis[secret_scanning][status]=enabled\" --field \"security_and_analysis[secret_scanning_push_protection][status]=enabled\" 2>&1)",
+      "Bash(cd \"/c/Users/Adibm/OneDrive/Documentos/GitHub/Adib-Agents\" && find . -maxdepth 2 -type d | head -50 && echo \"---\" && ls -la)",
+      "Bash(node --check \"C:\\\\Users\\\\Adibm\\\\OneDrive\\\\Documentos\\\\GitHub\\\\Adib-Agents\\\\functions\\\\index.js\")",
+      "Bash(node --check functions/google-oauth.js)",
+      "Bash(node --check functions/relationship-engine.js)"
     ]
   }
 }
