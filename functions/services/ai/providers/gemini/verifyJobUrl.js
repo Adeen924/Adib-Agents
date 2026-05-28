@@ -24,10 +24,12 @@ async function httpLivenessCheck(url) {
   const timeout = 6000;
   try {
     let res = await fetch(url, { method: "HEAD", headers, signal: AbortSignal.timeout(timeout), redirect: "follow" });
-    // Some servers (e.g. Northrop Grumman) return 405 on HEAD — fall through to GET
+    // Some servers return 405 on HEAD — fall through to GET
     if (res.status === 405 || res.status === 403) {
       res = await fetch(url, { method: "GET", headers, signal: AbortSignal.timeout(timeout), redirect: "follow" });
     }
+    // 403 after GET = bot protection, not a dead posting — treat as unknown
+    if (res.status === 403) return { ok: true, status: 403 };
     const ok = res.status < 400;
     return { ok, status: res.status };
   } catch {
@@ -37,7 +39,11 @@ async function httpLivenessCheck(url) {
 }
 
 // Domains that are never valid direct job links
-const BANNED_DOMAINS = /indeed\.com|linkedin\.com|ziprecruiter\.com|glassdoor\.com|simplyhired\.com|monster\.com/i;
+const BANNED_DOMAINS = /ziprecruiter\.com|glassdoor\.com|simplyhired\.com|monster\.com/i;
+
+// Job listing aggregators — have job IDs but are NOT direct employer apply links.
+// Jobs from these domains should go through URL discovery to find the real link.
+const AGGREGATOR_DOMAINS = /\bvaia\.com\b|\btalentsbyvaia\.com\b|\btealhq\.com\b|\blensa\.com\b|\bfactoryfix\.com\b|\bbuiltinla\.com\b|\bbuiltinsf\.com\b/i;
 
 // ── Pre-flight check ──────────────────────────────────────────────────────────
 
@@ -54,6 +60,11 @@ function preflightCheck(url, expectedTitle, expectedCompany) {
   // Banned aggregator domains
   if (BANNED_DOMAINS.test(url)) {
     return { skip: true, result: _failResult(`Banned aggregator domain: ${url}`) };
+  }
+
+  // Known listing aggregators — not a direct apply link, needs URL discovery
+  if (AGGREGATOR_DOMAINS.test(url)) {
+    return { skip: true, result: { ..._failResult("Aggregator domain — needs URL discovery for direct link"), needsDiscovery: true } };
   }
 
   let parsed;

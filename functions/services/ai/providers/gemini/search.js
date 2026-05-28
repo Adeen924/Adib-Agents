@@ -9,8 +9,8 @@ const { GeminiClient } = require("./client");
 
 const DEFAULT_MAX_CANDIDATES = parseInt(process.env.HYBRID_SEARCH_MAX_RESULTS || "10", 10);
 
-// Domains that should never appear in results
-const BANNED_DOMAINS = /indeed\.com|linkedin\.com|ziprecruiter\.com|glassdoor\.com|simplyhired\.com|monster\.com/i;
+// Domains that should never appear in results (aggregators with no direct apply links)
+const BANNED_DOMAINS = /ziprecruiter\.com|glassdoor\.com|simplyhired\.com|monster\.com/i;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -48,35 +48,21 @@ function buildSearchPrompt(title, simpleQuery, prefs, seenSection, staleUrlList)
     ? `\nKNOWN EXPIRED URLS — never return any of these:\n${staleUrlList.slice(0, 30).join("\n")}\n`
     : "";
 
-  return `Search for real, current "${title}" job postings using Google Search.
+  return `Use Google Search to find current "${title}" job postings.
 
-REQUIRED:
+Search criteria:
 - Role: ${title}
 ${loc           ? `- Location: ${loc}` : ""}
 ${prefs.experienceLevel ? `- Level: ${prefs.experienceLevel}` : ""}
 ${prefs.salaryMin       ? `- Min salary: ${prefs.salaryMin}` : ""}
 ${seenSection}
-SEARCH THESE SOURCES IN ORDER (use Google Search for each):
-1. site:hiring.cafe ${simpleQuery}
-2. site:boards.greenhouse.io ${simpleQuery}
-3. site:jobs.lever.co ${simpleQuery}
-4. site:jobs.ashbyhq.com ${simpleQuery}
-5. site:builtin.com ${simpleQuery}
-6. site:wellfound.com ${simpleQuery}
+Search for this role across company career pages and job boards. Good sources include:
+greenhouse.io, lever.co, ashbyhq.com, workday.com, builtin.com, wellfound.com, hiring.cafe, and direct company career pages.
 ${stale}
-URL RULES — strict:
-- Every URL must link directly to ONE specific job posting.
-- Valid URL contains a unique job ID or slug, e.g.:
-    boards.greenhouse.io/COMPANY/jobs/12345
-    jobs.lever.co/COMPANY/some-uuid
-    jobs.ashbyhq.com/COMPANY/job-slug
-    hiring.cafe/jobs/12345
-    company.com/careers/role-title-12345
-- REJECT: company.com/careers/ or company.com/careers (no job ID = invalid)
-- REJECT: any search results page or aggregator listing page
-- REJECT: ziprecruiter.com, glassdoor.com, indeed.com, linkedin.com
-- If you cannot find a direct URL with a job ID, omit that job entirely.
-- Prefer postings from the last 14 days.
+For each job posting you find, return the direct URL to that specific posting.
+- Include any job posting you find — the system will verify the URLs separately.
+- Prefer postings from the last 30 days.
+- Do NOT return search results pages or job listing homepages.
 
 ATS DETECTION:
 - boards.greenhouse.io/SLUG/jobs/ID → atsType="greenhouse", atsSlug="SLUG"
@@ -99,10 +85,9 @@ Return ONLY a raw JSON array — no markdown, no explanation. Up to 5 results:
   "confidence": 0.9
 }]
 
-confidence: 1.0 = URL definitely links to this exact posting with a job ID.
-0.7 = URL likely correct. Below 0.6 = omit the job entirely.
+confidence: 1.0 = direct link to this specific posting. 0.7 = likely correct. 0.4 = uncertain but possible.
 For experience: always infer from title/description — do NOT leave blank.
-Return [] if no valid direct-link postings found.`;
+Return [] only if you found absolutely no job postings for this role.`;
 }
 
 function buildPass2Prompt(title, simpleQuery, prefs, alreadyFound, seenSection) {
@@ -125,12 +110,13 @@ SEARCH THESE SOURCES:
 2. site:indeed.com ${simpleQuery}
 3. ${title} ${prefs.locationCity || ""} careers site
 
-Same URL rules as before:
-- Direct links with job IDs only. Reject careers homepages and search pages.
+URL rules:
+- Prefer direct links with job IDs, but include any specific job posting page (confidence >= 0.4).
+- Reject careers homepages and search pages (no job ID or slug in the URL).
 - Reject ziprecruiter.com, glassdoor.com aggregators.
 
 Return ONLY a raw JSON array, up to 5 results. Same schema as before.
-Return [] if no valid postings found.`;
+Return [] only if you found absolutely nothing relevant.`;
 }
 
 // ── Parse helpers ─────────────────────────────────────────────────────────────
@@ -238,11 +224,12 @@ async function discoverJobs(params) {
       const result = await geminiClient.generate({
         modelId:  geminiClient.searchModel,
         prompt,
-        tools:    [{ googleSearchRetrieval: { dynamicRetrievalConfig: { mode: "MODE_DYNAMIC", dynamicThreshold: 0 } } }],
+        tools:    [{ googleSearch: {} }],
         userId,
         view:     "gemini_search_pass1",
       });
       log(`[GeminiSearch] "${title}" → ${result.text.length} chars, ${result.usage.groundingChunks} grounding chunks`);
+      if (result.text.length <= 4) log(`[GeminiSearch] DEBUG raw response for "${title}": ${result.text}`);
       return parseJobCandidates(result.text, `gemini_pass1_${title}`);
     } catch (err) {
       log(`[GeminiSearch] "${title}" search failed: ${err.message}`);
@@ -290,7 +277,7 @@ async function discoverJobsPass2(params) {
       const result = await geminiClient.generate({
         modelId:  geminiClient.searchModel,
         prompt,
-        tools:    [{ googleSearchRetrieval: { dynamicRetrievalConfig: { mode: "MODE_DYNAMIC", dynamicThreshold: 0 } } }],
+        tools:    [{ googleSearch: {} }],
         userId,
         view:     "gemini_search_pass2",
       });

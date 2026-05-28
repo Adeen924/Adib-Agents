@@ -153,11 +153,7 @@ async function runHybridSearch(params) {
     return true;
   });
 
-  // Drop banned aggregator domains
-  allCandidates = allCandidates.filter(j => {
-    const url = j.url || j.possibleJobUrl || "";
-    return !/indeed\.com|linkedin\.com/i.test(url) || url.startsWith("http");
-  });
+
 
   session.setOutcome({ candidatesFound: allCandidates.length });
   log(`[HybridPipeline] ${allCandidates.length} unique candidates after dedup/filter`);
@@ -199,9 +195,9 @@ async function runHybridSearch(params) {
     }));
   }
 
-  // URL discovery for low-confidence items
+  // URL discovery for low-confidence items and aggregator-domain jobs
   if (flags.geminiUrlDiscoveryEnabled) {
-    const needsDiscovery = verifiedCandidates.filter(j => !j.urlVerified || (j.applyUrlConfidence || 0) < 0.6);
+    const needsDiscovery = verifiedCandidates.filter(j => !j.urlVerified || j.needsDiscovery || (j.applyUrlConfidence || 0) < 0.6);
     if (needsDiscovery.length > 0) {
       log(`[HybridPipeline] URL discovery: refining ${needsDiscovery.length} uncertain URLs…`);
       try {

@@ -53,9 +53,8 @@ class GeminiClient {
 
     this.ai             = new GoogleGenAI({ apiKey });
     this.db             = opts.db             || null;
-    // gemini-2.0-flash: supports forced grounding via googleSearchRetrieval + dynamicThreshold=0
-    // gemini-2.5-flash: uses Dynamic Retrieval — model decides whether to search (often skips it)
-    this.searchModel    = opts.searchModel    || process.env.GEMINI_SEARCH_MODEL    || "gemini-2.0-flash";
+    // gemini-2.5-flash: use { googleSearch: {} } tool to force grounding
+    this.searchModel    = opts.searchModel    || process.env.GEMINI_SEARCH_MODEL    || "gemini-2.5-flash";
     this.reasoningModel = opts.reasoningModel || process.env.GEMINI_REASONING_MODEL || "gemini-2.5-flash";
     this.maxRetries     = opts.maxRetries     ?? DEFAULT_RETRIES;
   }

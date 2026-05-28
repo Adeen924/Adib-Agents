@@ -8,7 +8,7 @@
  *  - We need to locate the ATS-specific direct URL for a known role
  */
 
-const BANNED_DOMAINS = /indeed\.com|linkedin\.com/i;
+const BANNED_DOMAINS = /ziprecruiter\.com|glassdoor\.com|simplyhired\.com|monster\.com/i;
 
 /**
  * Ask Gemini to locate the direct ATS URL for a job posting.
@@ -47,8 +47,11 @@ async function findJobUrl(params) {
       ? `The company likely uses ${atsType}.`
       : "";
 
+  const isAggregator = startingUrl && /vaia\.com|tealhq\.com|lensa\.com|factoryfix\.com|talentsbyvaia\.com/i.test(startingUrl);
   const startingHint = startingUrl
-    ? `Start from this URL (verify/refine it): ${startingUrl}`
+    ? isAggregator
+      ? `This job was listed on a job aggregator (${startingUrl}). Find the DIRECT employer application link — NOT the aggregator page.`
+      : `Start from this URL (verify/refine it): ${startingUrl}`
     : "";
 
   const prompt = `Find the EXACT direct apply URL for this job posting.
@@ -65,8 +68,8 @@ Requirements:
 - If ${atsType === "greenhouse" ? `use boards.greenhouse.io/${atsSlug || "COMPANY"}/jobs/ID format` : ""}
   ${atsType === "lever"      ? `use jobs.lever.co/${atsSlug || "COMPANY"}/UUID format`          : ""}
   ${atsType === "ashby"      ? `use jobs.ashbyhq.com/${atsSlug || "COMPANY"}/... format`        : ""}
-- Do NOT return indeed.com or linkedin.com URLs.
 - Do NOT return a generic careers page URL.
+- Do NOT return ziprecruiter.com or glassdoor.com URLs.
 
 Use Google Search to find the posting. If you cannot find a direct URL with high confidence, say so.
 
@@ -120,8 +123,8 @@ async function discoverUrlsForJobs(jobs, geminiClient, userId, logFn) {
   const results = [];
 
   for (const job of jobs) {
-    // If Gemini already returned a high-confidence URL, skip rediscovery
-    if ((job.confidence || 0) >= 0.8 && job.possibleJobUrl?.startsWith("http")) {
+    // Skip only if the URL is already fully verified — not just high search confidence
+    if (job.urlVerified === true) {
       results.push({ ...job });
       continue;
     }
